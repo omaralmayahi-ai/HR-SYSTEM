@@ -1,11 +1,64 @@
-<div align="center">
+# نظام إدارة الموارد البشرية العراقي الموحد (HR System)
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+نظام متكامل لإدارة الموارد البشرية والرواتب وفقاً لجدول سلم الرواتب الموحد لسنة 2023 في العراق. يعتمد النظام على بيئة عمل حديثة مبنية باستخدام React و Express وقاعدة بيانات PostgreSQL ومصادقة Firebase.
 
-  <h1>Built with AI Studio</h2>
+## المميزات الأساسية
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+1. **إدارة الموظفين**: تسجيل وتحديث بيانات الموظفين بالكامل (الاسم الكامل، رقم الهاتف، الدرجة والوظيفة، الشهادة الدراسية، الحالة الزوجية، عدد الأطفال).
+2. **إدارة الرواتب (سلم رواتب 2023 الموحد)**:
+   - توليد الرواتب آلياً بالاعتماد على الدرجة والمرحلة الوظيفية للموظف.
+   - حساب مخصصات الشهادات العلمية (دكتوراه، ماجستير، بكالوريوس، إلخ).
+   - احتساب مخصصات الزوجية والأطفال.
+   - استقطاع التقاعد القانوني بنسبة 5%.
+   - مراجعة واعتماد قسائم الرواتب الشهرية.
+3. **إدارة الإجازات**: تقديم ومتابعة طلبات الإجازات والرد عليها بالقبول أو الرفض مع تدوين الملاحظات.
+4. **العقوبات والإنذارات**: تدوين وتوثيق العقوبات والإنذارات الإدارية للموظفين.
+5. **التقييم السنوي**: نظام تقييم الأداء السنوي واحتساب الدرجات وحفظ سجلات التقييم.
+6. **الدورات التدريبية**: جدولة الدورات التدريبية وتسجيل الموظفين وتتبع نتائجهم.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## التقنيات المستخدمة
 
-</div>
+- **الواجهة الأمامية (Frontend)**: React, Vite, Tailwind CSS, Lucide Icons, Recharts.
+- **الخلفية (Backend)**: Express.js (TypeScript), tsx, esbuild.
+- **قاعدة البيانات**: PostgreSQL (Drizzle ORM).
+- **المصادقة وأمن البيانات**: Firebase Authentication & Firebase Admin SDK.
+
+## المتطلبات الأساسية وإعدادات التشغيل المحلية
+
+لتشغيل النظام محلياً، يجب توفير ملف تكوين المتغيرات البيئية `.env` في المجلد الرئيسي بالقيم التالية:
+
+```env
+# قاعدة بيانات PostgreSQL
+DB_HOST=localhost
+DB_USER=postgres
+DB_PASSWORD=your_password
+DB_NAME=hr_system_db
+DB_PORT=5432
+
+# Firebase Admin SDK (تأكد من إضافتها أو توفير مفاتيح Firebase)
+FIREBASE_PROJECT_ID=your_firebase_project_id
+FIREBASE_CLIENT_EMAIL=your_firebase_client_email
+FIREBASE_PRIVATE_KEY="your_firebase_private_key"
+```
+
+### خطوات التشغيل:
+
+1. تنصيب الحزم البرمجية:
+   ```bash
+   npm install
+   ```
+
+2. تشغيل خادم التطوير (الواجهة الأمامية والخلفية معاً):
+   ```bash
+   npm run dev
+   ```
+
+3. بناء التطبيق للإنتاج:
+   ```bash
+   npm run build
+   ```
+
+4. بدء تشغيل التطبيق في بيئة الإنتاج:
+   ```bash
+   npm run start
+   ```
