@@ -173,7 +173,44 @@ export default function SalaryScaleSettings() {
   };
 
   const handleSaveEdit = async (id) => {
-    setRecords(prev => prev.map(r => r.id === id ? { ...r, grade: parseInt(editGrade), step: parseInt(editStep), amount: parseInt(editAmount) } : r));
+    const valGrade = parseInt(editGrade);
+    const valStep = parseInt(editStep);
+    const valAmount = parseInt(editAmount);
+
+    if (isNaN(valAmount) || valAmount <= 0) {
+      toast({
+        title: 'تنبيه',
+        description: 'يرجى إدخال مبلغ صحيح أكبر من الصفر',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setRecords(prev => {
+      const existingIndex = prev.findIndex(r => r.id === id || (r.grade === valGrade && r.step === valStep));
+      if (existingIndex >= 0) {
+        const copy = [...prev];
+        copy[existingIndex] = {
+          ...copy[existingIndex],
+          grade: valGrade,
+          step: valStep,
+          amount: valAmount,
+          isFallback: false
+        };
+        return copy;
+      } else {
+        return [
+          ...prev,
+          {
+            id: `temp-${Date.now()}`,
+            grade: valGrade,
+            step: valStep,
+            amount: valAmount
+          }
+        ];
+      }
+    });
+
     setEditingId(null);
     toast({
       title: 'تم التحديث مؤقتاً',
@@ -369,72 +406,55 @@ export default function SalaryScaleSettings() {
     JSON.stringify(promotionYears) !== JSON.stringify(originalPromotionYears) ||
     JSON.stringify(annualIncrements) !== JSON.stringify(originalAnnualIncrements);
 
-  // Group records by grade for overview cards
+  // Group records by grade and build full step list (1 to 11+)
   const getGradeSummary = (gradeNum) => {
-    const gradeSteps = records.filter(r => r.grade === gradeNum).sort((a, b) => a.step - b.step);
-    if (gradeSteps.length === 0) {
-      const defaultSteps = SALARY_TABLE[gradeNum] || {};
-      const stepsList = Object.keys(defaultSteps).map(s => ({
-        grade: gradeNum,
-        step: parseInt(s),
-        amount: defaultSteps[s]
-      })).sort((a, b) => a.step - b.step);
+    const defaultStepsObj = SALARY_TABLE[gradeNum] || {};
+    const defaultStepNumbers = Object.keys(defaultStepsObj).map(Number);
+    const existingGradeRecords = records.filter(r => r.grade === gradeNum);
 
-      if (stepsList.length === 0) return null;
+    const maxStep = Math.max(11, ...defaultStepNumbers, ...existingGradeRecords.map(r => r.step));
 
-      const baseAmount = stepsList[0]?.amount || 0;
-      const maxAmount = stepsList[stepsList.length - 1]?.amount || 0;
-      const increment = annualIncrements[gradeNum] || 0;
-
-      return {
-        grade: gradeNum,
-        count: stepsList.length,
-        base: baseAmount,
-        max: maxAmount,
-        inc: increment,
-        steps: stepsList,
-        isFallback: true
-      };
+    const stepsList = [];
+    for (let s = 1; s <= maxStep; s++) {
+      const rec = existingGradeRecords.find(r => r.step === s);
+      if (rec) {
+        stepsList.push(rec);
+      } else {
+        const fallbackAmt = defaultStepsObj[s] !== undefined 
+          ? defaultStepsObj[s] 
+          : (defaultStepsObj[1] ? defaultStepsObj[1] + (s - 1) * (annualIncrements[gradeNum] || 0) : 0);
+        stepsList.push({
+          id: `fallback-${gradeNum}-${s}`,
+          grade: gradeNum,
+          step: s,
+          amount: fallbackAmt,
+          isFallback: true
+        });
+      }
     }
 
-    const baseAmount = gradeSteps[0]?.amount || 0;
-    const maxAmount = gradeSteps[gradeSteps.length - 1]?.amount || 0;
-    const increment = gradeSteps.length > 1 ? (gradeSteps[1].amount - gradeSteps[0].amount) : (annualIncrements[gradeNum] || 0);
+    stepsList.sort((a, b) => a.step - b.step);
+    const baseAmount = stepsList[0]?.amount || 0;
+    const maxAmount = stepsList[stepsList.length - 1]?.amount || 0;
+    const increment = annualIncrements[gradeNum] || 0;
 
     return {
       grade: gradeNum,
-      count: gradeSteps.length,
+      count: stepsList.length,
       base: baseAmount,
       max: maxAmount,
       inc: increment,
-      steps: gradeSteps
+      steps: stepsList
     };
   };
 
   const GRADES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 
-  const filteredRecords = records.filter(r => {
-    if (filterGrade === 'all') return true;
-    return r.grade === parseInt(filterGrade);
-  }).sort((a, b) => {
-    if (a.grade !== b.grade) return a.grade - b.grade;
-    return a.step - b.step;
-  });
-
-  const displayedRecords = filteredRecords.length > 0 
-    ? filteredRecords 
-    : (filterGrade !== 'all' 
-        ? Object.keys(SALARY_TABLE[parseInt(filterGrade)] || {}).map(step => ({
-            id: `fallback-${filterGrade}-${step}`,
-            grade: parseInt(filterGrade),
-            step: parseInt(step),
-            amount: SALARY_TABLE[parseInt(filterGrade)][step],
-            isFallback: true
-          }))
-        : []
-      );
-
   const activeGradeSummary = filterGrade !== 'all' ? getGradeSummary(parseInt(filterGrade)) : null;
+
+  const displayedRecords = filterGrade !== 'all'
+    ? (activeGradeSummary ? activeGradeSummary.steps : [])
+    : [...records].sort((a, b) => (a.grade !== b.grade ? a.grade - b.grade : a.step - b.step));
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
@@ -476,35 +496,6 @@ export default function SalaryScaleSettings() {
           <p className="text-xs text-slate-500 mt-1">عرض السلم المالي الرسمي، فتح تفاصيل الدرجات الوظيفية ومراحلها السنوية، وتعديل قيم الرواتب الاسمية.</p>
         </div>
         <div className="flex flex-wrap gap-2 items-center">
-          {/* Cancel Changes Button (visible only when dirty) */}
-          {isDirty && (
-            <button
-              type="button"
-              onClick={handleCancelAllChanges}
-              className="bg-white hover:bg-slate-100 text-rose-600 border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
-              title="تراجع عن جميع التعديلات المؤقتة واستعادة السلم المحفوظ"
-            >
-              <X size={14} />
-              إلغاء التعديلات
-            </button>
-          )}
-
-          {/* Main Save Salary Scale Button */}
-          <button
-            type="button"
-            onClick={() => setIsWarningOpen(true)}
-            disabled={!isDirty || saving}
-            className={`rounded-xl px-4 py-2.5 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm border ${
-              isDirty
-                ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 animate-pulse font-extrabold'
-                : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed font-medium'
-            }`}
-            title={isDirty ? "اضغط هنا لحفظ تعديلات سلم الرواتب والمدد المالية" : "جميع التعديلات على سلم الرواتب محفوظة بالفعل"}
-          >
-            <Check size={14} />
-            حفظ تعديل سلم الرواتب
-          </button>
-
           {/* Add Step Button */}
           <button
             type="button"

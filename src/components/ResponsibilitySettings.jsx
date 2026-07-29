@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { Plus, Trash2, Edit2, Check, X, RefreshCw, Sparkles, ShieldAlert, GripVertical } from 'lucide-react';
+import { notifySettingsChanged } from '@/lib/settingsUtils';
 
 export default function ResponsibilitySettings() {
   const [records, setRecords] = useState([]);
@@ -52,6 +53,7 @@ export default function ResponsibilitySettings() {
       
       // Update local storage for immediate consumption in salary calculations
       localStorage.setItem('RESPONSIBILITY_ALLOWANCES_PRESETS', JSON.stringify(sortedData));
+      notifySettingsChanged('responsibility_allowances', sortedData);
     } catch (error) {
       toast({
         title: 'خطأ في جلب البيانات',
@@ -90,6 +92,7 @@ export default function ResponsibilitySettings() {
     // Persist to localStorage
     localStorage.setItem('RESPONSIBILITY_ALLOWANCES_ORDER', JSON.stringify(nextRecords.map(r => r.id)));
     localStorage.setItem('RESPONSIBILITY_ALLOWANCES_PRESETS', JSON.stringify(nextRecords));
+    notifySettingsChanged('responsibility_allowances', nextRecords);
 
     setDraggedIndex(null);
     setDraggedOverIndex(null);

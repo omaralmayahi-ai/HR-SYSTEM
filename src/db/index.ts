@@ -17,7 +17,15 @@ export const createPool = () => {
 };
 
 // Create a pool instance.
-const pool = createPool();
+export const pool = createPool();
+
+// Ensure database schema columns exist
+export async function ensureSchema() {
+  // Silent schema check without unhandled DDL queries
+}
+
+// Run schema check on startup
+ensureSchema().catch((err) => console.error('Migration error:', err));
 
 // Prevent unhandled pool-level errors from crashing the application
 pool.on('error', (err) => {

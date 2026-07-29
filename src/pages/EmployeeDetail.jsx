@@ -6,9 +6,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Edit, Plus, Trash2, Calendar, FileText, GraduationCap, DollarSign, Clock, Briefcase, Heart, MapPin, ClipboardList } from 'lucide-react';
-import { formatCurrency, calculateSalary, getGradeLabel, getStepLabel, getActiveFinancialRates } from '@/lib/salaryTable';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Edit, Plus, Trash2, Calendar, FileText, GraduationCap, DollarSign, Clock, Briefcase, Heart, MapPin, ClipboardList, CheckCircle2, XCircle, Power, ShieldCheck, QrCode, Award, ShieldAlert } from 'lucide-react';
+import { formatCurrency, calculateSalary, getGradeLabel, getStepLabel, getActiveFinancialRates, checkEmployeeMatchesRule } from '@/lib/salaryTable';
 import { useToast } from '@/components/ui/use-toast';
+import EmployeeQuickAccessQR from '@/components/employee/EmployeeQuickAccessQR';
+import { fetchEducationDegreesSorted, fetchPenaltyTypesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
 
 function InfoRow({ label, value }) {
   if (!value && value !== 0) return null;
@@ -71,6 +74,118 @@ function calculateServiceDuration(startDateStr) {
   return parts.join(' و ');
 }
 
+// Function to calculate cumulative total service including added service records
+function calculateTotalCumulativeService(startDateStr, addedYears = 0, addedMonths = 0, addedDays = 0) {
+  const aY = parseInt(addedYears) || 0;
+  const aM = parseInt(addedMonths) || 0;
+  const aD = parseInt(addedDays) || 0;
+
+  if (!startDateStr) {
+    if (aY > 0 || aM > 0 || aD > 0) {
+      const parts = [];
+      if (aY > 0) parts.push(`${aY} سنة`);
+      if (aM > 0) parts.push(`${aM} شهر`);
+      if (aD > 0) parts.push(`${aD} يوم`);
+      return `${parts.join(' و ')} (خدمة مضافة محتسبة فقط)`;
+    }
+    return '—';
+  }
+  const start = new Date(startDateStr);
+  const end = new Date(); // current date
+  
+  if (isNaN(start.getTime())) return 'التاريخ غير صالح';
+  if (start > end) return 'لم تبدأ الخدمة بعد';
+  
+  let years = end.getFullYear() - start.getFullYear();
+  let months = end.getMonth() - start.getMonth();
+  let days = end.getDate() - start.getDate();
+  
+  if (days < 0) {
+    months--;
+    const prevMonth = new Date(end.getFullYear(), end.getMonth(), 0);
+    days += prevMonth.getDate();
+  }
+  
+  if (months < 0) {
+    years--;
+    months += 12;
+  }
+
+  // Add extra added/calculated service
+  years += aY;
+  months += aM;
+  days += aD;
+
+  if (days >= 30) {
+    months += Math.floor(days / 30);
+    days = days % 30;
+  }
+  if (months >= 12) {
+    years += Math.floor(months / 12);
+    months = months % 12;
+  }
+  
+  const parts = [];
+  if (years > 0) {
+    if (years === 1) parts.push('سنة واحدة');
+    else if (years === 2) parts.push('سنتين');
+    else if (years >= 3 && years <= 10) parts.push(`${years} سنوات`);
+    else parts.push(`${years} سنة`);
+  }
+  
+  if (months > 0) {
+    if (months === 1) parts.push('شهر واحد');
+    else if (months === 2) parts.push('شهرين');
+    else if (months >= 3 && months <= 10) parts.push(`${months} أشهر`);
+    else parts.push(`${months} شهر`);
+  }
+  
+  if (days > 0) {
+    if (days === 1) parts.push('يوم واحد');
+    else if (days === 2) parts.push('يومين');
+    else if (days >= 3 && days <= 10) parts.push(`${days} أيام`);
+    else parts.push(`${days} يوم`);
+  }
+  
+  if (parts.length === 0) return '0 يوم';
+  return parts.join(' و ');
+}
+
+function formatDurationParts(y = 0, m = 0, d = 0) {
+  let extraM = m;
+  let extraY = y;
+  let extraD = d;
+  if (extraD >= 30) {
+    extraM += Math.floor(extraD / 30);
+    extraD = extraD % 30;
+  }
+  if (extraM >= 12) {
+    extraY += Math.floor(extraM / 12);
+    extraM = extraM % 12;
+  }
+  const parts = [];
+  if (extraY > 0) {
+    if (extraY === 1) parts.push('سنة واحدة');
+    else if (extraY === 2) parts.push('سنتين');
+    else if (extraY >= 3 && extraY <= 10) parts.push(`${extraY} سنوات`);
+    else parts.push(`${extraY} سنة`);
+  }
+  if (extraM > 0) {
+    if (extraM === 1) parts.push('شهر واحد');
+    else if (extraM === 2) parts.push('شهرين');
+    else if (extraM >= 3 && extraM <= 10) parts.push(`${extraM} أشهر`);
+    else parts.push(`${extraM} شهر`);
+  }
+  if (extraD > 0) {
+    if (extraD === 1) parts.push('يوم واحد');
+    else if (extraD === 2) parts.push('يومين');
+    else if (extraD >= 3 && extraD <= 10) parts.push(`${extraD} أيام`);
+    else parts.push(`${extraD} يوم`);
+  }
+  if (parts.length === 0) return '0 يوم';
+  return parts.join(' و ');
+}
+
 export default function EmployeeDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -79,6 +194,7 @@ export default function EmployeeDetail() {
   const [employee, setEmployee] = useState(null);
   const [leaves, setLeaves] = useState([]);
   const [penalties, setPenalties] = useState([]);
+  const [appreciations, setAppreciations] = useState([]);
   const [evaluations, setEvaluations] = useState([]);
   const [trainings, setTrainings] = useState([]);
   
@@ -91,19 +207,46 @@ export default function EmployeeDetail() {
   const [transfers, setTransfers] = useState([]);
   const [retirements, setRetirements] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [educationDegrees, setEducationDegrees] = useState([]);
+  const [serviceRecords, setServiceRecords] = useState([]);
   
   const [loading, setLoading] = useState(true);
+  const [showQRModal, setShowQRModal] = useState(false);
   
-  // Modal states for adding records
-  const [activeModal, setActiveModal] = useState(null); // 'qualification', 'assignment', 'promotion', 'allowance', 'evaluation', 'training_course', 'transfer', 'retirement', 'document'
+  // Modal states for adding/editing records
+  const [activeModal, setActiveModal] = useState(null); // 'qualification', 'assignment', 'promotion', 'allowance', 'evaluation', 'training_course', 'transfer', 'retirement', 'document', 'service_record'
+  const [editingRecordId, setEditingRecordId] = useState(null);
   const [modalForm, setModalForm] = useState({});
   const [modalSaving, setModalSaving] = useState(false);
+
+  // Service Extension Management States
+  const [extModalOpen, setExtModalOpen] = useState(false);
+  const [extForm, setExtForm] = useState({
+    orderNumber: '',
+    orderDate: '',
+    years: 1,
+    months: 0,
+    note: ''
+  });
+  const [extCancelModalOpen, setExtCancelModalOpen] = useState(false);
+  const [extCancelForm, setExtCancelForm] = useState({
+    orderNumber: '',
+    orderDate: '',
+    note: ''
+  });
+  const [extDeleteConfirmOpen, setExtDeleteConfirmOpen] = useState(false);
+  const [extSaving, setExtSaving] = useState(false);
+
+  // General Record Delete Dialog State
+  const [deleteDialog, setDeleteDialog] = useState({ open: false, clientName: '', recordId: null, presetId: null });
+  const [deleting, setDeleting] = useState(false);
 
   const fetchData = () => {
     Promise.all([
       apiClient.entities.Employee.get(id),
       apiClient.entities.LeaveRequest.filter({ employee_id: id }),
       apiClient.entities.Penalty.filter({ employee_id: id }),
+      apiClient.entities.Appreciation.filter({ employee_id: id }),
       apiClient.entities.AnnualEvaluation.filter({ employee_id: id }),
       apiClient.entities.TrainingEnrollment.filter({ employee_id: id }),
       apiClient.entities.Qualification.filter({ employee_id: id }),
@@ -114,10 +257,12 @@ export default function EmployeeDetail() {
       apiClient.entities.Transfer.filter({ employee_id: id }),
       apiClient.entities.Retirement.filter({ employee_id: id }),
       apiClient.entities.Document.filter({ employee_id: id }),
-    ]).then(([emp, lv, pen, ev, tr, qual, job, prom, sal, tc, trans, ret, doc]) => {
+      apiClient.entities.ServiceRecord.filter({ employee_id: id }),
+    ]).then(([emp, lv, pen, appr, ev, tr, qual, job, prom, sal, tc, trans, ret, doc, sRecs]) => {
       setEmployee(emp);
       setLeaves(lv || []);
       setPenalties(pen || []);
+      setAppreciations(appr || []);
       setEvaluations(ev || []);
       setTrainings(tr || []);
       setQualifications(qual || []);
@@ -128,6 +273,7 @@ export default function EmployeeDetail() {
       setTransfers(trans || []);
       setRetirements(ret || []);
       setDocuments(doc || []);
+      setServiceRecords(sRecs || []);
       setLoading(false);
     }).catch(err => {
       console.error(err);
@@ -136,8 +282,203 @@ export default function EmployeeDetail() {
     });
   };
 
+  const [penaltyTypesList, setPenaltyTypesList] = useState([]);
+
+  const loadEducationDegrees = () => {
+    fetchEducationDegreesSorted().then(data => setEducationDegrees(data || [])).catch(() => {});
+  };
+
+  const loadPenaltyTypes = () => {
+    fetchPenaltyTypesSorted().then(data => {
+      if (data && data.length > 0) {
+        const active = data.filter(d => d.status === 'فعال' || !d.status);
+        setPenaltyTypesList(active.length > 0 ? active : data);
+      } else {
+        setPenaltyTypesList(['إنذار شفهي', 'إنذار خطي', 'قطع الراتب (يوم)', 'قطع الراتب (أيام)', 'توبيخ إداري', 'إنقاص الراتب', 'تنزيل الدرجة', 'فصل من الخدمة'].map(n => ({ id: n, name: n })));
+      }
+    }).catch(() => {});
+  };
+
+  const handleOpenExtModal = () => {
+    setExtForm({
+      orderNumber: employee?.retirement_extension_order_number || employee?.retirementExtensionOrderNumber || '',
+      orderDate: employee?.retirement_extension_order_date || employee?.retirementExtensionOrderDate || '',
+      years: employee?.retirement_extension_years ?? employee?.retirementExtensionYears ?? 1,
+      months: employee?.retirement_extension_months ?? employee?.retirementExtensionMonths ?? 0,
+      note: employee?.retirement_extension_note || employee?.retirementExtensionNote || ''
+    });
+    setExtModalOpen(true);
+  };
+
+  const handleSaveExtension = async (e) => {
+    e.preventDefault();
+    if (!extForm.orderNumber.trim() || !extForm.orderDate) {
+      toast({
+        title: 'بيانات غير مكتملة',
+        description: 'يرجى إدخال رقم وتاريخ أمر تمديد الخدمة',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setExtSaving(true);
+    try {
+      const payload = {
+        retirementExtensionOrderNumber: extForm.orderNumber,
+        retirementExtensionOrderDate: extForm.orderDate,
+        retirementExtensionYears: parseInt(extForm.years) || 0,
+        retirementExtensionMonths: parseInt(extForm.months) || 0,
+        retirementExtensionNote: extForm.note,
+      };
+      await apiClient.entities.Employee.update(employee.id, payload);
+
+      // Check if serviceRecord of type 'تمديد خدمة' exists, update or create it
+      const existingExtRecord = serviceRecords.find(r => (r.recordType || r.record_type) === 'تمديد خدمة');
+      if (existingExtRecord) {
+        await apiClient.entities.ServiceRecord.update(existingExtRecord.id, {
+          order_number: extForm.orderNumber,
+          order_date: extForm.orderDate,
+          years: parseInt(extForm.years) || 0,
+          months: parseInt(extForm.months) || 0,
+          reason: extForm.note || 'تمديد خدمة تقاعدية'
+        });
+      } else {
+        await apiClient.entities.ServiceRecord.create({
+          employee_id: employee.id,
+          record_type: 'تمديد خدمة',
+          order_number: extForm.orderNumber,
+          order_date: extForm.orderDate,
+          years: parseInt(extForm.years) || 0,
+          months: parseInt(extForm.months) || 0,
+          days: 0,
+          purpose: 'pension_only',
+          reason: extForm.note || 'تمديد خدمة تقاعدية',
+          notes: ''
+        });
+      }
+
+      toast({
+        title: 'تم حفظ وتأكيد تمديد الخدمة',
+        description: `تم تحديث مدة تمديد الخدمة للموظف (${employee.full_name || employee.name})`,
+        variant: 'success',
+      });
+      await apiClient.logs.create({
+        action: 'تثبيت/تعديل تمديد الخدمة',
+        details: `تحديث تمديد الخدمة للموظف (${employee.full_name || employee.name}) بموجب الأمر (${extForm.orderNumber}) بتاريخ (${extForm.orderDate}) ولمدة (${extForm.years} سنة و ${extForm.months} شهر).`
+      }).catch(() => {});
+
+      setExtModalOpen(false);
+      fetchData();
+    } catch (error) {
+      toast({
+        title: 'خطأ أثناء الحفظ',
+        description: error.message || 'تعذر حفظ بيانات تمديد الخدمة',
+        variant: 'destructive',
+      });
+    } finally {
+      setExtSaving(false);
+    }
+  };
+
+  const handleCancelExtension = async (e) => {
+    e.preventDefault();
+    if (!extCancelForm.orderNumber.trim() || !extCancelForm.orderDate) {
+      toast({
+        title: 'بيانات غير مكتملة',
+        description: 'يرجى إدخال رقم وتاريخ أمر إلغاء التمديد',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setExtSaving(true);
+    try {
+      const oldNote = employee.retirement_extension_note || employee.retirementExtensionNote || '';
+      const cancelMsg = `[تم إلغاء التمديد بموجب الأمر رقم (${extCancelForm.orderNumber}) بتاريخ (${extCancelForm.orderDate}) - السبب: ${extCancelForm.note || 'بلا سبب مذكور'}]`;
+      const newNote = oldNote ? `${oldNote}\n${cancelMsg}` : cancelMsg;
+
+      const payload = {
+        retirementExtensionYears: 0,
+        retirementExtensionMonths: 0,
+        retirementExtensionNote: newNote,
+      };
+      await apiClient.entities.Employee.update(employee.id, payload);
+      toast({
+        title: 'تم إلغاء تمديد الخدمة',
+        description: `تم إيقاف تمديد الخدمة وتدوين أمر الإلغاء بالسجل الرسمى.`,
+        variant: 'success',
+      });
+      await apiClient.logs.create({
+        action: 'إلغاء تمديد الخدمة',
+        details: `إلغاء تمديد الخدمة للموظف (${employee.full_name || employee.name}) بموجب أمر الإلغاء (${extCancelForm.orderNumber}) بتاريخ (${extCancelForm.orderDate}).`
+      }).catch(() => {});
+
+      setExtCancelModalOpen(false);
+      fetchData();
+    } catch (error) {
+      toast({
+        title: 'خطأ أثناء الإلغاء',
+        description: error.message || 'تعذر إلغاء تمديد الخدمة',
+        variant: 'destructive',
+      });
+    } finally {
+      setExtSaving(false);
+    }
+  };
+
+  const handleDeleteExtension = async () => {
+    setExtSaving(true);
+    try {
+      const payload = {
+        retirementExtensionOrderNumber: null,
+        retirementExtensionOrderDate: null,
+        retirementExtensionYears: 0,
+        retirementExtensionMonths: 0,
+        retirementExtensionNote: null,
+      };
+      await apiClient.entities.Employee.update(employee.id, payload);
+
+      // Delete all serviceRecords with recordType === 'تمديد خدمة' for this employee
+      const extRecs = serviceRecords.filter(r => (r.recordType || r.record_type) === 'تمديد خدمة');
+      for (const r of extRecs) {
+        try {
+          await apiClient.entities.ServiceRecord.delete(r.id);
+        } catch (e) {}
+      }
+
+      toast({
+        title: 'تم حذف بيانات التمديد',
+        description: `تم إزالة وحذف كافة بيانات تمديد الخدمة الخاصة بالموظف.`,
+        variant: 'success',
+      });
+      await apiClient.logs.create({
+        action: 'حذف تمديد الخدمة',
+        details: `حذف بيانات تمديد الخدمة للموظف (${employee.full_name || employee.name}).`
+      }).catch(() => {});
+
+      setExtDeleteConfirmOpen(false);
+      fetchData();
+    } catch (error) {
+      toast({
+        title: 'خطأ أثناء الحذف',
+        description: error.message || 'تعذر حذف تمديد الخدمة',
+        variant: 'destructive',
+      });
+    } finally {
+      setExtSaving(false);
+    }
+  };
+
   useEffect(() => {
     fetchData();
+    loadEducationDegrees();
+    loadPenaltyTypes();
+
+    const unsubscribe = subscribeToSettingsUpdates(() => {
+      fetchData();
+      loadEducationDegrees();
+      loadPenaltyTypes();
+    });
+
+    return () => unsubscribe();
   }, [id]);
 
   if (loading) return (
@@ -150,48 +491,130 @@ export default function EmployeeDetail() {
   const salaryCalc = calculateSalary(employee);
   const financialRates = getActiveFinancialRates();
 
-  const classifiedCustomItems = salaryAllowances.map(sa => {
-    let isTemp = false;
-    let type = 'allowance';
-    let timingLabel = 'دائم';
-    let presetId = null;
+  const classifiedCustomItems = (() => {
+    let presets = [];
+    try {
+      const saved = localStorage.getItem('ALLOWANCES_DEDUCTIONS_PRESETS');
+      if (saved) presets = JSON.parse(saved);
+    } catch (e) {}
 
-    const presetsStr = localStorage.getItem('ALLOWANCES_DEDUCTIONS_PRESETS');
-    if (presetsStr) {
+    const items = [];
+    const processedPresetNames = new Set();
+
+    // 1. Process global presets from ALLOWANCES_DEDUCTIONS_PRESETS
+    presets.forEach(p => {
+      if (p.status && p.status !== 'فعال' && p.status !== 'active') return;
+
+      const isSpouse = (p.name.includes('زوجية') || p.name.includes('الزوجية'));
+      const isChild = (p.name.includes('أطفال') || p.name.includes('الاطفال') || p.name.includes('أولاد') || p.name.includes('الاولاد') || p.name.includes('طفل') || p.name.includes('ولد'));
+      if (isSpouse || isChild) return;
+
+      let isTemp = false;
+      let timingLabel = 'دائم';
+      let tempMeta = null;
+
       try {
-        const presets = JSON.parse(presetsStr);
-        const matchingPreset = presets.find(p => p.name === sa.allowance_type);
-        if (matchingPreset) {
-          presetId = matchingPreset.id;
-          type = matchingPreset.type || 'allowance';
-          
-          const metaStr = localStorage.getItem(`TEMPORARY_META_${matchingPreset.id}`);
-          if (metaStr) {
-            const meta = JSON.parse(metaStr);
-            isTemp = !!meta.isTemporary;
-            if (isTemp) {
-              if (meta.timingType === 'range') {
-                timingLabel = `مؤقت (من شهر ${meta.startMonth}/${meta.startYear} إلى شهر ${meta.endMonth}/${meta.endYear})`;
-              } else {
-                timingLabel = `مؤقت (شهر ${meta.paymentMonth}/${meta.paymentYear})`;
-              }
+        const metaStr = localStorage.getItem(`TEMPORARY_META_${p.id}`);
+        if (metaStr) {
+          tempMeta = JSON.parse(metaStr);
+          isTemp = !!tempMeta.isTemporary;
+          if (isTemp) {
+            if (tempMeta.timingType === 'range') {
+              timingLabel = `مؤقت (من شهر ${tempMeta.startMonth}/${tempMeta.startYear} إلى شهر ${tempMeta.endMonth}/${tempMeta.endYear})`;
+            } else {
+              timingLabel = `مؤقت (شهر ${tempMeta.paymentMonth}/${tempMeta.paymentYear})`;
             }
           }
         }
-      } catch(e){}
-    }
+      } catch (e) {}
 
-    const value = sa.amount > 0 ? sa.amount : Math.round(salaryCalc.base_salary * (sa.percentage / 100));
+      let isEligible = true;
 
-    return {
-      ...sa,
-      isTemp,
-      type,
-      timingLabel,
-      presetId,
-      resolvedAmount: value
-    };
-  });
+      // Check temporary timing
+      if (isTemp && tempMeta) {
+        const targetM = new Date().getMonth() + 1;
+        const targetY = new Date().getFullYear();
+        if (tempMeta.timingType === 'range') {
+          const startVal = parseInt(tempMeta.startYear) * 12 + parseInt(tempMeta.startMonth);
+          const endVal = parseInt(tempMeta.endYear) * 12 + parseInt(tempMeta.endMonth);
+          const curVal = targetY * 12 + targetM;
+          if (curVal < startVal || curVal > endVal) isEligible = false;
+        } else {
+          if (parseInt(tempMeta.paymentYear) !== targetY || parseInt(tempMeta.paymentMonth) !== targetM) {
+            isEligible = false;
+          }
+        }
+
+        if (isEligible) {
+          if (tempMeta.beneficiaryType === 'direct') {
+            const directIds = tempMeta.directEmployeeIds || [];
+            if (!directIds.map(String).includes(String(employee.id))) {
+              isEligible = false;
+            }
+          } else {
+            if (!checkEmployeeMatchesRule(employee, p.id)) {
+              isEligible = false;
+            }
+          }
+        }
+      } else {
+        if (!checkEmployeeMatchesRule(employee, p.id)) {
+          isEligible = false;
+        }
+      }
+
+      if (!isEligible) return; // Employee is NOT included in this allowance/deduction!
+
+      // Check if employee has a DB record in salaryAllowances for this preset
+      const dbMatch = salaryAllowances.find(sa => sa.allowance_type === p.name || sa.allowanceType === p.name);
+
+      const calcType = p.calcType || p.calc_type || (dbMatch?.percentage > 0 ? 'percentage' : 'flat');
+      const val = dbMatch?.amount > 0 ? dbMatch.amount : (dbMatch?.percentage > 0 ? dbMatch.percentage : (p.value || 0));
+
+      let resolvedAmount = 0;
+      if (calcType === 'percentage') {
+        resolvedAmount = Math.round(salaryCalc.base_salary * (val / 100));
+      } else {
+        resolvedAmount = val;
+      }
+
+      processedPresetNames.add(p.name);
+
+      items.push({
+        id: dbMatch?.id || `preset_${p.id}`,
+        dbId: dbMatch?.id || null,
+        presetId: p.id,
+        allowance_type: p.name,
+        type: p.type || 'allowance',
+        isTemp,
+        timingLabel,
+        order_number: dbMatch?.order_number || dbMatch?.orderNumber || '—',
+        resolvedAmount
+      });
+    });
+
+    // 2. Process any remaining salaryAllowances DB records that didn't match a preset
+    salaryAllowances.forEach(sa => {
+      if (processedPresetNames.has(sa.allowance_type)) return;
+
+      // Check if employee is eligible/not blocked for this individual DB record
+      if (!checkEmployeeMatchesRule(employee, sa.id)) return;
+
+      const value = sa.amount > 0 ? sa.amount : Math.round(salaryCalc.base_salary * ((sa.percentage || 0) / 100));
+
+      items.push({
+        ...sa,
+        dbId: sa.id,
+        presetId: null,
+        type: sa.type || 'allowance',
+        isTemp: false,
+        timingLabel: 'دائم',
+        resolvedAmount: value
+      });
+    });
+
+    return items;
+  })();
 
   const totalCustomAllowances = classifiedCustomItems
     .filter(sa => sa.type === 'allowance')
@@ -227,14 +650,65 @@ export default function EmployeeDetail() {
   const approvedSickLeaves = leaves.filter(l => l.leave_type === 'مرضية' && l.status === 'معتمد').reduce((sum, l) => sum + (l.days_count || 0), 0);
   const sickLeaveBalance = (employee.initial_sick_leave_balance || 0) - approvedSickLeaves;
 
-  // Durations of service
-  const totalServiceDuration = calculateServiceDuration(employee.first_appointment_date);
+  // Durations of service & Added Service records calculation
+  const addedServiceRecords = serviceRecords.filter(r => (r.recordType || r.record_type) !== 'تمديد خدمة');
+  const extensionRecords = serviceRecords.filter(r => (r.recordType || r.record_type) === 'تمديد خدمة');
+
+  let totalAddedYears = 0;
+  let totalAddedMonths = 0;
+  let totalAddedDays = 0;
+
+  addedServiceRecords.forEach(r => {
+    totalAddedYears += parseInt(r.years || 0) || 0;
+    totalAddedMonths += parseInt(r.months || 0) || 0;
+    totalAddedDays += parseInt(r.days || 0) || 0;
+  });
+
+  if (totalAddedDays >= 30) {
+    totalAddedMonths += Math.floor(totalAddedDays / 30);
+    totalAddedDays = totalAddedDays % 30;
+  }
+  if (totalAddedMonths >= 12) {
+    totalAddedYears += Math.floor(totalAddedMonths / 12);
+    totalAddedMonths = totalAddedMonths % 12;
+  }
+
+  // Extension duration calculation
+  const extYearsFromEmp = parseInt(employee?.retirement_extension_years ?? employee?.retirementExtensionYears ?? 0) || 0;
+  const extMonthsFromEmp = parseInt(employee?.retirement_extension_months ?? employee?.retirementExtensionMonths ?? 0) || 0;
+
+  let extRecYears = 0;
+  let extRecMonths = 0;
+  let extRecDays = 0;
+  extensionRecords.forEach(r => {
+    extRecYears += parseInt(r.years || 0) || 0;
+    extRecMonths += parseInt(r.months || 0) || 0;
+    extRecDays += parseInt(r.days || 0) || 0;
+  });
+
+  const finalExtYears = Math.max(extYearsFromEmp, extRecYears);
+  const finalExtMonths = extYearsFromEmp > 0 ? extMonthsFromEmp : extRecMonths;
+  const finalExtDays = extYearsFromEmp > 0 ? 0 : extRecDays;
+
+  const hasAddedService = (totalAddedYears > 0 || totalAddedMonths > 0 || totalAddedDays > 0);
+  const hasExtensionService = (finalExtYears > 0 || finalExtMonths > 0 || finalExtDays > 0);
+  const hasAddedOrExtension = hasAddedService || hasExtensionService;
+
+  const actualServiceDuration = calculateServiceDuration(employee.first_appointment_date);
+  const totalServiceDuration = calculateTotalCumulativeService(
+    employee.first_appointment_date,
+    totalAddedYears,
+    totalAddedMonths,
+    totalAddedDays
+  );
   const companyServiceDuration = calculateServiceDuration(employee.current_appointment_date);
+  const oilSectorServiceDuration = calculateServiceDuration(employee.oil_sector_start_date);
 
   // Workplace representation
   const workplace = employee.section || employee.department || 'غير محدد';
 
   const openAddModal = (type) => {
+    setEditingRecordId(null);
     setActiveModal(type);
     let defaultValues = {};
     if (type === 'qualification') {
@@ -268,8 +742,144 @@ export default function EmployeeDetail() {
       defaultValues = { retirement_date: '', retirement_order: '', retirement_reason: 'بلوغ السن القانوني', pension_amount: 0, status: 'مكتمل' };
     } else if (type === 'document') {
       defaultValues = { document_name: '', document_type: 'أمر إداري', issue_date: '', issue_authority: '', file_path: '', notes: '' };
+    } else if (type === 'service_record') {
+      defaultValues = { 
+        record_type: 'خدمة محتسبة', 
+        order_number: '', 
+        order_date: new Date().toISOString().split('T')[0], 
+        years: 1, 
+        months: 0, 
+        days: 0, 
+        purpose: 'promotion_allowance_pension', 
+        reason: '', 
+        notes: '' 
+      };
+    } else if (type === 'appreciation') {
+      defaultValues = {
+        order_number: '',
+        order_date: new Date().toISOString().split('T')[0],
+        issuer: 'السيد المدير العام',
+        reason: '',
+        seniority_impact: 'قدم شهر واحد',
+        notes: ''
+      };
+    } else if (type === 'penalty') {
+      defaultValues = {
+        penalty_type: 'إنذار خطي',
+        penalty_date: new Date().toISOString().split('T')[0],
+        order_number: '',
+        reason: '',
+        status: 'نافذ'
+      };
     }
     setModalForm(defaultValues);
+  };
+
+  const openEditModal = (type, record) => {
+    if (!record) return;
+    setEditingRecordId(record.id);
+    setActiveModal(type);
+
+    let editValues = {};
+    if (type === 'qualification') {
+      editValues = {
+        education_level: record.education_level || record.educationLevel || 'بكالوريوس',
+        specialization: record.specialization || '',
+        institution: record.institution || record.university || '',
+        graduation_year: record.graduation_year || record.graduationYear || new Date().getFullYear(),
+        evaluation_order: record.evaluation_order || record.evaluationOrder || '',
+        notes: record.notes || ''
+      };
+    } else if (type === 'assignment') {
+      editValues = {
+        job_title: record.job_title || record.jobTitle || '',
+        assignment_date: record.assignment_date || record.assignmentDate || '',
+        department: record.department || '',
+        section: record.section || '',
+        assignment_order: record.assignment_order || record.assignmentOrder || '',
+        service_type: record.service_type || record.serviceType || 'دائم'
+      };
+    } else if (type === 'promotion') {
+      editValues = {
+        promotion_date: record.promotion_date || record.promotionDate || '',
+        promotion_order: record.promotion_order || record.promotionOrder || '',
+        grade: record.grade || 1,
+        step: record.step || 1,
+        notes: record.notes || ''
+      };
+    } else if (type === 'evaluation') {
+      editValues = {
+        year: record.year || new Date().getFullYear(),
+        score: record.score || 85,
+        grade: record.grade || 'جيد جداً',
+        evaluator: record.evaluator || '',
+        status: record.status || 'معتمد'
+      };
+    } else if (type === 'training_course') {
+      editValues = {
+        course_name: record.course_name || record.courseName || '',
+        start_date: record.start_date || record.startDate || '',
+        end_date: record.end_date || record.endDate || '',
+        institution: record.institution || '',
+        order_number: record.order_number || record.orderNumber || '',
+        result: record.result || 'اجتاز'
+      };
+    } else if (type === 'transfer') {
+      editValues = {
+        transfer_date: record.transfer_date || record.transferDate || '',
+        transfer_order: record.transfer_order || record.transferOrder || '',
+        from_department: record.from_department || record.fromDepartment || '',
+        to_department: record.to_department || record.toDepartment || '',
+        transfer_type: record.transfer_type || record.transferType || 'نقل دائم'
+      };
+    } else if (type === 'retirement') {
+      editValues = {
+        retirement_date: record.retirement_date || record.retirementDate || '',
+        retirement_order: record.retirement_order || record.retirementOrder || '',
+        retirement_reason: record.retirement_reason || record.retirementReason || 'بلوغ السن القانوني',
+        pension_amount: record.pension_amount || record.pensionAmount || 0,
+        status: record.status || 'مكتمل'
+      };
+    } else if (type === 'document') {
+      editValues = {
+        document_name: record.document_name || record.documentName || '',
+        document_type: record.document_type || record.documentType || 'أمر إداري',
+        issue_date: record.issue_date || record.issueDate || '',
+        issue_authority: record.issue_authority || record.issueAuthority || '',
+        file_path: record.file_path || record.filePath || '',
+        notes: record.notes || ''
+      };
+    } else if (type === 'service_record') {
+      editValues = {
+        record_type: record.record_type || record.recordType || 'خدمة محتسبة',
+        order_number: record.order_number || record.orderNumber || '',
+        order_date: record.order_date || record.orderDate || new Date().toISOString().split('T')[0],
+        years: record.years !== undefined ? record.years : 1,
+        months: record.months !== undefined ? record.months : 0,
+        days: record.days !== undefined ? record.days : 0,
+        purpose: record.purpose || 'promotion_allowance_pension',
+        reason: record.reason || '',
+        notes: record.notes || ''
+      };
+    } else if (type === 'appreciation') {
+      editValues = {
+        order_number: record.order_number || record.orderNumber || '',
+        order_date: record.order_date || record.orderDate || '',
+        issuer: record.issuer || 'السيد المدير العام',
+        reason: record.reason || '',
+        seniority_impact: record.seniority_impact || record.seniorityImpact || 'قدم شهر واحد',
+        notes: record.notes || ''
+      };
+    } else if (type === 'penalty') {
+      editValues = {
+        penalty_type: record.penalty_type || record.penaltyType || 'إنذار خطي',
+        penalty_date: record.penalty_date || record.penaltyDate || '',
+        order_number: record.order_number || record.orderNumber || '',
+        reason: record.reason || '',
+        status: record.status || 'نافذ'
+      };
+    }
+    setModalForm(editValues);
   };
 
   const handleModalSubmit = async (e) => {
@@ -327,6 +937,7 @@ export default function EmployeeDetail() {
 
         toast({ title: 'تم إضافة المخصص/الاستقطاع المؤقت', description: 'تم حفظ المخصص المؤقت للموظف بنجاح وجاري تطبيقه في احتساب الراتب' });
         setActiveModal(null);
+        setEditingRecordId(null);
         fetchData();
         return;
       }
@@ -341,15 +952,25 @@ export default function EmployeeDetail() {
       else if (activeModal === 'transfer') clientName = 'Transfer';
       else if (activeModal === 'retirement') clientName = 'Retirement';
       else if (activeModal === 'document') clientName = 'Document';
+      else if (activeModal === 'service_record') clientName = 'ServiceRecord';
+      else if (activeModal === 'appreciation') clientName = 'Appreciation';
+      else if (activeModal === 'penalty') clientName = 'Penalty';
 
       if (!clientName) {
         setModalSaving(false);
         return;
       }
 
-      await apiClient.entities[clientName].create(payload);
-      toast({ title: 'تم حفظ السجل', description: 'تمت إضافة السجل إلى قاعدة البيانات بنجاح' });
+      if (editingRecordId) {
+        await apiClient.entities[clientName].update(editingRecordId, payload);
+        toast({ title: 'تم تحديث السجل بنجاح', description: 'تم حفظ التعديلات على السجل في قاعدة البيانات بنجاح' });
+      } else {
+        await apiClient.entities[clientName].create(payload);
+        toast({ title: 'تم حفظ السجل', description: 'تمت إضافة السجل إلى قاعدة البيانات بنجاح' });
+      }
+      
       setActiveModal(null);
+      setEditingRecordId(null);
       fetchData();
     } catch (err) {
       console.error(err);
@@ -359,45 +980,78 @@ export default function EmployeeDetail() {
     }
   };
 
-  const deleteRecord = async (clientName, recordId) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا السجل؟ لا يمكن التراجع عن هذا الإجراء.')) return;
+  const toggleQualification = async (qualId, currentActive) => {
     try {
+      const updated = await apiClient.entities.Qualification.toggle(qualId);
+      
+      const newStatusText = updated.is_active ? 'تفعيل' : 'تعطيل';
+      toast({
+        title: `تم ${newStatusText} الشهادة بنجاح`,
+        description: updated.is_active 
+          ? 'تم اعتماد الشهادة المضافة واحتساب مخصصات الراتب بناءً عليها تلقائياً.' 
+          : 'تم تعطيل الشهادة والعودة إلى الشهادة السابقة الفعالة وتحديث مخصصات الراتب تلقائياً.',
+      });
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      toast({ title: 'خطأ', description: 'تعذر تغيير حالة الشهادة: ' + (err.message || ''), variant: 'destructive' });
+    }
+  };
+
+  const deleteRecord = (clientName, recordId, presetId = null) => {
+    setDeleteDialog({ open: true, clientName, recordId, presetId });
+  };
+
+  const executeDeleteRecord = async () => {
+    if (!deleteDialog.recordId && deleteDialog.clientName !== 'SalaryAllowance') return;
+    setDeleting(true);
+    try {
+      const { clientName, recordId, presetId } = deleteDialog;
       if (clientName === 'SalaryAllowance') {
-        // Find the record first to get its name/type to clean up presets if needed
-        try {
-          const list = await apiClient.entities.SalaryAllowance.filter({ employee_id: id });
-          const recordToDelete = list.find(r => r.id === recordId);
-          if (recordToDelete) {
-            // Clean up presets in localStorage
-            const presetsStr = localStorage.getItem('ALLOWANCES_DEDUCTIONS_PRESETS');
-            if (presetsStr) {
-              const presets = JSON.parse(presetsStr);
-              // filter out any preset that has the same name and is temporary for this employee
-              const nextPresets = presets.filter(p => {
-                const metaStr = localStorage.getItem(`TEMPORARY_META_${p.id}`);
-                if (metaStr) {
-                  const meta = JSON.parse(metaStr);
-                  if (meta.isTemporary && p.name === recordToDelete.allowance_type && meta.directEmployeeIds?.map(String).includes(String(id))) {
-                    // Clean up metadata
-                    localStorage.removeItem(`TEMPORARY_META_${p.id}`);
-                    return false;
-                  }
-                }
-                return true;
-              });
-              localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(nextPresets));
-            }
+        // If numeric ID, delete from DB table
+        if (typeof recordId === 'number') {
+          try {
+            await apiClient.entities.SalaryAllowance.delete(recordId);
+          } catch (e) {}
+        } else if (typeof recordId === 'string' && recordId.startsWith('db_')) {
+          const num = parseInt(recordId.replace('db_', ''));
+          if (num) {
+            try {
+              await apiClient.entities.SalaryAllowance.delete(num);
+            } catch (e) {}
           }
-        } catch (errPresetCleanup) {
-          console.error('Error cleaning up local storage preset:', errPresetCleanup);
         }
+
+        // Find or block preset for this employee
+        const activePresetId = presetId || (typeof recordId === 'string' && recordId.startsWith('preset_') ? recordId.replace('preset_', '') : null);
+        if (activePresetId) {
+          try {
+            let rule = { blockedEmployees: [] };
+            const saved = localStorage.getItem(`ALLOWANCE_RULES_${activePresetId}`);
+            if (saved) rule = JSON.parse(saved);
+            if (!rule.blockedEmployees) rule.blockedEmployees = [];
+            if (!rule.blockedEmployees.map(String).includes(String(employee.id))) {
+              rule.blockedEmployees.push(employee.id);
+            }
+            localStorage.setItem(`ALLOWANCE_RULES_${activePresetId}`, JSON.stringify(rule));
+          } catch (errBlock) {
+            console.error('Error blocking preset for employee:', errBlock);
+          }
+        }
+
+        toast({ title: 'تمت إزالة البند المالي', description: 'تم استثناء الموظف من هذا المخصص/الاستقطاع بنجاح' });
+      } else {
+        await apiClient.entities[clientName].delete(recordId);
+        toast({ title: 'تم الحذف بنجاح', description: 'تم إزالة السجل من قاعدة البيانات بنجاح' });
       }
-      await apiClient.entities[clientName].delete(recordId);
-      toast({ title: 'تم الحذف', description: 'تم إزالة السجل بنجاح' });
+
+      setDeleteDialog({ open: false, clientName: '', recordId: null, presetId: null });
       fetchData();
     } catch (err) {
       console.error(err);
       toast({ title: 'فشلت العملية', description: 'حدث خطأ أثناء الحذف', variant: 'destructive' });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -449,7 +1103,14 @@ export default function EmployeeDetail() {
             </div>
           </div>
         </div>
-        <div className="flex justify-center gap-2">
+        <div className="flex justify-center items-center flex-wrap gap-2">
+          <Button
+            onClick={() => setShowQRModal(true)}
+            variant="outline"
+            className="rounded-xl gap-2 border-amber-500 text-amber-900 bg-amber-50/50 hover:bg-amber-100 font-bold px-4 shadow-xs"
+          >
+            <QrCode size={16} className="text-amber-600" /> رمز الوصول السريع
+          </Button>
           <Link to={`/employees/${id}/edit`}>
             <Button variant="outline" className="rounded-xl gap-2 border-[#1B3A6B] text-[#1B3A6B] font-bold px-5">
               <Edit size={16} /> تعديل الملف الأساسي
@@ -458,29 +1119,44 @@ export default function EmployeeDetail() {
         </div>
       </div>
 
-      {/* Quick Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      {/* Top Cards Grid - Unified design matching screenshot */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
         {[
+          { label: 'الخدمة المباشرة الصافية الفترية', value: actualServiceDuration, color: 'text-[#1B3A6B]', icon: Clock },
+          { 
+            label: 'المدد المضافة والممددة بأوامر رسمية', 
+            value: (() => {
+              if (hasAddedService && hasExtensionService) {
+                return `${formatDurationParts(totalAddedYears, totalAddedMonths, totalAddedDays)} (مضافة) • ${formatDurationParts(finalExtYears, finalExtMonths, finalExtDays)} (تمديد)`;
+              } else if (hasAddedService) {
+                return `${formatDurationParts(totalAddedYears, totalAddedMonths, totalAddedDays)} (خدمة مضافة)`;
+              } else if (hasExtensionService) {
+                return `${formatDurationParts(finalExtYears, finalExtMonths, finalExtDays)} (تمديد تقاعدي)`;
+              }
+              return '٠ سنة، ٠ شهر، ٠ يوم';
+            })(), 
+            color: 'text-amber-600', 
+            icon: FileText 
+          },
+          { label: 'الخدمة الرسمية الكلية المعتمدة', value: totalServiceDuration, color: 'text-emerald-700 font-black', icon: ShieldCheck },
           { label: 'الراتب الأساسي', value: formatCurrency(salaryCalc.base_salary), color: 'text-[#1B3A6B]', icon: DollarSign },
           { label: 'صافي الراتب المتوقع', value: formatCurrency(displayedNetSalary), color: 'text-green-600', icon: DollarSign },
-          { label: 'تاريخ المباشرة الأولى', value: employee.first_appointment_date || '—', color: 'text-blue-600', icon: Calendar },
-          { label: 'تاريخ المباشرة في هذه الشركة', value: employee.current_appointment_date || '—', color: 'text-indigo-600', icon: Calendar },
           { label: 'رصيد الإجازات الاعتيادية', value: `${regularLeaveBalance} يوم`, color: 'text-emerald-600', icon: ClipboardList },
           { label: 'رصيد الإجازات المرضية', value: `${sickLeaveBalance} يوم`, color: 'text-rose-500', icon: Heart },
-          { label: 'مدة الخدمة الكلية', value: totalServiceDuration, color: 'text-amber-600 text-xs font-bold', icon: Clock },
-          { label: 'مدة الخدمة في هذه الشركة', value: companyServiceDuration, color: 'text-teal-600 text-xs font-bold', icon: Briefcase },
-          { label: 'حالة الموظف الحالية', value: employee.status || 'مستمر', color: 'text-amber-600 text-xs font-bold', icon: ClipboardList },
-          { label: 'موقع العمل في الشركة', value: employee.work_location || 'غير محدد', color: 'text-indigo-600 text-xs font-bold', icon: MapPin },
-          { label: 'جهة العمل (الهيكل التنظيمي)', value: workplace, color: 'text-[#1B3A6B] text-xs font-bold', icon: MapPin, className: 'sm:col-span-2' },
+          { label: 'مدة الخدمة في هذه الشركة', value: companyServiceDuration, color: 'text-teal-600', icon: Briefcase },
+          { label: 'خدمة القطاع النفطي', value: oilSectorServiceDuration, color: 'text-amber-700', icon: Briefcase },
+          { label: 'حالة الموظف الحالية', value: employee.status || 'مستمر', color: 'text-amber-600', icon: ClipboardList },
+          { label: 'موقع العمل في الشركة', value: employee.work_location || 'غير محدد', color: 'text-indigo-600', icon: MapPin },
+          { label: 'جهة العمل (الهيكل التنظيمي)', value: workplace, color: 'text-[#1B3A6B]', icon: MapPin, className: 'sm:col-span-2 md:col-span-2 lg:col-span-3' },
         ].map((s, i) => {
           const IconComponent = s.icon;
           return (
-            <div key={i} className={`bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex justify-between items-center hover:shadow-md transition-all ${s.className || ''}`}>
+            <div key={i} className={`bg-white rounded-2xl p-4 shadow-xs border border-slate-100 flex justify-between items-center hover:shadow-md hover:border-slate-200 transition-all ${s.className || ''}`}>
               <div className="flex-1 min-w-0">
-                <p className="text-slate-400 text-[10px] font-bold mb-1 truncate">{s.label}</p>
-                <p className={`text-sm font-extrabold truncate ${s.color}`} title={s.value}>{s.value}</p>
+                <p className="text-slate-400 text-[10px] font-bold mb-1 truncate" title={s.label}>{s.label}</p>
+                <p className={`text-sm font-extrabold truncate ${s.color}`} title={typeof s.value === 'string' ? s.value : ''}>{s.value}</p>
               </div>
-              <div className="w-9 h-9 rounded-xl bg-slate-50 flex items-center justify-center text-slate-400 shrink-0 mr-2">
+              <div className="w-9 h-9 rounded-xl bg-slate-50 flex items-center justify-center text-slate-400 shrink-0 mr-2 border border-slate-100">
                 <IconComponent size={18} />
               </div>
             </div>
@@ -494,10 +1170,10 @@ export default function EmployeeDetail() {
           <TabsTrigger value="personal" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">البيانات الشخصية</TabsTrigger>
           <TabsTrigger value="job" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">البيانات الوظيفية</TabsTrigger>
           <TabsTrigger value="qualifications" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">المؤهلات الدراسية ({qualifications.length})</TabsTrigger>
-          <TabsTrigger value="salary" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">مخصصات الراتب ({salaryAllowances.length})</TabsTrigger>
+          <TabsTrigger value="salary" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">مخصصات الراتب ({classifiedCustomItems.length})</TabsTrigger>
           <TabsTrigger value="promotions" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">الترقيات والعلاوات ({promotions.length})</TabsTrigger>
           <TabsTrigger value="leaves" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">الإجازات ({leaves.length})</TabsTrigger>
-          <TabsTrigger value="penalties" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">العقوبات ({penalties.length})</TabsTrigger>
+          <TabsTrigger value="penalties" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">التشكرات والعقوبات ({appreciations.length + penalties.length})</TabsTrigger>
           <TabsTrigger value="evaluations" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">تقييم الأداء ({evaluations.length})</TabsTrigger>
           <TabsTrigger value="training" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">التدريب ({trainingCourses.length})</TabsTrigger>
           <TabsTrigger value="transfers" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">التنقلات ({transfers.length})</TabsTrigger>
@@ -521,7 +1197,12 @@ export default function EmployeeDetail() {
                   <h4 className="font-bold text-xs text-[#1B3A6B]">معلومات الهوية الأساسية</h4>
                 </div>
                 <div className="space-y-1">
-                  <InfoRow label="الاسم الكامل" value={`${employee.full_name} ${employee.surname}`} />
+                  <InfoRow label="الاسم الأول" value={employee.first_name || (employee.full_name?.split(/\s+/)[0])} />
+                  <InfoRow label="اسم الأب" value={employee.father_name || (employee.full_name?.split(/\s+/)[1])} />
+                  <InfoRow label="اسم الجد" value={employee.grandfather_name || (employee.full_name?.split(/\s+/)[2])} />
+                  <InfoRow label="اسم والد الجد (الاسم الرابع)" value={employee.great_grandfather_name || (employee.full_name?.split(/\s+/).slice(3).join(' '))} />
+                  <InfoRow label="اللقب" value={employee.surname} />
+                  <InfoRow label="الاسم الرباعي واللقب" value={`${employee.full_name || ''} ${employee.surname || ''}`} />
                   <InfoRow label="الرقم الوظيفي (التخطيط)" value={employee.civil_service_number} />
                   <InfoRow label="رقم الشركة الموحد" value={employee.company_number} />
                 </div>
@@ -538,6 +1219,7 @@ export default function EmployeeDetail() {
                   <InfoRow label="تاريخ الميلاد" value={employee.birth_date} />
                   <InfoRow label="محل الميلاد" value={employee.birth_place} />
                   <InfoRow label="الجنسية" value={employee.nationality} />
+                  <InfoRow label="القومية" value={employee.ethnicity || 'غير محدد'} />
                   <InfoRow label="الديانة" value={employee.religion} />
                   <InfoRow label="فصيلة الدم" value={employee.blood_type || 'غير معروف'} />
                   <InfoRow label="الحالة الاجتماعية" value={employee.marital_status} />
@@ -554,6 +1236,7 @@ export default function EmployeeDetail() {
                 <div className="space-y-1">
                   <InfoRow label="رقم البطاقة الوطنية / الهوية" value={employee.national_id || 'غير متوفر'} />
                   <InfoRow label="رقم بطاقة السكن" value={employee.residence_card || 'غير متوفر'} />
+                  <InfoRow label="البطاقة التموينية" value={employee.ration_card || 'غير متوفر'} />
                   <InfoRow label="رقم الجواز" value={employee.passport_number || 'غير متوفر'} />
                 </div>
               </div>
@@ -570,6 +1253,26 @@ export default function EmployeeDetail() {
                   <InfoRow label="البريد الإلكتروني" value={employee.email || 'غير متوفر'} />
                 </div>
               </div>
+
+              {/* 5. بيانات التحصيل الدراسي */}
+              <div className="bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80">
+                <div className="pb-2 border-b border-slate-200/60 flex items-center gap-2 mb-3">
+                  <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
+                  <h4 className="font-bold text-xs text-[#1B3A6B]">بيانات التحصيل الدراسي والشهادة العلمية</h4>
+                </div>
+                <div className="space-y-1">
+                  <InfoRow label="الشهادة العلمية" value={employee.education_level || 'غير محدد'} />
+                  <InfoRow label="الاختصاص" value={employee.specialization || 'غير محدد'} />
+                  <InfoRow label="الجامعة / المعهد" value={employee.university || employee.institution || 'غير محدد'} />
+                  <InfoRow label="سنة التخرج" value={employee.graduation_year || 'غير محدد'} />
+                  <InfoRow label="رقم أمر احتساب الشهادة" value={employee.education_order || employee.evaluation_order || 'غير محدد'} />
+                </div>
+              </div>
+            </div>
+
+            {/* 5. رمز الوصول السريع الفريد (Quick Access QR) */}
+            <div className="pt-2 border-t border-slate-100">
+              <EmployeeQuickAccessQR employee={employee} />
             </div>
           </div>
         </TabsContent>
@@ -599,6 +1302,7 @@ export default function EmployeeDetail() {
                   <InfoRow label="تاريخ أمر التعيين" value={employee.appointment_date || 'غير محدد'} />
                   <InfoRow label="تاريخ المباشرة الأولى" value={employee.first_appointment_date || 'غير محدد'} />
                   <InfoRow label="تاريخ المباشرة في هذه الشركة" value={employee.current_appointment_date || 'غير محدد'} />
+                  <InfoRow label="تاريخ العمل في القطاع النفطي" value={employee.oil_sector_start_date || 'غير محدد'} />
                   <InfoRow label="حالة الموظف الحالية" value={employee.status || 'مستمر'} />
                   {employee.status && employee.status !== 'مستمر' && (
                     <div className="mt-3 p-3 bg-amber-50 rounded-xl border border-amber-100 text-xs text-amber-800 space-y-1">
@@ -623,6 +1327,16 @@ export default function EmployeeDetail() {
                   <InfoRow label="الشعبة / الفرع" value={employee.section || 'غير محدد'} />
                   <InfoRow label="موقع العمل للشركة" value={employee.work_location || 'غير محدد'} />
                   <InfoRow label="طبيعة العمل" value={employee.work_nature || 'مكتبي'} />
+                  <InfoRow label="نوع عمل الموظف" value={employee.work_shift_type || 'صباحي'} />
+                  {employee.work_shift_type === 'مناوب' && (
+                    <>
+                      {employee.shift_system_name && (
+                        <InfoRow label="نظام المناوبة المثبت" value={employee.shift_system_name} />
+                      )}
+                      <InfoRow label="عدد أيام الدوام" value={`${employee.shift_work_days ?? 0} يوم`} />
+                      <InfoRow label="عدد أيام الاستراحة" value={`${employee.shift_rest_days ?? 0} يوم`} />
+                    </>
+                  )}
                   <InfoRow label="نوع الخدمة" value={employee.service_type || 'غير محدد'} />
                   <InfoRow label="المسؤولية الأساسية" value={employee.primary_responsibility || 'بلا مسؤولية'} />
                   <InfoRow label="المسؤولية بالوكالة" value={employee.acting_responsibility || 'بلا وكالة'} />
@@ -658,27 +1372,68 @@ export default function EmployeeDetail() {
                 </div>
               </div>
 
-              {/* 5. احتساب الخدمة الفعلية */}
-              <div className="bg-emerald-50/40 p-5 rounded-2xl border border-emerald-100/80">
-                <div className="pb-2 border-b border-emerald-200/60 flex items-center gap-2 mb-3">
-                  <span className="w-1.5 h-4 bg-emerald-600 rounded-full" />
-                  <h4 className="font-bold text-xs text-emerald-800">احتساب الخدمة الفعلية (يوم/شهر/سنة)</h4>
+              {/* 5. احتساب الخدمة الكلية والمضافة */}
+              <div className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-200/80 space-y-3">
+                <div className="pb-2 border-b border-emerald-200/60 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-4 bg-emerald-600 rounded-full" />
+                    <h4 className="font-bold text-xs text-emerald-900">احتساب مدة الخدمة الكلية الشاملة (السنوات/الأشهر/الأيام)</h4>
+                  </div>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+                    مباشرة + خدمة محتسبة
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-500 font-semibold">1. الخدمة الفترية الفعلية (منذ المباشرة الأولى):</span>
+                      <span className="text-emerald-800 font-bold font-mono">{employee.first_appointment_date || '—'}</span>
+                    </div>
+                    <div className="mt-1 bg-white border border-emerald-100 rounded-lg px-2.5 py-1 flex justify-between items-center">
+                      <span className="text-[11px] text-slate-600">مدة المباشرة الفترية:</span>
+                      <span className="text-xs text-emerald-700 font-bold">{actualServiceDuration}</span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-emerald-100/80">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-500 font-semibold">2. إجمالي الخدمة المضافة المحتسبة بالأوامر:</span>
+                      <span className="text-emerald-800 font-bold font-mono">
+                        {totalAddedYears > 0 || totalAddedMonths > 0 || totalAddedDays > 0 
+                          ? `${totalAddedYears} سنة و ${totalAddedMonths} شهر و ${totalAddedDays} يوم`
+                          : 'لا يوجد خدمة مضافة'}
+                      </span>
+                    </div>
+                    <div className="mt-1 bg-white border border-emerald-100 rounded-lg px-2.5 py-1.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1">
+                      <span className="text-[11px] text-slate-600 font-semibold shrink-0">السبب والمبررات / التفاصيل:</span>
+                      <span className="text-[11px] text-emerald-800 font-medium truncate max-w-full">
+                        {addedServiceRecords.length > 0
+                          ? addedServiceRecords.map(r => `${r.record_type || r.recordType || 'خدمة'}${r.reason || r.notes ? `: ${r.reason || r.notes}` : ''}`).join(' • ')
+                          : 'لا توجد تفاصيل أو مبررات مسجلة'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t-2 border-emerald-200 bg-white p-3 rounded-xl border border-emerald-200 shadow-xs">
+                    <span className="text-[11px] text-emerald-800 font-bold block mb-0.5">3. إجمالي الخدمة الكلية الشاملة المعتمدة بالأنظمة:</span>
+                    <span className="text-sm text-emerald-900 font-black font-mono block leading-snug">{totalServiceDuration}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 6. احتساب خدمة القطاع النفطي */}
+              <div className="bg-amber-50/40 p-5 rounded-2xl border border-amber-200/70">
+                <div className="pb-2 border-b border-amber-200/60 flex items-center gap-2 mb-3">
+                  <span className="w-1.5 h-4 bg-amber-600 rounded-full" />
+                  <h4 className="font-bold text-xs text-amber-900">تاريخ الخدمة في القطاع النفطي</h4>
                 </div>
                 <div className="space-y-3.5">
                   <div>
-                    <span className="text-xs text-slate-500 font-semibold block">تاريخ المباشرة الأولى (الخدمة الكلية):</span>
-                    <span className="text-slate-800 text-xs font-bold font-mono mt-0.5 block">{employee.first_appointment_date || '—'}</span>
-                    <div className="mt-1 bg-white border border-emerald-100 rounded-lg px-2.5 py-1.5 flex justify-between items-center">
-                      <span className="text-[11px] text-emerald-800 font-medium">الخدمة الكلية المعتمدة:</span>
-                      <span className="text-xs text-emerald-700 font-extrabold">{calculateServiceDuration(employee.first_appointment_date)}</span>
-                    </div>
-                  </div>
-                  <div className="pt-2 border-t border-slate-100">
-                    <span className="text-xs text-slate-500 font-semibold block">تاريخ المباشرة في هذه الشركة:</span>
-                    <span className="text-slate-800 text-xs font-bold font-mono mt-0.5 block">{employee.current_appointment_date || '—'}</span>
-                    <div className="mt-1 bg-white border border-emerald-100 rounded-lg px-2.5 py-1.5 flex justify-between items-center">
-                      <span className="text-[11px] text-emerald-800 font-medium">الخدمة في هذه الشركة:</span>
-                      <span className="text-xs text-emerald-700 font-extrabold">{calculateServiceDuration(employee.current_appointment_date)}</span>
+                    <span className="text-xs text-slate-500 font-semibold block">تاريخ بدء العمل بالقطاع النفطي:</span>
+                    <span className="text-slate-800 text-xs font-bold font-mono mt-0.5 block">{employee.oil_sector_start_date || '—'}</span>
+                    <div className="mt-2 bg-white border border-amber-200 rounded-xl p-3 flex justify-between items-center shadow-xs">
+                      <span className="text-xs text-amber-900 font-bold">مدة الخدمة بالقطاع النفطي:</span>
+                      <span className="text-xs text-amber-700 font-extrabold">{oilSectorServiceDuration}</span>
                     </div>
                   </div>
                 </div>
@@ -694,6 +1449,211 @@ export default function EmployeeDetail() {
                   <InfoRow label="رصيد الإجازات الاعتيادية الابتدائي" value={employee.initial_regular_leave_balance !== undefined ? `${employee.initial_regular_leave_balance} يوم` : '0 يوم'} />
                   <InfoRow label="رصيد الإجازات المرضية الابتدائي" value={employee.initial_sick_leave_balance !== undefined ? `${employee.initial_sick_leave_balance} يوم` : '0 يوم'} />
                 </div>
+              </div>
+            </div>
+
+            {/* 7. سجل الأوامر الرسمية للخدمة المضافة والمحتسبة */}
+            <div className="pt-6 border-t border-slate-100 space-y-3">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                <div>
+                  <h4 className="text-sm font-bold text-[#1B3A6B] flex items-center gap-2">
+                    <ShieldCheck className="text-emerald-600" size={18} />
+                    سجل الخدمات المضافة والمحتسبة (عسكرية / عقود / ممارسة)
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    الخدمة المضافة تُحسب ببطاقة وتُجمع مع الخدمة الكلية لأغراض الترقية والعلاوة والتقاعد دون التأثير على موعد التقاعد
+                  </p>
+                </div>
+                <Button size="sm" onClick={() => openAddModal('service_record')} className="bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs gap-1 shadow-xs">
+                  <Plus size={14} /> إضافة أمر احتساب خدمة
+                </Button>
+              </div>
+
+              <div className="bg-emerald-50/30 border border-emerald-100 rounded-2xl overflow-hidden">
+                <div className="p-3.5 bg-emerald-100/50 border-b border-emerald-200/60 flex flex-wrap justify-between items-center gap-2">
+                  <span className="text-xs font-bold text-emerald-900">
+                    إجمالي المدة المضافة: <span className="font-mono text-xs bg-white px-2.5 py-1 rounded-lg border border-emerald-200 text-emerald-800">{totalAddedYears} سنة و {totalAddedMonths} شهر و {totalAddedDays} يوم</span>
+                  </span>
+                  <span className="text-xs font-bold text-emerald-900">
+                    الخدمة المعتمدة الكلية الشاملة: <span className="font-mono text-xs bg-white px-2.5 py-1 rounded-lg border border-emerald-200 text-emerald-800">{totalServiceDuration}</span>
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50/80 text-slate-500 border-b border-slate-100">
+                        <th className="text-right px-4 py-2.5 font-bold text-xs">نوع الخدمة</th>
+                        <th className="text-right px-4 py-2.5 font-bold text-xs">رقم الأمر</th>
+                        <th className="text-right px-4 py-2.5 font-bold text-xs">تاريخ الأمر</th>
+                        <th className="text-right px-4 py-2.5 font-bold text-xs">المدة المحتسبة</th>
+                        <th className="text-right px-4 py-2.5 font-bold text-xs">الغرض القانوني</th>
+                        <th className="text-right px-4 py-2.5 font-bold text-xs">السبب والجهة</th>
+                        <th className="text-center px-4 py-2.5 font-bold text-xs">إجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {addedServiceRecords.map(rec => (
+                        <tr key={rec.id} className="hover:bg-white/60">
+                          <td className="px-4 py-2.5 font-bold text-emerald-900 text-xs">{rec.record_type || rec.recordType}</td>
+                          <td className="px-4 py-2.5 font-mono text-xs text-slate-700">{rec.order_number || rec.orderNumber || '—'}</td>
+                          <td className="px-4 py-2.5 font-mono text-xs text-slate-600">{rec.order_date || rec.orderDate || '—'}</td>
+                          <td className="px-4 py-2.5 font-bold text-xs text-emerald-700">
+                            {rec.years || 0} سنة و {rec.months || 0} شهر و {rec.days || 0} يوم
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-slate-600">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${rec.purpose === 'pension_only' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                              {rec.purpose === 'pension_only' ? 'لاغراض التقاعد فقط' : 'للترقية والعلاوة والتقاعد'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-slate-500">{rec.reason || rec.notes || '—'}</td>
+                          <td className="px-4 py-2.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="text-blue-600 hover:bg-blue-50 h-7 w-7 rounded-lg"
+                                title="تعديل أمر الخدمة المحتسبة"
+                                onClick={() => openEditModal('service_record', rec)}
+                              >
+                                <Edit size={14} />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="text-red-500 hover:bg-red-50 h-7 w-7 rounded-lg"
+                                title="حذف أمر الخدمة المحتسبة"
+                                onClick={() => deleteRecord('ServiceRecord', rec.id)}
+                              >
+                                <Trash2 size={14} />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {addedServiceRecords.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-6 text-center text-slate-400 text-xs">لا توجد خدمة مضافة أو محتسبة مسجلة قانونياً لهذا الموظف</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            {/* 8. تمديد الخدمة التقاعدية */}
+            <div className="pt-6 border-t border-slate-100 space-y-3">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                <div>
+                  <h4 className="text-sm font-bold text-[#1B3A6B] flex items-center gap-2">
+                    <Calendar className="text-blue-600" size={18} />
+                    تمديد الخدمة التقاعدية وتأجيل السن القانوني
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    التمديد يضيف مدة إلى السن التقاعدي المثبت ويؤخر موعد التقاعد، ويُزيل الموظف تلقائياً من قائمة المقتربين من التقاعد
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={handleOpenExtModal} className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs gap-1 shadow-xs">
+                    <Plus size={14} /> {employee.retirement_extension_years > 0 || employee.retirement_extension_months > 0 ? 'تعديل التمديد' : 'إضافة أمر تمديد'}
+                  </Button>
+                  {(employee.retirement_extension_years > 0 || employee.retirement_extension_months > 0) && (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => setExtCancelModalOpen(true)} className="border-amber-300 text-amber-700 hover:bg-amber-50 rounded-xl text-xs font-bold gap-1">
+                        <Power size={13} /> إلغاء التمديد
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => setExtDeleteConfirmOpen(true)} className="rounded-xl text-xs font-bold gap-1">
+                        <Trash2 size={13} /> حذف التمديد
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-blue-50/30 border border-blue-100 rounded-2xl p-4 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-white p-3 rounded-xl border border-blue-100">
+                    <span className="text-xs text-slate-500 font-semibold block">السن التقاعدي المثبت (القانوني):</span>
+                    <span className="text-sm font-bold text-slate-800 font-mono mt-1 block">60 سنة</span>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-blue-100">
+                    <span className="text-xs text-slate-500 font-semibold block">مدة التمديد الممنوحة بالأمر:</span>
+                    <span className="text-sm font-bold text-blue-700 font-mono mt-1 block">
+                      {employee.retirement_extension_years > 0 || employee.retirement_extension_months > 0
+                        ? `${employee.retirement_extension_years || 0} سنة و ${employee.retirement_extension_months || 0} شهر`
+                        : 'لا يوجد تمديد فعال'}
+                    </span>
+                    {employee.retirement_extension_order_number && (
+                      <span className="text-[11px] text-slate-400 block mt-0.5">أمر رقم: {employee.retirement_extension_order_number} ({employee.retirement_extension_order_date || '—'})</span>
+                    )}
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-blue-100">
+                    <span className="text-xs text-slate-500 font-semibold block">السن التقاعدي المعدل الفعلي:</span>
+                    <span className="text-sm font-black text-blue-900 font-mono mt-1 block">
+                      {60 + (parseInt(employee.retirement_extension_years) || 0)} سنة 
+                      {employee.retirement_extension_months > 0 ? ` و ${employee.retirement_extension_months} شهر` : ''}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Table of Extension Records if any exist */}
+                {extensionRecords.length > 0 && (
+                  <div className="bg-white rounded-xl border border-blue-200 overflow-hidden">
+                    <div className="px-4 py-2.5 bg-blue-100/60 border-b border-blue-200 font-bold text-xs text-blue-950">
+                      سجل أوامر تمديد الخدمة المسجلة رسمياً ({extensionRecords.length})
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 text-slate-600 border-b border-slate-100">
+                            <th className="text-right px-4 py-2 font-bold">نوع الإجراء</th>
+                            <th className="text-right px-4 py-2 font-bold">رقم الأمر الإداري</th>
+                            <th className="text-right px-4 py-2 font-bold">تاريخ الأمر</th>
+                            <th className="text-right px-4 py-2 font-bold">المدة الممددة</th>
+                            <th className="text-right px-4 py-2 font-bold">سبب ومبررات التمديد</th>
+                            <th className="text-center px-4 py-2 font-bold">الإجراءات</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {extensionRecords.map(extRec => (
+                            <tr key={extRec.id} className="hover:bg-blue-50/40 transition-colors">
+                              <td className="px-4 py-2 font-bold text-amber-900">{extRec.record_type || extRec.recordType || 'تمديد خدمة'}</td>
+                              <td className="px-4 py-2 font-mono text-slate-700">{extRec.order_number || extRec.orderNumber || '—'}</td>
+                              <td className="px-4 py-2 font-mono text-slate-600">{extRec.order_date || extRec.orderDate || '—'}</td>
+                              <td className="px-4 py-2 font-bold text-amber-800">
+                                {extRec.years || 0} سنة و {extRec.months || 0} شهر
+                              </td>
+                              <td className="px-4 py-2 text-slate-600">{extRec.reason || extRec.notes || '—'}</td>
+                              <td className="px-4 py-2 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-blue-600 hover:bg-blue-50 h-7 w-7 rounded-lg"
+                                    title="تعديل أمر تمديد الخدمة"
+                                    onClick={() => openEditModal('service_record', extRec)}
+                                  >
+                                    <Edit size={14} />
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="text-red-500 hover:bg-red-50 h-7 w-7 rounded-lg"
+                                    title="حذف أمر تمديد الخدمة"
+                                    onClick={() => deleteRecord('ServiceRecord', extRec.id)}
+                                  >
+                                    <Trash2 size={14} />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -723,9 +1683,14 @@ export default function EmployeeDetail() {
                         <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{ja.assignment_order}</td>
                         <td className="px-4 py-2.5"><span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs">{ja.service_type}</span></td>
                         <td className="px-4 py-2.5 text-center">
-                          <Button size="icon" variant="ghost" className="text-red-500 h-8 w-8" onClick={() => deleteRecord('JobAssignment', ja.id)}>
-                            <Trash2 size={14} />
-                          </Button>
+                          <div className="flex items-center justify-center gap-1">
+                            <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل التكليف" onClick={() => openEditModal('assignment', ja)}>
+                              <Edit size={14} />
+                            </Button>
+                            <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" title="حذف التكليف" onClick={() => deleteRecord('JobAssignment', ja.id)}>
+                              <Trash2 size={14} />
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -743,9 +1708,24 @@ export default function EmployeeDetail() {
 
         {/* 3. Qualifications Tab */}
         <TabsContent value="qualifications" className="mt-5">
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-              <h3 className="text-base font-bold text-[#1B3A6B]">التحصيل الدراسي والشهادات الحاصل عليها الموظف</h3>
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+            
+            {/* Explanatory Banner */}
+            <div className="bg-blue-50/70 border border-blue-200/80 rounded-xl p-4 flex items-start gap-3 text-xs text-blue-900">
+              <ShieldCheck className="text-blue-600 shrink-0 mt-0.5" size={18} />
+              <div>
+                <p className="font-bold text-sm mb-1 text-blue-950">احتساب مخصصات الشهادة الدراسية تلقائياً:</p>
+                <p className="leading-relaxed">
+                  عند إضافة شهادة دراسية جديدة، تُحتسب مخصصات الشهادة بناءً على <strong>أحدث شهادة مفعلة</strong> للموظف. عند تعطيل الشهادة المضافة، يعود النظام تلقائياً للشهادة السابقة المفعلة وتحديث مخصصات الراتب بشكل فوري تلقائياً.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-[#1B3A6B]">التحصيل الدراسي والشهادات الحاصل عليها الموظف</h3>
+                <p className="text-xs text-slate-500 mt-0.5">الشهادة الفعالة المعتمدة حالياً بالراتب: <span className="font-bold text-emerald-700">{employee.education_level || 'بدون'}</span></p>
+              </div>
               <Button size="sm" onClick={() => openAddModal('qualification')} className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-xl gap-1">
                 <Plus size={14} /> إضافة شهادة دراسية
               </Button>
@@ -760,30 +1740,73 @@ export default function EmployeeDetail() {
                     <th className="text-right px-4 py-2.5 font-bold">الجهة المانحة والجامعة</th>
                     <th className="text-right px-4 py-2.5 font-bold">سنة التخرج</th>
                     <th className="text-right px-4 py-2.5 font-bold">أمر احتساب الشهادة</th>
+                    <th className="text-center px-4 py-2.5 font-bold">الحالة المعتمدة</th>
                     <th className="text-center px-4 py-2.5 font-bold">إجراءات</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {qualifications.map(q => (
-                    <tr key={q.id} className="border-b border-slate-50 hover:bg-slate-50/40">
-                      <td className="px-4 py-2.5 font-bold text-[#1B3A6B] flex items-center gap-2">
-                        <GraduationCap size={16} className="text-slate-400" />
-                        {q.education_level}
-                      </td>
-                      <td className="px-4 py-2.5 text-slate-700 font-semibold">{q.specialization || 'بدون تخصص'}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{q.institution}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{q.graduation_year}</td>
-                      <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{q.evaluation_order || '—'}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        <Button size="icon" variant="ghost" className="text-red-500 h-8 w-8" onClick={() => deleteRecord('Qualification', q.id)}>
-                          <Trash2 size={14} />
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
+                  {qualifications.map((q) => {
+                    const isActiveQual = q.is_active !== false;
+                    const isCurrentlyCalculated = isActiveQual && q.education_level === employee.education_level;
+
+                    return (
+                      <tr key={q.id} className={`border-b border-slate-50 hover:bg-slate-50/40 ${!isActiveQual ? 'bg-slate-50/60 opacity-75' : ''}`}>
+                        <td className="px-4 py-3 font-bold text-[#1B3A6B]">
+                          <div className="flex items-center gap-2">
+                            <GraduationCap size={16} className={isActiveQual ? "text-blue-600" : "text-slate-400"} />
+                            <span>{q.education_level}</span>
+                            {isCurrentlyCalculated && (
+                              <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-300 flex items-center gap-1 shrink-0">
+                                <CheckCircle2 size={11} /> المعتمدة بالراتب
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-slate-700 font-semibold">{q.specialization || 'بدون تخصص'}</td>
+                        <td className="px-4 py-3 text-slate-600">{q.institution || q.university || '—'}</td>
+                        <td className="px-4 py-3 text-slate-600 font-mono text-xs">{q.graduation_year || '—'}</td>
+                        <td className="px-4 py-3 text-slate-500 font-mono text-xs">{q.evaluation_order || '—'}</td>
+                        <td className="px-4 py-3 text-center">
+                          {isActiveQual ? (
+                            <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1">
+                              <CheckCircle2 size={12} /> مفعلة
+                            </span>
+                          ) : (
+                            <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2.5 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1">
+                              <XCircle size={12} /> معطلة
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className={`h-8 px-2.5 text-xs font-bold rounded-lg gap-1.5 transition-colors ${
+                                isActiveQual 
+                                  ? 'border-amber-200 text-amber-700 hover:bg-amber-50 hover:border-amber-300' 
+                                  : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300'
+                              }`}
+                              onClick={() => toggleQualification(q.id, isActiveQual)}
+                              title={isActiveQual ? "تعطيل الشهادة والعودة للشهادة السابقة" : "تفعيل الشهادة واحتساب مخصصاتها"}
+                            >
+                              <Power size={13} />
+                              {isActiveQual ? 'تعطيل' : 'تفعيل'}
+                            </Button>
+                            <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل الشهادة" onClick={() => openEditModal('qualification', q)}>
+                              <Edit size={14} />
+                            </Button>
+                            <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" onClick={() => deleteRecord('Qualification', q.id)}>
+                              <Trash2 size={14} />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {qualifications.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-slate-400">لا توجد مؤهلات تاريخية مسجلة</td>
+                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400">لا توجد مؤهلات تاريخية مسجلة</td>
                     </tr>
                   )}
                 </tbody>
@@ -936,7 +1959,7 @@ export default function EmployeeDetail() {
                           </td>
                           <td className="px-4 py-3 text-left font-mono font-bold text-emerald-700 text-xs">{formatCurrency(sa.resolvedAmount)}</td>
                           <td className="px-4 py-3 text-center">
-                            <Button size="icon" variant="ghost" className="text-red-500 h-7 w-7" onClick={() => deleteRecord('SalaryAllowance', sa.id)}>
+                            <Button size="icon" variant="ghost" className="text-red-500 h-7 w-7" onClick={() => deleteRecord('SalaryAllowance', sa.dbId || sa.id, sa.presetId)}>
                               <Trash2 size={13} />
                             </Button>
                           </td>
@@ -1053,7 +2076,7 @@ export default function EmployeeDetail() {
                           </td>
                           <td className="px-4 py-3 text-left font-mono font-bold text-red-700 text-xs">{formatCurrency(sa.resolvedAmount)}</td>
                           <td className="px-4 py-3 text-center">
-                            <Button size="icon" variant="ghost" className="text-red-500 h-7 w-7" onClick={() => deleteRecord('SalaryAllowance', sa.id)}>
+                            <Button size="icon" variant="ghost" className="text-red-500 h-7 w-7" onClick={() => deleteRecord('SalaryAllowance', sa.dbId || sa.id, sa.presetId)}>
                               <Trash2 size={13} />
                             </Button>
                           </td>
@@ -1096,7 +2119,45 @@ export default function EmployeeDetail() {
         </TabsContent>
 
         {/* 5. Promotions Tab */}
-        <TabsContent value="promotions" className="mt-5">
+        <TabsContent value="promotions" className="mt-5 space-y-4">
+          {/* Added Service Promotion & Allowance Impact Banner */}
+          {(() => {
+            const promoAddedRecords = addedServiceRecords.filter(r => r.purpose !== 'pension_only');
+            if (promoAddedRecords.length === 0) return null;
+
+            let promoAddedYears = 0;
+            let promoAddedMonths = 0;
+            let promoAddedDays = 0;
+
+            promoAddedRecords.forEach(r => {
+              promoAddedYears += parseInt(r.years || 0) || 0;
+              promoAddedMonths += parseInt(r.months || 0) || 0;
+              promoAddedDays += parseInt(r.days || 0) || 0;
+            });
+
+            const formattedAdded = formatDurationParts(promoAddedYears, promoAddedMonths, promoAddedDays);
+            const latestPromoDate = promotions[0]?.promotion_date || employee.current_appointment_date || employee.first_appointment_date;
+            
+            // Check if added service order dates are prior to latest promotion
+            const isUtilizedInLastPromo = promotions.length > 0 && promoAddedRecords.every(r => r.order_date && new Date(r.order_date) <= new Date(promotions[0].promotion_date));
+
+            return (
+              <div className="bg-emerald-50/90 border border-emerald-200 rounded-2xl p-4 text-xs space-y-1">
+                <div className="flex items-center gap-2 font-bold text-emerald-900">
+                  <ShieldCheck size={16} className="text-emerald-700" />
+                  احتساب الخدمة المضافة للعلاوات والترقيات ({formattedAdded})
+                </div>
+                <p className="text-emerald-800 leading-relaxed font-medium">
+                  {isUtilizedInLastPromo ? (
+                    <>تم الاستفادة الكاملة من هذه المدة المضافة لمرة واحدة في الترقية/العلاوة المسجلة بتاريخ ({latestPromoDate}). والترقيات اللاحقة تعود لفتراتها القانونية الاعتيادية.</>
+                  ) : (
+                    <>تُستقطع مدة الخدمة المضافة ({formattedAdded}) من فترة الانتظار القانونية للعلاوة والترقية القادمة لمرة واحدة، مما يقدّم تاريخ الاستحقاق القادم دون تكرارها بعد الاستفادة منها.</>
+                  )}
+                </p>
+              </div>
+            );
+          })()}
+
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
               <h3 className="text-base font-bold text-[#1B3A6B]">الترقيات والعلاوات السنوية</h3>
@@ -1126,9 +2187,14 @@ export default function EmployeeDetail() {
                       <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{p.promotion_order}</td>
                       <td className="px-4 py-2.5 text-slate-600 text-xs">{p.notes || '—'}</td>
                       <td className="px-4 py-2.5 text-center">
-                        <Button size="icon" variant="ghost" className="text-red-500 h-8 w-8" onClick={() => deleteRecord('PromotionIncrement', p.id)}>
-                          <Trash2 size={14} />
-                        </Button>
+                        <div className="flex items-center justify-center gap-1">
+                          <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل الترفيع" onClick={() => openEditModal('promotion', p)}>
+                            <Edit size={14} />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" onClick={() => deleteRecord('PromotionIncrement', p.id)}>
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1197,53 +2263,137 @@ export default function EmployeeDetail() {
           </div>
         </TabsContent>
 
-        {/* 7. Penalties Tab */}
-        <TabsContent value="penalties" className="mt-5">
+        {/* 7. Appreciations & Penalties Tab */}
+        <TabsContent value="penalties" className="mt-5 space-y-6">
+          {/* 1. كتب الشكر والتقدير */}
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-              <h3 className="text-base font-bold text-red-700">العقوبات الإدارية والانضباطية</h3>
-              <Link to={`/penalties/new?employee=${id}`}>
-                <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white rounded-xl gap-1">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 mb-4 gap-2">
+              <div>
+                <h3 className="text-base font-bold text-amber-900 flex items-center gap-2">
+                  <Award className="text-amber-600" size={18} />
+                  كتب الشكر والتقدير ({appreciations.length})
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">سجل كتب الشكر الممنوحة للموظف وما يترتب عليها من أثر القِدَم والمكافآت والمعنويات</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => openAddModal('appreciation')} className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl gap-1">
+                  <Plus size={14} /> إضافة كتاب شكر وتقدير
+                </Button>
+                <Link to={`/penalties?employee=${id}`}>
+                  <Button size="sm" variant="outline" className="border-amber-300 text-amber-800 hover:bg-amber-50 rounded-xl text-xs gap-1">
+                    <FileText size={14} /> إدارة الشكر والعقوبات العامة
+                  </Button>
+                </Link>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-amber-50/50 text-amber-900 border-b border-amber-100">
+                    <th className="text-right px-4 py-2.5 font-bold">جهة الإصدار</th>
+                    <th className="text-right px-4 py-2.5 font-bold">رقم الأمر الإداري</th>
+                    <th className="text-right px-4 py-2.5 font-bold">تاريخ الأمر</th>
+                    <th className="text-right px-4 py-2.5 font-bold">أثر القِدَم / المكافأة</th>
+                    <th className="text-right px-4 py-2.5 font-bold">سبب الشكر</th>
+                    <th className="text-right px-4 py-2.5 font-bold">ملاحظات</th>
+                    <th className="text-center px-4 py-2.5 font-bold">إجراءات</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {appreciations.map(a => (
+                    <tr key={a.id} className="border-b border-slate-50 hover:bg-amber-50/20">
+                      <td className="px-4 py-2.5 font-bold text-amber-950">{a.issuer || 'السيد المدير العام'}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-slate-700">{a.order_number || a.orderNumber}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-slate-600">{a.order_date || a.orderDate}</td>
+                      <td className="px-4 py-2.5">
+                        <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                          {a.seniority_impact || a.seniorityImpact || 'قدم شهر واحد'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-700 text-xs max-w-xs truncate" title={a.reason}>{a.reason || '—'}</td>
+                      <td className="px-4 py-2.5 text-slate-500 text-xs">{a.notes || '—'}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل كتاب الشكر" onClick={() => openEditModal('appreciation', a)}>
+                            <Edit size={14} />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" title="حذف" onClick={() => deleteRecord('Appreciation', a.id)}>
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {appreciations.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400">لا توجد كتب شكر وتقدير مسجلة للموظف</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 2. العقوبات الإدارية الانضباطية */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 mb-4 gap-2">
+              <div>
+                <h3 className="text-base font-bold text-red-700 flex items-center gap-2">
+                  <ShieldAlert className="text-red-600" size={18} />
+                  العقوبات الإدارية والانضباطية ({penalties.length})
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">سجل العقوبات والإنذارات المفروضة بحق الموظف وحالتها التنفيذية</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => openAddModal('penalty')} className="bg-red-600 hover:bg-red-700 text-white rounded-xl gap-1">
                   <Plus size={14} /> تسجيل عقوبة جديدة
                 </Button>
-              </Link>
+              </div>
             </div>
             
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 text-slate-500 border-b border-slate-100">
-                  <th className="text-right px-4 py-2.5 font-bold">نوع العقوبة</th>
-                  <th className="text-right px-4 py-2.5 font-bold">التاريخ</th>
-                  <th className="text-right px-4 py-2.5 font-bold">رقم الأمر</th>
-                  <th className="text-right px-4 py-2.5 font-bold">سبب العقوبة</th>
-                  <th className="text-right px-4 py-2.5 font-bold">الحالة الإدارية</th>
-                  <th className="text-center px-4 py-2.5 font-bold">إجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {penalties.map(p => (
-                  <tr key={p.id} className="border-b border-slate-50">
-                    <td className="px-4 py-2.5 font-bold text-red-700">{p.penalty_type}</td>
-                    <td className="px-4 py-2.5 text-slate-600">{p.penalty_date}</td>
-                    <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{p.order_number}</td>
-                    <td className="px-4 py-2.5 text-slate-600 text-xs">{p.reason}</td>
-                    <td className="px-4 py-2.5">
-                      <span className={`px-2 py-0.5 rounded text-xs font-bold ${p.status === 'نافذ' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'}`}>{p.status}</span>
-                    </td>
-                    <td className="px-4 py-2.5 text-center">
-                      <Button size="icon" variant="ghost" className="text-red-500 h-8 w-8" onClick={() => deleteRecord('Penalty', p.id)}>
-                        <Trash2 size={14} />
-                      </Button>
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500 border-b border-slate-100">
+                    <th className="text-right px-4 py-2.5 font-bold">نوع العقوبة</th>
+                    <th className="text-right px-4 py-2.5 font-bold">تاريخ العقوبة</th>
+                    <th className="text-right px-4 py-2.5 font-bold">رقم الأمر</th>
+                    <th className="text-right px-4 py-2.5 font-bold">سبب العقوبة</th>
+                    <th className="text-right px-4 py-2.5 font-bold">الحالة الإدارية</th>
+                    <th className="text-center px-4 py-2.5 font-bold">إجراءات</th>
                   </tr>
-                ))}
-                {penalties.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-slate-400">سجل الموظف نظيف من العقوبات الإدارية</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {penalties.map(p => (
+                    <tr key={p.id} className="border-b border-slate-50 hover:bg-red-50/20">
+                      <td className="px-4 py-2.5 font-bold text-red-700">{p.penalty_type || p.penaltyType}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-slate-600">{p.penalty_date || p.penaltyDate}</td>
+                      <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{p.order_number || p.orderNumber}</td>
+                      <td className="px-4 py-2.5 text-slate-600 text-xs">{p.reason || '—'}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${p.status === 'نافذ' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'}`}>{p.status || 'نافذ'}</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل العقوبة" onClick={() => openEditModal('penalty', p)}>
+                            <Edit size={14} />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" title="حذف" onClick={() => deleteRecord('Penalty', p.id)}>
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {penalties.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-8 text-center text-slate-400">سجل الموظف نظيف من العقوبات الإدارية</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </TabsContent>
 
@@ -1286,9 +2436,14 @@ export default function EmployeeDetail() {
                       <span className={`px-2 py-0.5 rounded text-xs font-bold ${ev.status === 'معتمد' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{ev.status}</span>
                     </td>
                     <td className="px-4 py-2.5 text-center">
-                      <Button size="icon" variant="ghost" className="text-red-500 h-8 w-8" onClick={() => deleteRecord('AnnualEvaluation', ev.id)}>
-                        <Trash2 size={14} />
-                      </Button>
+                      <div className="flex items-center justify-center gap-1">
+                        <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل التقييم" onClick={() => openEditModal('evaluation', ev)}>
+                          <Edit size={14} />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" onClick={() => deleteRecord('AnnualEvaluation', ev.id)}>
+                          <Trash2 size={14} />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1337,9 +2492,14 @@ export default function EmployeeDetail() {
                         <span className={`px-2 py-0.5 rounded text-xs font-bold ${tc.result === 'اجتاز' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-700'}`}>{tc.result}</span>
                       </td>
                       <td className="px-4 py-2.5 text-center">
-                        <Button size="icon" variant="ghost" className="text-red-500 h-8 w-8" onClick={() => deleteRecord('TrainingCourse', tc.id)}>
-                          <Trash2 size={14} />
-                        </Button>
+                        <div className="flex items-center justify-center gap-1">
+                          <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل الدورة التدريبية" onClick={() => openEditModal('training_course', tc)}>
+                            <Edit size={14} />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" onClick={() => deleteRecord('TrainingCourse', tc.id)}>
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1385,9 +2545,14 @@ export default function EmployeeDetail() {
                       <td className="px-4 py-2.5 text-[#1B3A6B] font-semibold">{tr.to_department}</td>
                       <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{tr.transfer_order}</td>
                       <td className="px-4 py-2.5 text-center">
-                        <Button size="icon" variant="ghost" className="text-red-500 h-8 w-8" onClick={() => deleteRecord('Transfer', tr.id)}>
-                          <Trash2 size={14} />
-                        </Button>
+                        <div className="flex items-center justify-center gap-1">
+                          <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل التنسيب/النقل" onClick={() => openEditModal('transfer', tr)}>
+                            <Edit size={14} />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" onClick={() => deleteRecord('Transfer', tr.id)}>
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1403,7 +2568,170 @@ export default function EmployeeDetail() {
         </TabsContent>
 
         {/* 11. Retirement Tab */}
-        <TabsContent value="retirement" className="mt-5">
+        <TabsContent value="retirement" className="mt-5 space-y-6">
+          {/* Card: Service Extension (معلومات تمديد الخدمة وتأجيل التقاعد) */}
+          {(() => {
+            const extOrderNum = employee?.retirement_extension_order_number || employee?.retirementExtensionOrderNumber || '';
+            const extOrderDate = employee?.retirement_extension_order_date || employee?.retirementExtensionOrderDate || '';
+            const extYears = employee?.retirement_extension_years ?? employee?.retirementExtensionYears ?? 0;
+            const extMonths = employee?.retirement_extension_months ?? employee?.retirementExtensionMonths ?? 0;
+            const extNote = employee?.retirement_extension_note || employee?.retirementExtensionNote || '';
+            const hasExtension = Boolean(extOrderNum || extOrderDate || extYears > 0 || extMonths > 0);
+
+            let baseRetirementDate = 'غير محدد';
+            let finalRetirementDate = 'غير محدد';
+            let diffDays = null;
+
+            if (employee?.birth_date || employee?.birthDate) {
+              const bDate = new Date(employee.birth_date || employee.birthDate);
+              if (!isNaN(bDate.getTime())) {
+                const baseDate = new Date(bDate);
+                baseDate.setFullYear(baseDate.getFullYear() + 60);
+
+                const finalDate = new Date(baseDate);
+                finalDate.setFullYear(finalDate.getFullYear() + (parseInt(extYears) || 0));
+                finalDate.setMonth(finalDate.getMonth() + (parseInt(extMonths) || 0));
+
+                baseRetirementDate = baseDate.toISOString().split('T')[0];
+                finalRetirementDate = finalDate.toISOString().split('T')[0];
+
+                const today = new Date();
+                const diff = finalDate.getTime() - today.getTime();
+                diffDays = Math.ceil(diff / (1000 * 60 * 60 * 24));
+              }
+            }
+
+            return (
+              <div className="bg-gradient-to-r from-amber-900/5 via-orange-900/5 to-yellow-900/5 border border-amber-200/80 rounded-2xl p-6 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-amber-200/60 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 bg-[#1B3A6B] text-white rounded-xl shadow-xs">
+                      <Clock size={22} />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                        تمديد الخدمة الوظيفية وتأجيل التقاعد
+                        {hasExtension && (extYears > 0 || extMonths > 0) ? (
+                          <span className="bg-emerald-100 text-emerald-800 text-xs px-2.5 py-0.5 rounded-full font-bold border border-emerald-200">
+                            تمديد خدمة ساري المفعول
+                          </span>
+                        ) : hasExtension ? (
+                          <span className="bg-amber-100 text-amber-800 text-xs px-2.5 py-0.5 rounded-full font-bold border border-amber-200">
+                            موقوف / ملغى
+                          </span>
+                        ) : (
+                          <span className="bg-slate-100 text-slate-600 text-xs px-2.5 py-0.5 rounded-full font-bold border border-slate-200">
+                            لا يوجد تمديد
+                          </span>
+                        )}
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        إدارة ومراجعة وتعديل وإلغاء أو حذف أوامر تمديد الخدمة للمتقاعدين والمستحقين
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 shrink-0">
+                    <Button
+                      size="sm"
+                      onClick={handleOpenExtModal}
+                      className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-xl text-xs font-bold gap-1.5 shadow-xs px-4"
+                    >
+                      <Edit size={14} />
+                      {hasExtension ? 'تعديل التمديد' : 'إضافة أمر تمديد'}
+                    </Button>
+
+                    {hasExtension && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setExtCancelForm({
+                              orderNumber: '',
+                              orderDate: new Date().toISOString().split('T')[0],
+                              note: ''
+                            });
+                            setExtCancelModalOpen(true);
+                          }}
+                          className="border-amber-300 text-amber-800 hover:bg-amber-100/60 rounded-xl text-xs font-bold gap-1.5"
+                        >
+                          <Power size={14} />
+                          إلغاء التمديد
+                        </Button>
+
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => setExtDeleteConfirmOpen(true)}
+                          className="rounded-xl text-xs font-bold gap-1.5"
+                        >
+                          <Trash2 size={14} />
+                          حذف التمديد
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {hasExtension ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
+                        <span className="text-slate-400 block font-medium">رقم الأمر الإداري</span>
+                        <span className="font-mono font-bold text-slate-800 text-sm block">{extOrderNum || 'غير محدد'}</span>
+                      </div>
+
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
+                        <span className="text-slate-400 block font-medium">تاريخ الأمر الإداري</span>
+                        <span className="font-mono font-bold text-slate-800 text-sm block">{extOrderDate || 'غير محدد'}</span>
+                      </div>
+
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
+                        <span className="text-slate-400 block font-medium">المدة المضافة للخدمة</span>
+                        <span className="font-bold text-emerald-700 text-sm block">
+                          {extYears} سنة و {extMonths} شهر
+                        </span>
+                      </div>
+
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 space-y-1">
+                        <span className="text-slate-400 block font-medium">تاريخ التقاعد (الأصلي ← المعدل)</span>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="font-mono text-slate-400 line-through">{baseRetirementDate}</span>
+                          <span className="font-mono font-bold text-emerald-700">← {finalRetirementDate}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {diffDays !== null && (
+                      <div className="flex items-center gap-2 bg-white/80 p-3 rounded-xl border border-amber-200/60 text-xs">
+                        <Clock size={16} className="text-amber-600 shrink-0" />
+                        <span className="text-slate-700 font-medium">
+                          {diffDays < 0 ? (
+                            <span className="text-red-600 font-bold">الموظف تجاوز تاريخ التقاعد المعدل بـ {Math.abs(diffDays)} يوم</span>
+                          ) : (
+                            <span>المتبقي للإحالة للتقاعد بعد التمديد: <strong className="text-amber-800 font-bold">{diffDays} يوم</strong></span>
+                          )}
+                        </span>
+                      </div>
+                    )}
+
+                    {extNote && (
+                      <div className="bg-amber-50/80 p-3.5 rounded-xl border border-amber-200/60 text-amber-900 text-xs leading-relaxed">
+                        <span className="font-bold block mb-1">الملاحظات / سبب التمديد أو الإلغاء:</span>
+                        <p className="whitespace-pre-line font-medium text-slate-800">{extNote}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-center py-5 text-xs text-slate-500 bg-white/60 rounded-xl border border-dashed border-amber-200/80">
+                    لا يوجد أمر تمديد خدمة مضاف لهذا الموظف. انقر على "إضافة أمر تمديد" لتسجيل الأمر الإداري.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
               <h3 className="text-base font-bold text-[#1B3A6B]">معاملات نهاية الخدمة والإحالة للتقاعد</h3>
@@ -1435,9 +2763,14 @@ export default function EmployeeDetail() {
                         <span className={`px-2 py-0.5 rounded text-xs font-bold ${r.status === 'مكتمل' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{r.status}</span>
                       </td>
                       <td className="px-4 py-2.5 text-center">
-                        <Button size="icon" variant="ghost" className="text-red-500 h-8 w-8" onClick={() => deleteRecord('Retirement', r.id)}>
-                          <Trash2 size={14} />
-                        </Button>
+                        <div className="flex items-center justify-center gap-1">
+                          <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل معاملة التقاعد" onClick={() => openEditModal('retirement', r)}>
+                            <Edit size={14} />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" onClick={() => deleteRecord('Retirement', r.id)}>
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1491,9 +2824,14 @@ export default function EmployeeDetail() {
                         ) : '—'}
                       </td>
                       <td className="px-4 py-2.5 text-center">
-                        <Button size="icon" variant="ghost" className="text-red-500 h-8 w-8" onClick={() => deleteRecord('Document', d.id)}>
-                          <Trash2 size={14} />
-                        </Button>
+                        <div className="flex items-center justify-center gap-1">
+                          <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل المستند" onClick={() => openEditModal('document', d)}>
+                            <Edit size={14} />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" onClick={() => deleteRecord('Document', d.id)}>
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1515,15 +2853,16 @@ export default function EmployeeDetail() {
           <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-100 p-6 space-y-4 animate-in fade-in zoom-in duration-200">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-lg font-bold text-[#1B3A6B]">
-                {activeModal === 'qualification' && 'إضافة مؤهل علمي جديد'}
-                {activeModal === 'assignment' && 'تسجيل تكليف/وظيفة جديدة'}
-                {activeModal === 'promotion' && 'تسجيل ترفيع/علاوة جديدة'}
-                {activeModal === 'allowance' && 'إضافة مخصص أو استقطاع مؤقت جديد'}
-                {activeModal === 'evaluation' && 'إضافة تقييم سنوي جديد'}
-                {activeModal === 'training_course' && 'تسجيل دورة تدريبية جديدة'}
-                {activeModal === 'transfer' && 'تسجيل معاملة نقل/تنسيب'}
-                {activeModal === 'retirement' && 'تسجيل معاملة تقاعد جديدة'}
-                {activeModal === 'document' && 'إضافة مستند/وثيقة جديدة'}
+                {activeModal === 'qualification' && (editingRecordId ? 'تعديل المؤهل العلمي' : 'إضافة مؤهل علمي جديد')}
+                {activeModal === 'assignment' && (editingRecordId ? 'تعديل التكليف/الوظيفة' : 'تسجيل تكليف/وظيفة جديدة')}
+                {activeModal === 'promotion' && (editingRecordId ? 'تعديل الترفيع/العلاوة' : 'تسجيل ترفيع/علاوة جديدة')}
+                {activeModal === 'allowance' && (editingRecordId ? 'تعديل المخصص/الاستقطاع' : 'إضافة مخصص أو استقطاع مؤقت جديد')}
+                {activeModal === 'evaluation' && (editingRecordId ? 'تعديل التقييم السنوي' : 'إضافة تقييم سنوي جديد')}
+                {activeModal === 'training_course' && (editingRecordId ? 'تعديل الدورة التدريبية' : 'تسجيل دورة تدريبية جديدة')}
+                {activeModal === 'transfer' && (editingRecordId ? 'تعديل معاملة النقل/التنسيب' : 'تسجيل معاملة نقل/تنسيب')}
+                {activeModal === 'retirement' && (editingRecordId ? 'تعديل معاملة التقاعد' : 'تسجيل معاملة تقاعد جديدة')}
+                {activeModal === 'document' && (editingRecordId ? 'تعديل المستند/الوثيقة' : 'إضافة مستند/وثيقة جديدة')}
+                {activeModal === 'service_record' && (editingRecordId ? 'تعديل أمر احتساب الخدمة / التمديد' : 'إضافة أمر احتساب خدمة / تمديد')}
               </h3>
               <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600 font-bold text-lg">&times;</button>
             </div>
@@ -1537,7 +2876,9 @@ export default function EmployeeDetail() {
                     <Select value={modalForm.education_level} onValueChange={v => setModalForm(prev => ({ ...prev, education_level: v }))}>
                       <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {['دكتوراه','ماجستير','بكالوريوس','دبلوم عالي','دبلوم','إعدادية','متوسطة','ابتدائية'].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                        {(educationDegrees.length > 0 ? educationDegrees.map(d => d.name) : ['دكتوراه','ماجستير','بكالوريوس','دبلوم عالي','دبلوم','إعدادية','متوسطة','ابتدائية']).map(r => (
+                          <SelectItem key={r} value={r}>{r}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -1954,6 +3295,139 @@ export default function EmployeeDetail() {
                 </div>
               )}
 
+              {/* 10. Service Record Form */}
+              {activeModal === 'service_record' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label>نوع الخدمة المحتسبة *</Label>
+                    <Select value={modalForm.record_type} onValueChange={v => setModalForm(prev => ({ ...prev, record_type: v }))}>
+                      <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {['خدمة محتسبة', 'خدمة عسكرية', 'خدمة عقد', 'خدمة ممارسة', 'خدمة محاماة', 'أخرى'].map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>الغرض القانوني من الاحتساب *</Label>
+                    <Select value={modalForm.purpose} onValueChange={v => setModalForm(prev => ({ ...prev, purpose: v }))}>
+                      <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="promotion_allowance_pension">لاغراض الترقية والعلاوة والتقاعد</SelectItem>
+                        <SelectItem value="pension_only">لاغراض التقاعد فقط</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>رقم الأمر الإداري *</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.order_number || ''} onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value }))} required placeholder="مثال: 1234/4/5" />
+                  </div>
+                  <div>
+                    <Label>تاريخ الأمر الإداري *</Label>
+                    <Input type="date" className="mt-1 rounded-xl" value={modalForm.order_date || ''} onChange={e => setModalForm(prev => ({ ...prev, order_date: e.target.value }))} required />
+                  </div>
+                  <div className="md:col-span-2 grid grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <div>
+                      <Label className="text-xs">المدة (سنوات) *</Label>
+                      <Input type="number" min="0" className="mt-1 rounded-xl bg-white" value={modalForm.years ?? 0} onChange={e => setModalForm(prev => ({ ...prev, years: parseInt(e.target.value) || 0 }))} required />
+                    </div>
+                    <div>
+                      <Label className="text-xs">المدة (أشهر) *</Label>
+                      <Input type="number" min="0" max="11" className="mt-1 rounded-xl bg-white" value={modalForm.months ?? 0} onChange={e => setModalForm(prev => ({ ...prev, months: parseInt(e.target.value) || 0 }))} required />
+                    </div>
+                    <div>
+                      <Label className="text-xs">المدة (أيام)</Label>
+                      <Input type="number" min="0" max="29" className="mt-1 rounded-xl bg-white" value={modalForm.days ?? 0} onChange={e => setModalForm(prev => ({ ...prev, days: parseInt(e.target.value) || 0 }))} />
+                    </div>
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>السبب والمبررات / التفاصيل *</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.reason || ''} onChange={e => setModalForm(prev => ({ ...prev, reason: e.target.value }))} required placeholder="مثال: احتساب خدمة العلم الإلزامية بموجب كتاب وزارة الدفاع" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>ملاحظات إضافية</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.notes || ''} onChange={e => setModalForm(prev => ({ ...prev, notes: e.target.value }))} />
+                  </div>
+                </div>
+              )}
+
+              {/* 11. Appreciation Form */}
+              {activeModal === 'appreciation' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label>رقم الأمر الإداري *</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.order_number || ''} onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value }))} required placeholder="مثال: 1234/ش" />
+                  </div>
+                  <div>
+                    <Label>تاريخ الأمر الإداري *</Label>
+                    <Input type="date" className="mt-1 rounded-xl" value={modalForm.order_date || ''} onChange={e => setModalForm(prev => ({ ...prev, order_date: e.target.value }))} required />
+                  </div>
+                  <div>
+                    <Label>جهة الإصدار / المانحة *</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.issuer || ''} onChange={e => setModalForm(prev => ({ ...prev, issuer: e.target.value }))} required placeholder="مثال: السيد المدير العام / معالي الوزير" />
+                  </div>
+                  <div>
+                    <Label>أثر القِدَم / المكافأة *</Label>
+                    <Select value={modalForm.seniority_impact} onValueChange={v => setModalForm(prev => ({ ...prev, seniority_impact: v }))}>
+                      <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="قدم شهر واحد">قدم شهر واحد</SelectItem>
+                        <SelectItem value="قدم 6 اشهر">قدم 6 اشهر</SelectItem>
+                        <SelectItem value="معنوي فقط بدون اثر">معنوي فقط بدون اثر</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>سبب / مناسبة الشكر والتقدير *</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.reason || ''} onChange={e => setModalForm(prev => ({ ...prev, reason: e.target.value }))} required placeholder="أدخل أسباب ومناسبة منح كتاب الشكر والتقدير..." />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>ملاحظات إضافية</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.notes || ''} onChange={e => setModalForm(prev => ({ ...prev, notes: e.target.value }))} placeholder="أي ملاحظات إضافية..." />
+                  </div>
+                </div>
+              )}
+
+              {/* 12. Penalty Form */}
+              {activeModal === 'penalty' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label>نوع العقوبة *</Label>
+                    <Select value={modalForm.penalty_type} onValueChange={v => setModalForm(prev => ({ ...prev, penalty_type: v }))}>
+                      <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {penaltyTypesList.map(t => {
+                          const val = t.name || t;
+                          return <SelectItem key={t.id || val} value={val}>{val}</SelectItem>;
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>تاريخ العقوبة *</Label>
+                    <Input type="date" className="mt-1 rounded-xl" value={modalForm.penalty_date || ''} onChange={e => setModalForm(prev => ({ ...prev, penalty_date: e.target.value }))} required />
+                  </div>
+                  <div>
+                    <Label>رقم الأمر الإداري *</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.order_number || ''} onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value }))} required placeholder="مثال: 5678/ع" />
+                  </div>
+                  <div>
+                    <Label>الحالة الإدارية *</Label>
+                    <Select value={modalForm.status} onValueChange={v => setModalForm(prev => ({ ...prev, status: v }))}>
+                      <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="نافذ">نافذ</SelectItem>
+                        <SelectItem value="ملغاة">ملغاة</SelectItem>
+                        <SelectItem value="موقوف تنفيذها">موقوف تنفيذها</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>سبب العقوبة / المخالفة *</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.reason || ''} onChange={e => setModalForm(prev => ({ ...prev, reason: e.target.value }))} required placeholder="تفاصيل أسباب فرض العقوبة..." />
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                 <Button type="button" variant="outline" className="rounded-xl" onClick={() => setActiveModal(null)} disabled={modalSaving}>إلغاء</Button>
                 <Button type="submit" disabled={modalSaving} className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-xl gap-2 font-bold px-6">
@@ -1964,6 +3438,255 @@ export default function EmployeeDetail() {
           </div>
         </div>
       )}
+
+      {/* Quick Access QR Modal */}
+      <Dialog open={showQRModal} onOpenChange={setShowQRModal}>
+        <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl p-4 sm:p-5" dir="rtl">
+          <DialogHeader className="text-right pb-1">
+            <DialogTitle className="text-base font-bold text-[#1B3A6B]">
+              بطاقة الوصول السريع والهوية الرقمية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="pt-1">
+            <EmployeeQuickAccessQR employee={employee} />
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 12. Service Extension Edit/Add Modal */}
+      <Dialog open={extModalOpen} onOpenChange={setExtModalOpen}>
+        <DialogContent className="max-w-lg rounded-2xl p-6" dir="rtl">
+          <DialogHeader className="text-right pb-2 border-b border-slate-100">
+            <DialogTitle className="text-base font-bold text-[#1B3A6B] flex items-center gap-2">
+              <Clock size={18} className="text-amber-600" />
+              تثبيت / تعديل أمر تمديد الخدمة
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleSaveExtension} className="space-y-4 pt-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label>رقم الأمر الإداري بالتمديد *</Label>
+                <Input
+                  className="mt-1 rounded-xl"
+                  value={extForm.orderNumber}
+                  onChange={e => setExtForm(prev => ({ ...prev, orderNumber: e.target.value }))}
+                  required
+                  placeholder="مثال: أمر 302/ث"
+                />
+              </div>
+              <div>
+                <Label>تاريخ الأمر الإداري *</Label>
+                <Input
+                  type="date"
+                  className="mt-1 rounded-xl"
+                  value={extForm.orderDate}
+                  onChange={e => setExtForm(prev => ({ ...prev, orderDate: e.target.value }))}
+                  required
+                />
+              </div>
+              <div>
+                <Label>سنوات التمديد المضافة *</Label>
+                <Select
+                  value={String(extForm.years)}
+                  onValueChange={v => setExtForm(prev => ({ ...prev, years: parseInt(v) || 0 }))}
+                >
+                  <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(y => (
+                      <SelectItem key={y} value={String(y)}>{y === 0 ? '0 سنة' : `${y} سنة`}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>أشهر التمديد المضافة *</Label>
+                <Select
+                  value={String(extForm.months)}
+                  onValueChange={v => setExtForm(prev => ({ ...prev, months: parseInt(v) || 0 }))}
+                >
+                  <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(m => (
+                      <SelectItem key={m} value={String(m)}>{m === 0 ? '0 شهر' : `${m} شهر`}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <Label>سبب / ملاحظة تمديد الخدمة</Label>
+              <Input
+                className="mt-1 rounded-xl"
+                value={extForm.note}
+                onChange={e => setExtForm(prev => ({ ...prev, note: e.target.value }))}
+                placeholder="أدخل سبب التمديد أو التوصيات الخاصة بأمر التمديد..."
+              />
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl text-xs"
+                onClick={() => setExtModalOpen(false)}
+                disabled={extSaving}
+              >
+                إلغاء
+              </Button>
+              <Button
+                type="submit"
+                disabled={extSaving}
+                className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-xl text-xs font-bold gap-2 px-6"
+              >
+                {extSaving ? 'جاري الحفظ...' : 'حفظ بيانات التمديد'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* 13. Service Extension Cancel Modal */}
+      <Dialog open={extCancelModalOpen} onOpenChange={setExtCancelModalOpen}>
+        <DialogContent className="max-w-md rounded-2xl p-6" dir="rtl">
+          <DialogHeader className="text-right pb-2 border-b border-slate-100">
+            <DialogTitle className="text-base font-bold text-amber-900 flex items-center gap-2">
+              <Power size={18} className="text-amber-600" />
+              إلغاء / إيقاف تمديد الخدمة
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCancelExtension} className="space-y-4 pt-3">
+            <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3 text-amber-900 text-xs leading-relaxed">
+              سيتم تصفير سنوات وأشهر التمديد وتدوين رقم وتاريخ أمر إلغاء التمديد في السجل الرسمي للموظف.
+            </div>
+
+            <div>
+              <Label>رقم أمر إلغاء التمديد *</Label>
+              <Input
+                className="mt-1 rounded-xl"
+                value={extCancelForm.orderNumber}
+                onChange={e => setExtCancelForm(prev => ({ ...prev, orderNumber: e.target.value }))}
+                required
+                placeholder="أدخل رقم الأمر الإداري القاضي بالإلغاء"
+              />
+            </div>
+
+            <div>
+              <Label>تاريخ أمر إلغاء التمديد *</Label>
+              <Input
+                type="date"
+                className="mt-1 rounded-xl"
+                value={extCancelForm.orderDate}
+                onChange={e => setExtCancelForm(prev => ({ ...prev, orderDate: e.target.value }))}
+                required
+              />
+            </div>
+
+            <div>
+              <Label>سبب إلغاء التمديد / ملاحظات</Label>
+              <Input
+                className="mt-1 rounded-xl"
+                value={extCancelForm.note}
+                onChange={e => setExtCancelForm(prev => ({ ...prev, note: e.target.value }))}
+                placeholder="أدخل سبب أو دواعي إلغاء التمديد..."
+              />
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl text-xs"
+                onClick={() => setExtCancelModalOpen(false)}
+                disabled={extSaving}
+              >
+                إلغاء
+              </Button>
+              <Button
+                type="submit"
+                disabled={extSaving}
+                className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold gap-2 px-6"
+              >
+                {extSaving ? 'جاري المعالجة...' : 'تأكيد أمر الإلغاء'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* 14. Service Extension Delete Confirm Modal */}
+      <Dialog open={extDeleteConfirmOpen} onOpenChange={setExtDeleteConfirmOpen}>
+        <DialogContent className="max-w-md rounded-2xl p-6" dir="rtl">
+          <DialogHeader className="text-right pb-2 border-b border-slate-100">
+            <DialogTitle className="text-base font-bold text-red-700 flex items-center gap-2">
+              <Trash2 size={18} />
+              حذف بيانات تمديد الخدمة
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-3">
+            <p className="text-xs text-slate-700 leading-relaxed font-medium">
+              هل أنت متأكد من رغبتك في حذف كافة بيانات وأرقام أوامر تمديد الخدمة لهذا الموظف نهائياً؟ لا يمكن التراجع عن هذه العملية.
+            </p>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl text-xs"
+                onClick={() => setExtDeleteConfirmOpen(false)}
+                disabled={extSaving}
+              >
+                إلغاء
+              </Button>
+              <Button
+                type="button"
+                onClick={handleDeleteExtension}
+                disabled={extSaving}
+                className="bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold gap-2 px-6"
+              >
+                {extSaving ? 'جاري الحذف...' : 'حذف التمديد نهائياً'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 15. General Record Delete Confirmation Dialog */}
+      <Dialog open={deleteDialog.open} onOpenChange={(open) => !deleting && setDeleteDialog(prev => ({ ...prev, open }))}>
+        <DialogContent className="max-w-md rounded-2xl p-6" dir="rtl">
+          <DialogHeader className="text-right pb-2 border-b border-slate-100">
+            <DialogTitle className="text-base font-bold text-red-700 flex items-center gap-2">
+              <Trash2 size={18} />
+              تأكيد حذف السجل
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-3">
+            <p className="text-xs text-slate-700 leading-relaxed font-medium">
+              هل أنت متأكد من رغبتك في حذف هذا السجل نهائياً من قاعدة البيانات؟ لا يمكن التراجع عن هذه العملية بعد التأكيد.
+            </p>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl text-xs font-bold"
+                onClick={() => setDeleteDialog(prev => ({ ...prev, open: false }))}
+                disabled={deleting}
+              >
+                إلغاء
+              </Button>
+              <Button
+                type="button"
+                onClick={executeDeleteRecord}
+                disabled={deleting}
+                className="bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold gap-2 px-6 shadow-xs"
+              >
+                {deleting ? 'جاري الحذف...' : 'تأكيد الحذف نهائياً'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

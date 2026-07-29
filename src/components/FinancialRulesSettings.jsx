@@ -368,14 +368,22 @@ export default function FinancialRulesSettings() {
           <div>
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
               <ShieldAlert className="text-amber-500 animate-pulse" size={20} />
-              الموظفون المقتربون من السن القانونية للتقاعد
+              الموظفون المقتربون أو البالغون للسن القانونية للتقاعد
             </h2>
             <p className="text-xs text-slate-500 mt-1">
-              قائمة بالموظفين الذين تبلغ أعمارهم الحالية المدة المحددة للإشعار ({thresholdDays} يوم) من سن التقاعد ({retirementAge} سنة).
+              استعراض الموظفين المشمولين بالإشعار ({thresholdDays} يوم) أو الذين تجاوزوا سن التقاعد ({retirementAge} سنة) دون تمديد أو إحالة للتقاعد.
             </p>
           </div>
-          <div className="bg-amber-50 text-amber-800 border border-amber-200 text-xs font-bold px-3 py-1.5 rounded-xl">
-            إجمالي المشمولين: {approachingEmployees.length} موظف
+          <div className="flex items-center gap-2">
+            <a
+              href="/service-management"
+              className="bg-[#1B3A6B] hover:bg-[#2a4f8f] text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-all shadow-sm flex items-center gap-1.5"
+            >
+              الانتقال إلى صفحة إدارة الخدمة والتمديدات
+            </a>
+            <div className="bg-amber-50 text-amber-800 border border-amber-200 text-xs font-bold px-3 py-1.5 rounded-xl">
+              إجمالي المشمولين: {approachingEmployees.length} موظف
+            </div>
           </div>
         </div>
 

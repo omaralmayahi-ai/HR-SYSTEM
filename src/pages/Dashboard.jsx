@@ -1,18 +1,19 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '@/api/apiClient';
-import { Users, CalendarDays, TrendingUp, GraduationCap, Star } from 'lucide-react';
+import { Users, CalendarDays, GraduationCap, Star, Hourglass, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-function StatCard({ title, value, icon: Icon, color, bg, link }) {
+function StatCard({ title, value, icon: Icon, color, bg, link, subtitle }) {
   const card = (
-    <div className={`bg-white rounded-2xl p-5 shadow-sm border border-slate-100 hover:shadow-md transition-shadow`}>
+    <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 hover:shadow-md transition-all">
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-slate-500 text-sm mb-1">{title}</p>
-          <p className={`text-2xl font-bold ${color}`}>{value}</p>
+          <p className="text-slate-500 text-xs font-semibold mb-1">{title}</p>
+          <p className={`text-2xl font-black ${color}`}>{value}</p>
+          {subtitle && <p className="text-[10px] text-slate-400 mt-1 font-medium">{subtitle}</p>}
         </div>
-        <div className={`w-12 h-12 rounded-xl ${bg} flex items-center justify-center`}>
-          <Icon size={22} className={color} />
+        <div className={`w-11 h-11 rounded-xl ${bg} flex items-center justify-center shrink-0`}>
+          <Icon size={20} className={color} />
         </div>
       </div>
     </div>
@@ -21,9 +22,20 @@ function StatCard({ title, value, icon: Icon, color, bg, link }) {
 }
 
 export default function Dashboard() {
-  const [stats, setStats] = useState({ total: 0, active: 0, pending_leaves: 0, due_promotions: 0, pending_evals: 0, ongoing_trainings: 0 });
+  const [stats, setStats] = useState({
+    total: 0,
+    active: 0,
+    pending_leaves: 0,
+    due_promotions: 0,
+    pending_evals: 0,
+    ongoing_trainings: 0,
+    service_records_count: 0,
+    approaching_retirement_count: 0,
+    reached_retirement_no_extension: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [recentEmployees, setRecentEmployees] = useState([]);
+  const [approachingEmployeesList, setApproachingEmployeesList] = useState([]);
 
   useEffect(() => {
     Promise.all([
@@ -31,19 +43,67 @@ export default function Dashboard() {
       apiClient.entities.LeaveRequest.filter({ status: 'معلق' }),
       apiClient.entities.PerformanceEvaluation.filter({ status: 'مرفوع للاعتماد' }),
       apiClient.entities.Training.filter({ status: 'جاري' }),
-    ]).then(([employees, leaves, evals, trainings]) => {
-      const active = employees.filter(e => e.status === 'فعال').length;
+      apiClient.entities.ServiceRecord.list().catch(() => []),
+      apiClient.settings.get().catch(() => null),
+    ]).then(([employees, leaves, evals, trainings, serviceRecords, settingsRes]) => {
+      const active = employees.filter(e => e.status === 'فعال' || e.status === 'مستمر' || e.status === 'متقاعد مع تمديد').length;
+      
+      const retirementAge = settingsRes?.retirementAge || settingsRes?.retirement_age || 60;
+      const notificationDays = settingsRes?.retirementNotificationDays || settingsRes?.retirement_notification_days || 180;
+      const today = new Date();
+
+      let approachingCount = 0;
+      let reachedNoExtCount = 0;
+      const approachingList = [];
+
+      employees.forEach(emp => {
+        if (!emp.birth_date && !emp.birthDate) return;
+        const birthDate = new Date(emp.birth_date || emp.birthDate);
+        if (isNaN(birthDate.getTime())) return;
+
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const m = today.getMonth() - birthDate.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) age--;
+
+        const retDate = new Date(birthDate);
+        retDate.setFullYear(birthDate.getFullYear() + retirementAge);
+        const daysToRetirement = Math.ceil((retDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+
+        const hasExtension = Boolean(
+          (emp.retirement_extension_years > 0 || emp.retirementExtensionYears > 0) ||
+          (emp.retirement_extension_order_number || emp.retirementExtensionOrderNumber)
+        );
+        const isRetired = emp.status === 'متقاعد';
+
+        if (age >= retirementAge) {
+          if (!hasExtension && !isRetired) {
+            reachedNoExtCount++;
+            approachingList.push({ ...emp, age, daysToRetirement, statusBadge: 'بلغ السن التقاعدي' });
+          }
+        } else if (daysToRetirement > 0 && daysToRetirement <= notificationDays && !isRetired) {
+          approachingCount++;
+          approachingList.push({ ...emp, age, daysToRetirement, statusBadge: `باقي ${Math.round(daysToRetirement/30)} شهر` });
+        }
+      });
+
       setStats({
         total: employees.length,
         active,
         pending_leaves: leaves.length,
         due_promotions: 0,
         pending_evals: evals.length,
-        ongoing_trainings: trainings.length
+        ongoing_trainings: trainings.length,
+        service_records_count: serviceRecords.length,
+        approaching_retirement_count: approachingCount,
+        reached_retirement_no_extension: reachedNoExtCount,
       });
       setRecentEmployees(employees.slice(0, 5));
+      setApproachingEmployeesList(approachingList.slice(0, 5));
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch((err) => {
+      console.error(err);
+      setLoading(false);
+    });
   }, []);
 
   if (loading) return (
@@ -54,68 +114,129 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6" dir="rtl">
-      <div>
-        <h1 className="text-2xl font-bold text-[#1B3A6B]">لوحة التحكم</h1>
-        <p className="text-slate-500 text-sm mt-1">نظرة عامة على الدائرة</p>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <div>
+          <h1 className="text-2xl font-black text-[#1B3A6B]">لوحة التحكم الموحدة</h1>
+          <p className="text-slate-500 text-xs mt-1">نظرة عامة على الموارد البشرية والخدمة والتقاعد</p>
+        </div>
+        <div className="bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm text-xs font-bold text-[#1B3A6B]">
+          {new Date().toLocaleDateString('ar-IQ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+        </div>
       </div>
 
-      {/* Stats Grid */}
+      {/* Primary Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="إجمالي الموظفين" value={stats.total} icon={Users} color="text-[#1B3A6B]" bg="bg-blue-50" link="/employees" />
-        <StatCard title="الموظفون الفعالون" value={stats.active} icon={Users} color="text-green-600" bg="bg-green-50" link="/employees" />
+        <StatCard title="الموظفون الفعالون" value={stats.active} icon={Users} color="text-emerald-600" bg="bg-emerald-50" link="/employees" />
+        <StatCard title="سجلات الخدمة والتمديد" value={stats.service_records_count} icon={Hourglass} color="text-indigo-600" bg="bg-indigo-50" link="/service-management" />
+        <StatCard title="بلغوا السن دون تمديد" value={stats.reached_retirement_no_extension} icon={AlertTriangle} color="text-amber-700" bg="bg-amber-50" link="/service-management" subtitle="يتطلب اتخاذ إجراء تمديد أو إحالة" />
+      </div>
+
+      {/* Secondary Stats Grid */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="طلبات إجازة معلقة" value={stats.pending_leaves} icon={CalendarDays} color="text-orange-600" bg="bg-orange-50" link="/leaves" />
         <StatCard title="تقييمات بانتظار الاعتماد" value={stats.pending_evals} icon={Star} color="text-purple-600" bg="bg-purple-50" link="/performance" />
+        <StatCard title="الدورات التدريبية الجارية" value={stats.ongoing_trainings} icon={GraduationCap} color="text-teal-600" bg="bg-teal-50" link="/training" />
+        <StatCard title="مقتربون من التقاعد" value={stats.approaching_retirement_count} icon={ShieldAlert} color="text-rose-600" bg="bg-rose-50" link="/service-management" />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="الدورات الجارية" value={stats.ongoing_trainings} icon={GraduationCap} color="text-teal-600" bg="bg-teal-50" link="/training" />
-        <StatCard title="مستحقو الترقية" value={stats.due_promotions} icon={TrendingUp} color="text-[#C8960C]" bg="bg-yellow-50" link="/employees" />
-        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 col-span-2">
-          <p className="text-slate-500 text-sm mb-1">تاريخ اليوم</p>
-          <p className="text-xl font-bold text-[#1B3A6B]">
-            {new Date().toLocaleDateString('ar-IQ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-          </p>
-        </div>
-      </div>
-
-      {/* Recent Employees */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100">
-        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-          <h2 className="font-bold text-[#1B3A6B]">آخر الموظفين المضافين</h2>
-          <Link to="/employees" className="text-sm text-[#1B3A6B] hover:underline">عرض الكل</Link>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-slate-50 text-slate-500">
-                <th className="text-right px-5 py-3 font-medium">الاسم</th>
-                <th className="text-right px-5 py-3 font-medium">العنوان الوظيفي</th>
-                <th className="text-right px-5 py-3 font-medium">الدرجة</th>
-                <th className="text-right px-5 py-3 font-medium">الحالة</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentEmployees.map(emp => (
-                <tr key={emp.id} className="border-t border-slate-50 hover:bg-slate-50 transition-colors">
-                  <td className="px-5 py-3">
-                    <Link to={`/employees/${emp.id}`} className="font-medium text-[#1B3A6B] hover:underline">{emp.full_name}</Link>
-                  </td>
-                  <td className="px-5 py-3 text-slate-600">{emp.job_title || '—'}</td>
-                  <td className="px-5 py-3 text-slate-600">الدرجة {emp.grade} / المرحلة {emp.step}</td>
-                  <td className="px-5 py-3">
-                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
-                      emp.status === 'فعال' ? 'bg-green-100 text-green-700' :
-                      emp.status === 'إجازة' ? 'bg-orange-100 text-orange-700' :
-                      'bg-slate-100 text-slate-600'
-                    }`}>{emp.status || 'فعال'}</span>
-                  </td>
+      {/* Tables Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Approaching Retirement Widget */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-4 bg-amber-50/50 border-b border-amber-100 flex items-center justify-between">
+            <h2 className="font-bold text-amber-900 text-sm flex items-center gap-2">
+              <AlertTriangle size={18} className="text-amber-600" />
+              المقتربون والبالغون للسن التقاعدي
+            </h2>
+            <Link to="/service-management" className="text-xs font-bold text-[#1B3A6B] hover:underline">التمديدات والخدمات المضافة ←</Link>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-right">
+              <thead>
+                <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
+                  <th className="px-4 py-2.5">الموظف</th>
+                  <th className="px-4 py-2.5">العمر</th>
+                  <th className="px-4 py-2.5">الموقف</th>
                 </tr>
-              ))}
-              {recentEmployees.length === 0 && (
-                <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-400">لا يوجد موظفون مضافون بعد</td></tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium">
+                {approachingEmployeesList.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-8 text-center text-slate-400">
+                      لا يوجد موظفون بلغوا أو اقتربوا من السن التقاعدي حالياً
+                    </td>
+                  </tr>
+                ) : (
+                  approachingEmployeesList.map(emp => (
+                    <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-2.5">
+                        <Link to={`/employees/${emp.id}`} className="font-bold text-[#1B3A6B] hover:underline">
+                          {emp.full_name || emp.fullName}
+                        </Link>
+                        <p className="text-[10px] text-slate-400">{emp.job_title || emp.jobTitle || '—'}</p>
+                      </td>
+                      <td className="px-4 py-2.5 font-bold text-slate-700">{emp.age} سنة</td>
+                      <td className="px-4 py-2.5">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-200">
+                          {emp.statusBadge}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Recent Employees Widget */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h2 className="font-bold text-[#1B3A6B] text-sm">آخر الموظفين المضافين</h2>
+            <Link to="/employees" className="text-xs font-bold text-[#1B3A6B] hover:underline">عرض جميع الموظفين ←</Link>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-right">
+              <thead>
+                <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
+                  <th className="px-4 py-2.5">الاسم</th>
+                  <th className="px-4 py-2.5">العنوان الوظيفي</th>
+                  <th className="px-4 py-2.5">الدرجة والمرحلة</th>
+                  <th className="px-4 py-2.5">الحالة</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium">
+                {recentEmployees.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-8 text-center text-slate-400">
+                      لا يوجد موظفون مضافون بعد
+                    </td>
+                  </tr>
+                ) : (
+                  recentEmployees.map(emp => (
+                    <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-2.5">
+                        <Link to={`/employees/${emp.id}`} className="font-bold text-[#1B3A6B] hover:underline">
+                          {emp.full_name || emp.fullName}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-600">{emp.job_title || emp.jobTitle || '—'}</td>
+                      <td className="px-4 py-2.5 text-slate-600">د {emp.grade || '—'} / م {emp.step || '—'}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          emp.status === 'فعال' || emp.status === 'مستمر' ? 'bg-emerald-100 text-emerald-800' :
+                          emp.status === 'متقاعد مع تمديد' ? 'bg-amber-100 text-amber-900' :
+                          emp.status === 'إجازة' ? 'bg-orange-100 text-orange-800' :
+                          'bg-slate-100 text-slate-700'
+                        }`}>{emp.status || 'فعال'}</span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

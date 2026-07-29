@@ -1,6 +1,6 @@
 // src/db/schema.ts
 import { relations } from 'drizzle-orm';
-import { boolean, integer, pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, integer, pgTable, real, serial, text, timestamp } from 'drizzle-orm/pg-core';
 
 // 1. Users table (Custom Username and Password)
 export const users = pgTable('users', {
@@ -20,11 +20,16 @@ export const employees = pgTable('employees', {
   companyNumber: text('company_number'), // رقم الشركة
   civilServiceNumber: text('civil_service_number'), // الرقم الوظيفي
   fullName: text('full_name').notNull(),
-  surname: text('surname'), // اللقب
+  firstName: text('first_name'), // الاسم الأول (مثل: عمر)
+  fatherName: text('father_name'), // اسم الأب (مثل: محمود)
+  grandfatherName: text('grandfather_name'), // اسم الجد (مثل: سلمان)
+  greatGrandfatherName: text('great_grandfather_name'), // اسم والد الجد / الاسم الرابع (مثل: محيميد)
+  surname: text('surname'), // اللقب (مثل: المياحي)
   gender: text('gender'),
   birthDate: text('birth_date'),
   birthPlace: text('birth_place'),
   nationality: text('nationality'),
+  ethnicity: text('ethnicity'), // القومية
   religion: text('religion'),
   maritalStatus: text('marital_status'),
   childrenCount: integer('children_count'),
@@ -32,6 +37,7 @@ export const employees = pgTable('employees', {
   passportNumber: text('passport_number'), // رقم الجواز
   bloodType: text('blood_type'), // فصيلة الدم
   residenceCard: text('residence_card'),
+  rationCard: text('ration_card'), // البطاقة التموينية
   nationalityCert: text('nationality_cert'),
   phone: text('phone'),
   email: text('email'),
@@ -39,6 +45,7 @@ export const employees = pgTable('employees', {
   appointmentDate: text('appointment_date'),
   firstAppointmentDate: text('first_appointment_date'), // تاريخ أول تعيين
   currentAppointmentDate: text('current_appointment_date'), // تاريخ المباشرة الحالية
+  oilSectorStartDate: text('oil_sector_start_date'), // تاريخ العمل في القطاع النفطي
   appointmentOrder: text('appointment_order'),
   jobTitle: text('job_title'),
   department: text('department'),
@@ -57,8 +64,18 @@ export const employees = pgTable('employees', {
   retirementNumber: text('retirement_number'),
   educationLevel: text('education_level'),
   specialization: text('specialization'),
+  university: text('university'),
+  institution: text('institution'),
+  graduationYear: integer('graduation_year'),
+  educationOrder: text('education_order'),
+  evaluationOrder: text('evaluation_order'),
   workLocation: text('work_location'), // موقع العمل (مثل المقر الرئيسي، الحقول النفطية، إلخ)
   workNature: text('work_nature').default('مكتبي'), // طبيعة العمل (مكتبي، ميداني)
+  workShiftType: text('work_shift_type').default('صباحي'), // نوع عمل الموظف (صباحي، مناوب)
+  shiftSystemId: integer('shift_system_id'), // معرّف نظام المناوبة المختار
+  shiftSystemName: text('shift_system_name'), // اسم نظام المناوبة المختار
+  shiftWorkDays: integer('shift_work_days').default(0), // عدد أيام الدوام
+  shiftRestDays: integer('shift_rest_days').default(0), // عدد أيام الاستراحة
   status: text('status').default('مستمر'),
   statusOrderNumber: text('status_order_number'),
   statusOrderDate: text('status_order_date'),
@@ -126,6 +143,21 @@ export const penalties = pgTable('penalties', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// Appreciations / Thank You Letters table (كتب الشكر والتقدير)
+export const appreciations = pgTable('appreciations', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id')
+    .references(() => employees.id, { onDelete: 'cascade' })
+    .notNull(),
+  orderNumber: text('order_number').notNull(),
+  orderDate: text('order_date').notNull(),
+  issuer: text('issuer'), // جهة الإصدار (الوزير، المدير العام، الشركة...)
+  reason: text('reason'), // سبب كتاب الشكر
+  seniorityImpact: text('seniority_impact').default('قدم شهر واحد'), // أثر القدم (قدم شهر واحد / قدم شهرين / معنوي)
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
 // 6. Performance Evaluations table
 export const performanceEvaluations = pgTable('performance_evaluations', {
   id: serial('id').primaryKey(),
@@ -133,8 +165,19 @@ export const performanceEvaluations = pgTable('performance_evaluations', {
     .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   year: text('year').notNull(),
-  totalScore: integer('total_score').notNull(),
-  grade: text('grade').notNull(),
+  totalScore: integer('total_score').default(0),
+  grade: text('grade').default('بانتظار التقييم'),
+  formId: integer('form_id'),
+  formTitle: text('form_title'),
+  scoresJson: text('scores_json'), // Latching score snapshot & structure
+  evaluator: text('evaluator'),
+  evaluationOrder: text('evaluation_order'),
+  evaluationDate: text('evaluation_date'),
+  weaknesses: text('weaknesses'),
+  strengths: text('strengths'),
+  trainingNeeds: text('training_needs'),
+  employeeOpinion: text('employee_opinion'),
+  notes: text('notes'),
   status: text('status').default('مرفوع للاعتماد'),
   createdAt: timestamp('created_at').defaultNow(),
 });
@@ -211,6 +254,7 @@ export const employeesRelations = relations(employees, ({ many }) => ({
   careerHistories: many(careerHistories),
   leaveRequests: many(leaveRequests),
   penalties: many(penalties),
+  appreciations: many(appreciations),
   performanceEvaluations: many(performanceEvaluations),
   trainingEnrollments: many(trainingEnrollments),
   salaryRecords: many(salaryRecords),
@@ -250,6 +294,13 @@ export const leaveRequestsRelations = relations(leaveRequests, ({ one }) => ({
 export const penaltiesRelations = relations(penalties, ({ one }) => ({
   employee: one(employees, {
     fields: [penalties.employeeId],
+    references: [employees.id],
+  }),
+}));
+
+export const appreciationsRelations = relations(appreciations, ({ one }) => ({
+  employee: one(employees, {
+    fields: [appreciations.employeeId],
     references: [employees.id],
   }),
 }));
@@ -347,6 +398,7 @@ export const qualifications = pgTable('qualifications', {
   grade: text('grade'), // التقدير: ضعيف / متوسط / جيد / جيد جداً / امتياز
   equationNumber: text('equation_number'), // رقم كتاب المعادلة/الاحتساب
   equationDate: text('equation_date'), // تاريخ كتاب المعادلة/الاحتساب
+  isActive: boolean('is_active').default(true), // حالة الشهادة: مفعلة أو معطلة
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -616,5 +668,80 @@ export const responsibilityAllowances = pgTable('responsibility_allowances', {
   allowanceRate: integer('allowance_rate').default(0), // نسبة مخصص المنصب والمسؤولية (مثلاً: 25 تعني 25%)
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+// 28. Shift Systems table (أنظمة عمل المناوبة والانعكاسات الإدارية والمالية)
+export const shiftSystems = pgTable('shift_systems', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull(), // اسم نظام المناوبة (مثل: مناوبة 1*3، مناوبة 7*7)
+  workDays: integer('work_days').notNull().default(1),
+  restDays: integer('rest_days').notNull().default(3),
+  shiftHoursType: text('shift_hours_type').default('24h'),
+  dailyHours: integer('daily_hours').default(24),
+  description: text('description'),
+  allowancePercentage: real('allowance_percentage').default(0),
+  allowanceFlatAmount: integer('allowance_flat_amount').default(0),
+  overtimeFactor: real('overtime_factor').default(1.0),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 29. Service Records table (احتساب الخدمات الإضافية وسجلات تمديد الخدمة)
+export const serviceRecords = pgTable('service_records', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id')
+    .references(() => employees.id, { onDelete: 'cascade' })
+    .notNull(),
+  recordType: text('record_type').default('احتساب خدمة'), // 'احتساب خدمة' | 'تمديد خدمة'
+  orderNumber: text('order_number').notNull(),
+  orderDate: text('order_date').notNull(),
+  years: integer('years').default(0),
+  months: integer('months').default(0),
+  days: integer('days').default(0),
+  purpose: text('purpose').default('promotion_allowance_pension'), // 'pension_only' (لأغراض التقاعد فقط) | 'promotion_allowance_pension' (لأغراض الترقية والعلاوة والتقاعد)
+  reason: text('reason'), // السبب / التفاصيل
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const serviceRecordsRelations = relations(serviceRecords, ({ one }) => ({
+  employee: one(employees, {
+    fields: [serviceRecords.employeeId],
+    references: [employees.id],
+  }),
+}));
+
+// 30. Penalty Types table (أنواع العقوبات الإدارية)
+export const penaltyTypes = pgTable('penalty_types', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull(), // اسم العقوبة (لفت النظر، الإنذار، قطع الراتب، التوبيخ، إنقاص الراتب، تنزيل الدرجة، الفصل، العزل)
+  description: text('description'), // الوصف والتأثير القانوني المباشر وفق المادة 8
+  salaryDeductionDays: integer('salary_deduction_days').default(0), // عدد أيام الخصم (للتوافقية)
+  delayMonths: integer('delay_months').default(0), // مدة تأخير الترفيع والزيادة بالشهور (للأغراض الحسابية)
+  status: text('status').default('فعال'), // فعال أو غير فعال
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 31. Evaluation Forms table (استمارات تقييم الأداء والتخصيص حسب الفئات)
+export const evaluationForms = pgTable('evaluation_forms', {
+  id: serial('id').primaryKey(),
+  title: text('title').notNull(), // عنوان استمارة التقييم
+  category: text('category').notNull(), // الفئة الوظيفية المستهدفة (مثل: الوظائف القيادية والإشرافية)
+  targetGrades: text('target_grades'), // الدرجات الوظيفية المشمولة بالاستمارة
+  applicableResponsibilities: text('applicable_responsibilities'), // المسؤوليات المشمولة بهذه الاستمارة (JSON array string)
+  applicableQualifications: text('applicable_qualifications'), // الشهادات الدراسية المشمولة بهذه الاستمارة (JSON array string)
+  maxScore: integer('max_score').default(100), // إجمالي الدرجة القصوى
+  passingScore: integer('passing_score').default(50), // درجة القبول/النجاح
+  description: text('description'), // تعليمات وإرادات ملء الاستمارة
+  sections: text('sections'), // هيكلية المحاور والمعايير (مخزن بتنسيق JSON)
+  enableWeaknesses: boolean('enable_weaknesses').default(false), // تفعيل تسجيل نقاط الضعف
+  enableStrengths: boolean('enable_strengths').default(false), // تفعيل تسجيل نقاط القوة
+  enableTrainingNeeds: boolean('enable_training_needs').default(false), // تفعيل تسجيل الاحتياجات التدريبية
+  enableEmployeeOpinion: boolean('enable_employee_opinion').default(false), // تفعيل رأي الموظف
+  status: text('status').default('فعال'), // فعال / غير فعال / مسودة
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+
+
 
 
