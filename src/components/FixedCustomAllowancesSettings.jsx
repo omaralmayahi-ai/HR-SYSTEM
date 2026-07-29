@@ -1,6 +1,8 @@
 import { useState, useEffect, Fragment } from 'react';
 import { apiClient } from '@/api/apiClient';
+import { fetchEducationDegreesSorted, fetchResponsibilityAllowancesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
 import { useToast } from '@/components/ui/use-toast';
+import { doesEmployeeMatchCriteria } from '@/lib/salaryTable';
 import { 
   Plus, 
   Trash2, 
@@ -125,6 +127,10 @@ export default function FixedCustomAllowancesSettings() {
       };
       saveTempMeta(editingTempRecord.id, meta);
 
+      if (tempBeneficiaryType === 'category') {
+        localStorage.setItem(`ALLOWANCE_RULES_${editingTempRecord.id}`, JSON.stringify(tempFormRule));
+      }
+
       toast({
         title: 'تم تحديث المخصص المؤقت بنجاح',
         variant: 'success',
@@ -208,6 +214,10 @@ export default function FixedCustomAllowancesSettings() {
           directEmployeeIds: tempDirectEmployeeIds
         };
         saveTempMeta(targetId, meta);
+
+        if (tempBeneficiaryType === 'category') {
+          localStorage.setItem(`ALLOWANCE_RULES_${targetId}`, JSON.stringify(tempFormRule));
+        }
       }
 
       toast({
@@ -275,17 +285,52 @@ export default function FixedCustomAllowancesSettings() {
   const [editStatus, setEditStatus] = useState('فعال');
 
   // Rules Configuration State
+  const DEFAULT_RULE_STATE = {
+    grades: [],
+    steps: [],
+    educations: [],
+    responsibilities: [],
+    locations: [],
+    titles: [],
+    workNatures: [],
+    departments: [],
+    employeeStatuses: [],
+    maritalStatuses: [],
+    serviceTypes: [],
+    genders: [],
+    ethnicities: [],
+    religions: [],
+    actingResponsibilities: [],
+    deputyLevels: [],
+    workShiftTypes: [],
+    shiftSystems: [],
+    blockedEmployees: []
+  };
+
+  const [tempFormRule, setTempFormRule] = useState(DEFAULT_RULE_STATE);
+
+  const toggleFormRuleValue = (field, value) => {
+    setTempFormRule(prev => {
+      const arr = prev[field] || [];
+      const exists = arr.includes(value);
+      const updated = exists ? arr.filter(v => v !== value) : [...arr, value];
+      return { ...prev, [field]: updated };
+    });
+  };
+
   const [employees, setEmployees] = useState([]);
   const [orgUnits, setOrgUnits] = useState([]);
   const [workLocations, setWorkLocations] = useState([]);
   const [educationDegrees, setEducationDegrees] = useState([]);
   const [responsibilityAllowances, setResponsibilityAllowances] = useState([]);
+  const [shiftSystems, setShiftSystems] = useState([]);
   const [expandedRuleId, setExpandedRuleId] = useState(null);
   const [currentRule, setCurrentRule] = useState(null);
   const [searchBlockEmployee, setSearchBlockEmployee] = useState('');
   const [titleSearch, setTitleSearch] = useState('');
   const [deptSearch, setDeptSearch] = useState('');
   const [employeeBlockSearch, setEmployeeBlockSearch] = useState('');
+  const [showAllInRule, setShowAllInRule] = useState(false);
 
   // Drag and Drop state
   const [draggedIndex, setDraggedIndex] = useState(null);
@@ -293,7 +338,7 @@ export default function FixedCustomAllowancesSettings() {
 
   const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, id: null, name: '' });
 
-  useEffect(() => {
+  const loadSettingsEntities = () => {
     fetchFixedSettings();
     fetchCustomRecords();
     
@@ -319,18 +364,35 @@ export default function FixedCustomAllowancesSettings() {
     });
 
     // Fetch education degrees
-    apiClient.entities.EducationDegree.list().then(data => {
+    fetchEducationDegreesSorted().then(data => {
       setEducationDegrees(data || []);
     }).catch(err => {
       console.error('Error loading education degrees:', err);
     });
 
     // Fetch responsibility allowances
-    apiClient.entities.ResponsibilityAllowance.list().then(data => {
+    fetchResponsibilityAllowancesSorted().then(data => {
       setResponsibilityAllowances(data || []);
     }).catch(err => {
       console.error('Error loading responsibility allowances:', err);
     });
+
+    // Fetch shift systems
+    apiClient.entities.ShiftSystem.list().then(data => {
+      setShiftSystems(data || []);
+    }).catch(err => {
+      console.error('Error loading shift systems:', err);
+    });
+  };
+
+  useEffect(() => {
+    loadSettingsEntities();
+
+    const unsubscribe = subscribeToSettingsUpdates(() => {
+      loadSettingsEntities();
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const loadRuleForAllowance = (id) => {
@@ -350,6 +412,13 @@ export default function FixedCustomAllowancesSettings() {
           employeeStatuses: parsed.employeeStatuses || [],
           maritalStatuses: parsed.maritalStatuses || [],
           serviceTypes: parsed.serviceTypes || [],
+          genders: parsed.genders || [],
+          ethnicities: parsed.ethnicities || [],
+          religions: parsed.religions || [],
+          actingResponsibilities: parsed.actingResponsibilities || [],
+          deputyLevels: parsed.deputyLevels || parsed.deputyStatuses || [],
+          workShiftTypes: parsed.workShiftTypes || [],
+          shiftSystems: parsed.shiftSystems || [],
           blockedEmployees: parsed.blockedEmployees || []
         };
       } catch (e) {
@@ -368,6 +437,13 @@ export default function FixedCustomAllowancesSettings() {
       employeeStatuses: [],
       maritalStatuses: [],
       serviceTypes: [],
+      genders: [],
+      ethnicities: [],
+      religions: [],
+      actingResponsibilities: [],
+      deputyLevels: [],
+      workShiftTypes: [],
+      shiftSystems: [],
       blockedEmployees: []
     };
   };
@@ -1046,17 +1122,24 @@ export default function FixedCustomAllowancesSettings() {
                                 {(() => {
                                   const rule = loadRuleForAllowance(r.id);
                                   const hasConditions = 
-                                    rule.grades.length > 0 || 
-                                    rule.steps.length > 0 || 
-                                    rule.educations.length > 0 || 
-                                    rule.responsibilities.length > 0 || 
-                                    rule.locations.length > 0 || 
-                                    rule.titles.length > 0 || 
-                                    rule.workNatures.length > 0 || 
-                                    rule.departments.length > 0 || 
-                                    rule.employeeStatuses.length > 0 || 
-                                    rule.maritalStatuses.length > 0 || 
-                                    rule.serviceTypes.length > 0;
+                                    (rule.grades || []).length > 0 || 
+                                    (rule.steps || []).length > 0 || 
+                                    (rule.educations || []).length > 0 || 
+                                    (rule.responsibilities || []).length > 0 || 
+                                    (rule.locations || []).length > 0 || 
+                                    (rule.titles || []).length > 0 || 
+                                    (rule.workNatures || []).length > 0 || 
+                                    (rule.departments || []).length > 0 || 
+                                    (rule.employeeStatuses || []).length > 0 || 
+                                    (rule.maritalStatuses || []).length > 0 || 
+                                    (rule.serviceTypes || []).length > 0 ||
+                                    (rule.genders || []).length > 0 ||
+                                    (rule.ethnicities || []).length > 0 ||
+                                    (rule.religions || []).length > 0 ||
+                                    (rule.actingResponsibilities || []).length > 0 ||
+                                    (rule.deputyLevels || []).length > 0 ||
+                                    (rule.workShiftTypes || []).length > 0 ||
+                                    (rule.shiftSystems || []).length > 0;
                                   const hasBlocked = rule.blockedEmployees && rule.blockedEmployees.length > 0;
                                   if (!hasConditions && !hasBlocked) return null;
                                   return (
@@ -1570,135 +1653,333 @@ export default function FixedCustomAllowancesSettings() {
                                     </div>
                                   </div>
 
-                                  {/* 6. قائمة الحجب والاستثناء */}
-                                  <div className="space-y-3 bg-slate-50/50 p-4 rounded-xl border border-slate-100 col-span-1 md:col-span-2 lg:col-span-3">
-                                    <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-200 pb-2">
-                                      <h5 className="font-bold text-xs text-rose-700 flex items-center gap-1.5">
-                                        <UserX size={14} className="text-rose-600 animate-pulse" />
-                                        نظام حجب البند المالي والاستثناء (حجب عن موظفين محددين)
-                                      </h5>
-                                      <div className="flex items-center gap-2 mt-2 md:mt-0">
-                                        <span className="text-[10px] font-extrabold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-                                          المحجوبون حالياً: <strong className="text-rose-600">{currentRule.blockedEmployees.length}</strong> من <strong className="text-slate-700">{employees.length}</strong>
-                                        </span>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const allIds = employees.map(e => e.id);
-                                            setCurrentRule(prev => ({ ...prev, blockedEmployees: allIds }));
-                                          }}
-                                          className="text-[9px] font-black text-rose-700 hover:bg-rose-100 bg-rose-50 border border-rose-200 px-2 py-1 rounded"
-                                        >
-                                          حجب الجميع
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setCurrentRule(prev => ({ ...prev, blockedEmployees: [] }));
-                                          }}
-                                          className="text-[9px] font-black text-emerald-700 hover:bg-emerald-100 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded"
-                                        >
-                                          إلغاء حجب الجميع (شمل الكل)
-                                        </button>
+                                  {/* الهوية الشخصية والديموغرافية */}
+                                  <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                    <h5 className="font-bold text-[11px] text-slate-700">الهوية الشخصية والديموغرافية</h5>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                      <div>
+                                        <span className="text-[10px] text-slate-500 block mb-1 font-bold">الجنس:</span>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {['ذكر', 'أنثى'].map(g => {
+                                            const active = (currentRule.genders || []).includes(g);
+                                            return (
+                                              <button
+                                                key={g}
+                                                type="button"
+                                                onClick={() => toggleRuleValue('genders', g)}
+                                                className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                  active ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                }`}
+                                              >
+                                                {g}
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+
+                                      <div>
+                                        <span className="text-[10px] text-slate-500 block mb-1 font-bold">القومية:</span>
+                                        <div className="flex flex-col gap-1 max-h-28 overflow-y-auto pr-1">
+                                          {['عربي/ة', 'كردي/ة', 'تركماني/ة', 'كلداني/ة', 'آشوري/ة', 'سرياني/ة', 'شبكي/ة', 'إزيدي/ة', 'آخر'].map(eth => {
+                                            const active = (currentRule.ethnicities || []).includes(eth);
+                                            return (
+                                              <label key={eth} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={active}
+                                                  onChange={() => toggleRuleValue('ethnicities', eth)}
+                                                  className="rounded text-[#1B3A6B] focus:ring-0 w-3 h-3"
+                                                />
+                                                {eth}
+                                              </label>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+
+                                      <div>
+                                        <span className="text-[10px] text-slate-500 block mb-1 font-bold">الديانة:</span>
+                                        <div className="flex flex-col gap-1 max-h-28 overflow-y-auto pr-1">
+                                          {['مسلم', 'مسيحي', 'إيزيدي', 'صابئي', 'أخر'].map(rel => {
+                                            const active = (currentRule.religions || []).includes(rel);
+                                            return (
+                                              <label key={rel} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={active}
+                                                  onChange={() => toggleRuleValue('religions', rel)}
+                                                  className="rounded text-[#1B3A6B] focus:ring-0 w-3 h-3"
+                                                />
+                                                {rel}
+                                              </label>
+                                            );
+                                          })}
+                                        </div>
                                       </div>
                                     </div>
-                                    
-                                    <p className="text-[10px] text-slate-500 leading-relaxed">
-                                      ملاحظة هامة: الموظف المحجوب سيتم استثناؤه كلياً من استلام هذا البند المالي حتى وإن تحققت لديه شروط الاستحقاق المحددة في الأقسام السابقة.
-                                    </p>
+                                  </div>
 
-                                    {/* Employee search */}
-                                    <div className="relative">
-                                      <input
-                                        type="text"
-                                        value={employeeBlockSearch}
-                                        onChange={(e) => setEmployeeBlockSearch(e.target.value)}
-                                        placeholder="ابحث عن موظف بالاسم، الرقم الوظيفي، القسم، أو العنوان الوظيفي لتغيير حالة الحجب..."
-                                        className="w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-rose-500"
-                                      />
-                                      <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
-                                    </div>
+                                  {/* المسؤولية بالوكالة ودرجة الوكيل */}
+                                  <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                    <h5 className="font-bold text-[11px] text-slate-700">المسؤولية بالوكالة ودرجة الوكيل</h5>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                      <div>
+                                        <span className="text-[10px] text-slate-500 block mb-1 font-bold">المسؤولية بالوكالة:</span>
+                                        <div className="flex flex-col gap-1 max-h-32 overflow-y-auto pr-1">
+                                          {(responsibilityAllowances.length > 0 ? responsibilityAllowances.map(r => r.name) : ['بلا وكالة', 'معاون مدير عام بالوكالة', 'مدير قسم بالوكالة', 'رئيس شعبة بالوكالة', 'رئيس وحدة بالوكالة']).map(actResp => {
+                                            const active = (currentRule.actingResponsibilities || []).includes(actResp);
+                                            return (
+                                              <label key={actResp} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={active}
+                                                  onChange={() => toggleRuleValue('actingResponsibilities', actResp)}
+                                                  className="rounded text-[#1B3A6B] focus:ring-0 w-3 h-3"
+                                                />
+                                                {actResp}
+                                              </label>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
 
-                                    {/* Compact Employees Table with scroll */}
-                                    <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-lg bg-white">
-                                      <table className="w-full text-right text-[11px] border-collapse">
-                                        <thead className="bg-slate-50 text-slate-600 font-bold sticky top-0 border-b border-slate-200 z-10">
-                                          <tr>
-                                            <th className="px-3 py-2">الموظف</th>
-                                            <th className="px-3 py-2">القسم / جهة العمل</th>
-                                            <th className="px-3 py-2">العنوان الوظيفي</th>
-                                            <th className="px-3 py-2 text-center w-32">حالة الشمول</th>
-                                            <th className="px-3 py-2 text-center w-28">الإجراء</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100">
-                                          {employees
-                                            .filter(emp => {
-                                              if (!employeeBlockSearch.trim()) return true;
-                                              const searchLower = employeeBlockSearch.trim();
-                                              const name = emp.full_name || '';
-                                              const empNo = emp.employee_number || emp.employeeNumber || '';
-                                              const dept = emp.department || '';
-                                              const title = emp.job_title || emp.jobTitle || '';
-                                              return name.includes(searchLower) || 
-                                                     String(empNo).includes(searchLower) || 
-                                                     dept.includes(searchLower) || 
-                                                     title.includes(searchLower);
-                                            })
-                                            .map(emp => {
-                                              const isBlocked = currentRule.blockedEmployees.includes(emp.id);
-                                              return (
-                                                <tr key={emp.id} className={`hover:bg-slate-50/50 transition-colors ${isBlocked ? 'bg-rose-50/30' : ''}`}>
-                                                  <td className="px-3 py-2 font-bold text-slate-800">
-                                                    <div className="flex flex-col">
-                                                      <span>{emp.full_name}</span>
-                                                      <span className="text-[9px] text-slate-400 font-medium">رقم: #{emp.employee_number || emp.id}</span>
-                                                    </div>
-                                                  </td>
-                                                  <td className="px-3 py-2 text-slate-600">{emp.department || 'غير محدد'}</td>
-                                                  <td className="px-3 py-2 text-slate-600">{emp.job_title || emp.jobTitle || 'غير محدد'}</td>
-                                                  <td className="px-3 py-2 text-center">
-                                                    {isBlocked ? (
-                                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-extrabold bg-rose-50 text-rose-700 border border-rose-200">
-                                                        محجوب من الصرف ❌
-                                                      </span>
-                                                    ) : (
-                                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                                        مشمول بالصرف ✓
-                                                      </span>
-                                                    )}
-                                                  </td>
-                                                  <td className="px-3 py-2 text-center">
-                                                    {isBlocked ? (
-                                                      <button
-                                                        type="button"
-                                                        onClick={() => handleUnblockEmployee(emp.id)}
-                                                        className="px-2 py-1 rounded text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-all w-24"
-                                                      >
-                                                        إلغاء الحجب (شمل)
-                                                      </button>
-                                                    ) : (
-                                                      <button
-                                                        type="button"
-                                                        onClick={() => handleBlockEmployee(emp)}
-                                                        className="px-2 py-1 rounded text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 hover:bg-rose-100 transition-all w-24"
-                                                      >
-                                                        حجب الموظف
-                                                      </button>
-                                                    )}
-                                                  </td>
-                                                </tr>
-                                              );
-                                            })}
-                                          {employees.length === 0 && (
-                                            <tr>
-                                              <td colSpan={5} className="text-center py-6 text-slate-400 italic">لا يوجد موظفون في النظام</td>
-                                            </tr>
-                                          )}
-                                        </tbody>
-                                      </table>
+                                      <div>
+                                        <span className="text-[10px] text-slate-500 block mb-1 font-bold">درجة/صفة الوكيل:</span>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {['وكيل أول', 'وكيل ثاني'].map(dl => {
+                                            const active = (currentRule.deputyLevels || []).includes(dl);
+                                            return (
+                                              <button
+                                                key={dl}
+                                                type="button"
+                                                onClick={() => toggleRuleValue('deputyLevels', dl)}
+                                                className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                  active ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                }`}
+                                              >
+                                                {dl}
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
                                     </div>
                                   </div>
+
+                                  {/* نوع عمل الموظف ونظام المناوبة */}
+                                  <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                    <h5 className="font-bold text-[11px] text-slate-700">نوع عمل الموظف ونظام المناوبة</h5>
+                                    <div className="space-y-2">
+                                      <div>
+                                        <span className="text-[10px] text-slate-500 block mb-1 font-bold">نوع العمل (صباحي / مناوب):</span>
+                                        <div className="flex flex-wrap gap-2">
+                                          {['صباحي', 'مناوب'].map(st => {
+                                            const active = (currentRule.workShiftTypes || []).includes(st);
+                                            return (
+                                              <button
+                                                key={st}
+                                                type="button"
+                                                onClick={() => toggleRuleValue('workShiftTypes', st)}
+                                                className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all border ${
+                                                  active ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                                                }`}
+                                              >
+                                                {st}
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+
+                                      {((currentRule.workShiftTypes || []).includes('مناوب') || (currentRule.shiftSystems || []).length > 0) && (
+                                        <div className="border-t border-slate-200 pt-2 animate-in fade-in duration-200">
+                                          <span className="text-[10px] text-blue-700 font-bold block mb-1">
+                                            نظام المناوبة المثبت المحدد للمناوبين:
+                                          </span>
+                                          <div className="flex flex-wrap gap-1.5">
+                                            {(shiftSystems.length > 0 ? shiftSystems.map(s => s.name || s.system_name) : ['نظام 24/48', 'نظام 12/24', 'نظام 8 ساعات', 'وجبة صباحية/مسائية']).map(sysName => {
+                                              const active = (currentRule.shiftSystems || []).includes(sysName);
+                                              return (
+                                                <button
+                                                  key={sysName}
+                                                  type="button"
+                                                  onClick={() => toggleRuleValue('shiftSystems', sysName)}
+                                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                    active ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                                                  }`}
+                                                >
+                                                  {sysName}
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* 6. قائمة الحجب والاستثناء */}
+                                  {(() => {
+                                    const candidateEmps = employees.filter(emp => doesEmployeeMatchCriteria(emp, currentRule));
+                                    const displayList = showAllInRule ? employees : candidateEmps;
+
+                                    return (
+                                      <div className="space-y-3 bg-slate-50/50 p-4 rounded-xl border border-slate-100 col-span-1 md:col-span-2 lg:col-span-3">
+                                        <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-200 pb-2">
+                                          <h5 className="font-bold text-xs text-rose-700 flex items-center gap-1.5">
+                                            <UserX size={14} className="text-rose-600 animate-pulse" />
+                                            نظام تصفية المشمولين بالمحددات وحجب الاستثناء
+                                          </h5>
+                                          <div className="flex items-center gap-1.5 mt-2 md:mt-0 flex-wrap">
+                                            <span className="text-[10px] font-extrabold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
+                                              المشمولون بالمحددات: <strong>{candidateEmps.length}</strong> من <strong>{employees.length}</strong> موظف
+                                            </span>
+                                            <span className="text-[10px] font-extrabold text-rose-800 bg-rose-50 px-2.5 py-1 rounded-md border border-rose-200">
+                                              المحجوبون: <strong>{currentRule.blockedEmployees.length}</strong>
+                                            </span>
+                                            <button
+                                              type="button"
+                                              onClick={() => setShowAllInRule(prev => !prev)}
+                                              className="text-[9px] font-black text-indigo-700 hover:bg-indigo-100 bg-indigo-50 border border-indigo-200 px-2 py-1 rounded transition-all"
+                                            >
+                                              {showAllInRule ? 'إظهار المشمولين بالمحددات فقط' : 'إظهار كل الموظفين'}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                const candidateIds = candidateEmps.map(e => e.id);
+                                                setCurrentRule(prev => ({
+                                                  ...prev,
+                                                  blockedEmployees: Array.from(new Set([...(prev.blockedEmployees || []), ...candidateIds]))
+                                                }));
+                                              }}
+                                              className="text-[9px] font-black text-rose-700 hover:bg-rose-100 bg-rose-50 border border-rose-200 px-2 py-1 rounded transition-all"
+                                            >
+                                              حجب كافة المشمولين
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                const candidateIds = candidateEmps.map(e => e.id);
+                                                setCurrentRule(prev => ({
+                                                  ...prev,
+                                                  blockedEmployees: (prev.blockedEmployees || []).filter(id => !candidateIds.map(String).includes(String(id)))
+                                                }));
+                                              }}
+                                              className="text-[9px] font-black text-emerald-700 hover:bg-emerald-100 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded transition-all"
+                                            >
+                                              إلغاء حجب المشمولين
+                                            </button>
+                                          </div>
+                                        </div>
+                                        
+                                        <p className="text-[10px] text-slate-500 leading-relaxed">
+                                          ملاحظة: تظهر القائمة أدناه الموظفين المشمولين بحسب المحددات المختارة (كالدرجة، العنوان الوظيفي، القسم). يمكن حجب أو شمل أي موظف استثناءً.
+                                        </p>
+
+                                        {/* Employee search */}
+                                        <div className="relative">
+                                          <input
+                                            type="text"
+                                            value={employeeBlockSearch}
+                                            onChange={(e) => setEmployeeBlockSearch(e.target.value)}
+                                            placeholder="ابحث عن موظف بالاسم، الرقم الوظيفي، القسم، أو العنوان الوظيفي لتغيير حالة الحجب..."
+                                            className="w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-rose-500"
+                                          />
+                                          <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                                        </div>
+
+                                        {/* Compact Employees Table with scroll */}
+                                        <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-lg bg-white">
+                                          <table className="w-full text-right text-[11px] border-collapse">
+                                            <thead className="bg-slate-50 text-slate-600 font-bold sticky top-0 border-b border-slate-200 z-10">
+                                              <tr>
+                                                <th className="px-3 py-2">الموظف</th>
+                                                <th className="px-3 py-2">القسم / جهة العمل</th>
+                                                <th className="px-3 py-2">العنوان الوظيفي</th>
+                                                <th className="px-3 py-2 text-center w-32">حالة الشمول</th>
+                                                <th className="px-3 py-2 text-center w-28">الإجراء</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                              {displayList
+                                                .filter(emp => {
+                                                  if (!employeeBlockSearch.trim()) return true;
+                                                  const searchLower = employeeBlockSearch.trim().toLowerCase();
+                                                  const name = (emp.full_name || emp.name || '').toLowerCase();
+                                                  const empNo = String(emp.employee_number || emp.employeeNumber || emp.id || '');
+                                                  const dept = (emp.department || '').toLowerCase();
+                                                  const title = (emp.job_title || emp.jobTitle || '').toLowerCase();
+                                                  return name.includes(searchLower) || 
+                                                         empNo.includes(searchLower) || 
+                                                         dept.includes(searchLower) || 
+                                                         title.includes(searchLower);
+                                                })
+                                                .map(emp => {
+                                                  const isBlocked = (currentRule.blockedEmployees || []).map(String).includes(String(emp.id));
+                                                  const isMatched = doesEmployeeMatchCriteria(emp, currentRule);
+
+                                                  return (
+                                                    <tr key={emp.id} className={`hover:bg-slate-50/50 transition-colors ${
+                                                      isBlocked ? 'bg-rose-50/30' : !isMatched ? 'bg-slate-100/30 opacity-70' : 'bg-emerald-50/10'
+                                                    }`}>
+                                                      <td className="px-3 py-2 font-bold text-slate-800">
+                                                        <div className="flex flex-col">
+                                                          <span>{emp.full_name || emp.name}</span>
+                                                          <span className="text-[9px] text-slate-400 font-medium">رقم: #{emp.employee_number || emp.id}</span>
+                                                        </div>
+                                                      </td>
+                                                      <td className="px-3 py-2 text-slate-600">{emp.department || 'غير محدد'}</td>
+                                                      <td className="px-3 py-2 text-slate-600">{emp.job_title || emp.jobTitle || 'غير محدد'}</td>
+                                                      <td className="px-3 py-2 text-center">
+                                                        {isBlocked ? (
+                                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-extrabold bg-rose-50 text-rose-700 border border-rose-200">
+                                                            محجوب من الصرف ❌
+                                                          </span>
+                                                        ) : isMatched ? (
+                                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                                            مشمول بالمحددات ✓
+                                                          </span>
+                                                        ) : (
+                                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                                                            غير مطابق للمحددات ⚪
+                                                          </span>
+                                                        )}
+                                                      </td>
+                                                      <td className="px-3 py-2 text-center">
+                                                        {isBlocked ? (
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => handleUnblockEmployee(emp.id)}
+                                                            className="px-2 py-1 rounded text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-all w-24"
+                                                          >
+                                                            إلغاء الحجب (شمل)
+                                                          </button>
+                                                        ) : (
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => handleBlockEmployee(emp)}
+                                                            className="px-2 py-1 rounded text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 hover:bg-rose-100 transition-all w-24"
+                                                          >
+                                                            حجب الموظف
+                                                          </button>
+                                                        )}
+                                                      </td>
+                                                    </tr>
+                                                  );
+                                                })}
+                                              {displayList.length === 0 && (
+                                                <tr>
+                                                  <td colSpan={5} className="text-center py-6 text-slate-400 italic">لا يوجد موظفون ينطبق عليهم هذا المحدد في النظام</td>
+                                                </tr>
+                                              )}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
                                 </div>
 
                                 <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
@@ -2197,99 +2478,697 @@ export default function FixedCustomAllowancesSettings() {
                               {meta.beneficiaryType === 'category' && isExpanded && currentRule && (
                                 <tr>
                                   <td colSpan={7} className="px-6 py-4 bg-slate-50/40">
-                                    <div className="space-y-4">
-                                      <div className="flex items-center gap-2 text-[#1B3A6B] font-bold text-xs">
-                                        <Sliders size={14} />
-                                        <span>شروط استحقاق المخصص المؤقت: {rec.name}</span>
+                                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6 text-right" dir="rtl">
+                                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                                        <div className="flex items-center gap-2">
+                                          <Sliders className="w-4 h-4 text-amber-600" />
+                                          <h4 className="font-black text-xs text-[#1B3A6B]">شروط استحقاق وموظفي حجب المخصص المؤقت: "{rec.name}"</h4>
+                                        </div>
+                                        <span className="text-[10px] text-slate-400">إذا لم يتم تحديد أي شرط، سيُمنح المخصص لجميع الموظفين تلقائياً.</span>
                                       </div>
 
-                                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 bg-white p-4 rounded-xl border border-slate-200">
-                                        {/* Grades */}
-                                        <div className="space-y-1.5">
-                                          <span className="text-[11px] font-bold text-slate-700 block">الدرجات المشمولة</span>
-                                          <div className="flex flex-wrap gap-1">
-                                            {[1,2,3,4,5,6,7,8,9,10].map(g => {
-                                              const active = currentRule.grades?.includes(g);
-                                              return (
-                                                <button
-                                                  key={g}
-                                                  type="button"
-                                                  onClick={() => toggleRuleValue('grades', g)}
-                                                  className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
-                                                    active ? 'bg-[#1B3A6B] text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-                                                  }`}
-                                                >
-                                                  د{g}
-                                                </button>
-                                              );
-                                            })}
+                                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                        {/* 1. الدرجة والمرحلة */}
+                                        <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                          <h5 className="font-bold text-[11px] text-slate-700">الدرجة والمرحلة</h5>
+                                          <div className="space-y-3">
+                                            <div>
+                                              <span className="text-[10px] text-slate-400 block mb-1">الدرجات المحددة:</span>
+                                              <div className="flex flex-wrap gap-1">
+                                                {[1,2,3,4,5,6,7,8,9,10,11,12,13].map(g => {
+                                                  const active = (currentRule.grades || []).includes(g);
+                                                  return (
+                                                    <button
+                                                      key={g}
+                                                      type="button"
+                                                      onClick={() => toggleRuleValue('grades', g)}
+                                                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                                                        active ? 'bg-[#1B3A6B] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                      }`}
+                                                    >
+                                                      {g}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <span className="text-[10px] text-slate-400 block mb-1">المراحل المحددة:</span>
+                                              <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto">
+                                                {[1,2,3,4,5,6,7,8,9,10,11].map(s => {
+                                                  const active = (currentRule.steps || []).includes(s);
+                                                  return (
+                                                    <button
+                                                      key={s}
+                                                      type="button"
+                                                      onClick={() => toggleRuleValue('steps', s)}
+                                                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                                                        active ? 'bg-[#1B3A6B] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                      }`}
+                                                    >
+                                                      {s}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
                                           </div>
                                         </div>
 
-                                        {/* Steps */}
-                                        <div className="space-y-1.5">
-                                          <span className="text-[11px] font-bold text-slate-700 block">المراحل المشمولة</span>
-                                          <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-1 bg-white border border-slate-150 rounded-lg">
-                                            {[1,2,3,4,5,6,7,8,9,10,11].map(s => {
-                                              const active = currentRule.steps?.includes(s);
-                                              return (
-                                                <button
-                                                  key={s}
-                                                  type="button"
-                                                  onClick={() => toggleRuleValue('steps', s)}
-                                                  className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
-                                                    active ? 'bg-[#1B3A6B] text-white' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
-                                                  }`}
-                                                >
-                                                  م{s}
-                                                </button>
-                                              );
-                                            })}
+                                        {/* 2. الشهادة والمنصب */}
+                                        <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                          <h5 className="font-bold text-[11px] text-slate-700">الشهادة ومستوى المسؤولية</h5>
+                                          <div className="space-y-3">
+                                            <div>
+                                              <span className="text-[10px] text-slate-400 block mb-1">الشهادات المحددة:</span>
+                                              <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto">
+                                                {(educationDegrees.length > 0 ? educationDegrees.map(d => d.name) : ['دكتوراه', 'ماجستير', 'دبلوم عالي', 'بكالوريوس', 'دبلوم', 'إعدادية', 'متوسطة', 'ابتدائية']).map(edu => {
+                                                  const active = (currentRule.educations || []).includes(edu);
+                                                  return (
+                                                    <button
+                                                      key={edu}
+                                                      type="button"
+                                                      onClick={() => toggleRuleValue('educations', edu)}
+                                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                        active ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                      }`}
+                                                    >
+                                                      {edu}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <span className="text-[10px] text-slate-400 block mb-1">المسؤولية/المنصب:</span>
+                                              <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto">
+                                                {(responsibilityAllowances.length > 0 ? responsibilityAllowances.map(r => r.name) : ['مدير عام', 'معاون مدير عام', 'مدير قسم', 'رئيس شعبة', 'رئيس مجموعة', 'بلا مسؤولية']).map(resp => {
+                                                  const active = (currentRule.responsibilities || []).includes(resp);
+                                                  return (
+                                                    <button
+                                                      key={resp}
+                                                      type="button"
+                                                      onClick={() => toggleRuleValue('responsibilities', resp)}
+                                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                        active ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                      }`}
+                                                    >
+                                                      {resp}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
                                           </div>
                                         </div>
 
-                                        {/* Locations */}
-                                        <div className="space-y-1.5">
-                                          <span className="text-[11px] font-bold text-slate-700 block">موقع العمل</span>
-                                          <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-1 bg-white border border-slate-150 rounded-lg">
-                                            {availableLocations.map(loc => {
-                                              const active = currentRule.locations?.includes(loc);
-                                              return (
-                                                <button
-                                                  key={loc}
-                                                  type="button"
-                                                  onClick={() => toggleRuleValue('locations', loc)}
-                                                  className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
-                                                    active ? 'bg-[#1B3A6B] text-white' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
-                                                  }`}
-                                                >
-                                                  {loc}
-                                                </button>
-                                              );
-                                            })}
+                                        {/* 3. طبيعة وموقع العمل */}
+                                        <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                          <h5 className="font-bold text-[11px] text-slate-700">طبيعة وموقع العمل</h5>
+                                          <div className="space-y-3">
+                                            <div>
+                                              <span className="text-[10px] text-slate-400 block mb-1">طبيعة العمل:</span>
+                                              <div className="flex gap-1">
+                                                {['مكتبي', 'ميداني'].map(nature => {
+                                                  const active = (currentRule.workNatures || []).includes(nature);
+                                                  return (
+                                                    <button
+                                                      key={nature}
+                                                      type="button"
+                                                      onClick={() => toggleRuleValue('workNatures', nature)}
+                                                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all ${
+                                                        active ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                      }`}
+                                                    >
+                                                      {nature}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <span className="text-[10px] text-slate-400 block mb-1">مواقع العمل المحددة:</span>
+                                              <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto">
+                                                {availableLocations.map(loc => {
+                                                  const active = (currentRule.locations || []).includes(loc);
+                                                  return (
+                                                    <button
+                                                      key={loc}
+                                                      type="button"
+                                                      onClick={() => toggleRuleValue('locations', loc)}
+                                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                        active ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                      }`}
+                                                    >
+                                                      {loc}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
                                           </div>
                                         </div>
 
-                                        {/* Statuses & Services */}
-                                        <div className="space-y-1.5">
-                                          <span className="text-[11px] font-bold text-slate-700 block">نوع الخدمة</span>
-                                          <div className="flex flex-col gap-1 max-h-24 overflow-y-auto bg-white p-1.5 border border-slate-150 rounded-lg">
-                                            {['دائم', 'عقد', 'مؤقت', 'إعارة'].map(srv => {
-                                              const active = currentRule.serviceTypes?.includes(srv);
-                                              return (
-                                                <label key={srv} className="flex items-center gap-1 cursor-pointer text-[10px] font-bold text-slate-700">
-                                                  <input
-                                                    type="checkbox"
-                                                    checked={active}
-                                                    onChange={() => toggleRuleValue('serviceTypes', srv)}
-                                                    className="rounded text-[#1B3A6B] focus:ring-0 w-3 h-3"
-                                                  />
-                                                  {srv}
-                                                </label>
-                                              );
-                                            })}
+                                        {/* 4. العنوان الوظيفي والجهة */}
+                                        <div className="space-y-4 bg-slate-50/50 p-4 rounded-xl border border-slate-100 col-span-1 md:col-span-2 lg:col-span-3">
+                                          <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                                            <h5 className="font-bold text-xs text-slate-700">تخصيص العناوين الوظيفية وجهات العمل (الأقسام)</h5>
+                                            <span className="text-[10px] text-slate-400">ابحث وحدد المسميات والأقسام المشمولة بالبند المالي</span>
+                                          </div>
+                                          
+                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            {/* العناوين الوظيفية */}
+                                            <div className="space-y-2 bg-white p-3 rounded-lg border border-slate-200">
+                                              <div className="flex justify-between items-center">
+                                                <span className="text-[11px] font-bold text-slate-700">العناوين الوظيفية ({(currentRule.titles || []).length} محددة)</span>
+                                                <div className="flex gap-1">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const filtered = availableTitles.filter(t => t.includes(titleSearch));
+                                                      setCurrentRule(prev => {
+                                                        const titles = Array.from(new Set([...(prev.titles || []), ...filtered]));
+                                                        return { ...prev, titles };
+                                                      });
+                                                    }}
+                                                    className="text-[9px] font-black text-indigo-600 hover:underline bg-indigo-50 px-1.5 py-0.5 rounded"
+                                                  >
+                                                    تحديد الكل المصفى
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const filtered = availableTitles.filter(t => t.includes(titleSearch));
+                                                      setCurrentRule(prev => {
+                                                        const titles = (prev.titles || []).filter(t => !filtered.includes(t));
+                                                        return { ...prev, titles };
+                                                      });
+                                                    }}
+                                                    className="text-[9px] font-black text-rose-600 hover:underline bg-rose-50 px-1.5 py-0.5 rounded"
+                                                  >
+                                                    إلغاء الكل المصفى
+                                                  </button>
+                                                </div>
+                                              </div>
+                                              <input
+                                                type="text"
+                                                placeholder="ابحث عن عنوان وظيفي..."
+                                                value={titleSearch}
+                                                onChange={(e) => setTitleSearch(e.target.value)}
+                                                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                                              />
+                                              <div className="max-h-40 overflow-y-auto space-y-1 pr-1 border border-slate-100 rounded p-1.5 bg-slate-50/20">
+                                                {availableTitles.filter(t => !titleSearch || t.includes(titleSearch)).map(title => {
+                                                  const active = (currentRule.titles || []).includes(title);
+                                                  return (
+                                                    <label
+                                                      key={title}
+                                                      className={`flex items-center justify-between p-1.5 rounded text-[10px] font-semibold cursor-pointer select-none transition-all ${
+                                                        active ? 'bg-indigo-50/60 text-indigo-800 border border-indigo-100' : 'hover:bg-slate-50 text-slate-600 border border-transparent'
+                                                      }`}
+                                                    >
+                                                      <div className="flex items-center gap-1.5">
+                                                        <input
+                                                          type="checkbox"
+                                                          checked={active}
+                                                          onChange={() => toggleRuleValue('titles', title)}
+                                                          className="rounded text-indigo-600 focus:ring-0 w-3 h-3 cursor-pointer"
+                                                        />
+                                                        <span>{title}</span>
+                                                      </div>
+                                                      {active && <span className="text-[8px] bg-indigo-100 text-indigo-700 px-1 rounded">محدد</span>}
+                                                    </label>
+                                                  );
+                                                })}
+                                                {availableTitles.filter(t => !titleSearch || t.includes(titleSearch)).length === 0 && (
+                                                  <div className="text-center py-4 text-slate-400 text-[10px]">لا توجد نتائج مطابقة</div>
+                                                )}
+                                              </div>
+                                            </div>
+
+                                            {/* جهات العمل / الأقسام */}
+                                            <div className="space-y-2 bg-white p-3 rounded-lg border border-slate-200">
+                                              <div className="flex justify-between items-center">
+                                                <span className="text-[11px] font-bold text-slate-700">جهة العمل / الأقسام ({(currentRule.departments || []).length} محددة)</span>
+                                                <div className="flex gap-1">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const filtered = availableDepartments.filter(d => d.includes(deptSearch));
+                                                      setCurrentRule(prev => {
+                                                        const departments = Array.from(new Set([...(prev.departments || []), ...filtered]));
+                                                        return { ...prev, departments };
+                                                      });
+                                                    }}
+                                                    className="text-[9px] font-black text-pink-600 hover:underline bg-pink-50 px-1.5 py-0.5 rounded"
+                                                  >
+                                                    تحديد الكل المصفى
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const filtered = availableDepartments.filter(d => d.includes(deptSearch));
+                                                      setCurrentRule(prev => {
+                                                        const departments = (prev.departments || []).filter(d => !filtered.includes(d));
+                                                        return { ...prev, departments };
+                                                      });
+                                                    }}
+                                                    className="text-[9px] font-black text-rose-600 hover:underline bg-rose-50 px-1.5 py-0.5 rounded"
+                                                  >
+                                                    إلغاء الكل المصفى
+                                                  </button>
+                                                </div>
+                                              </div>
+                                              <input
+                                                type="text"
+                                                placeholder="ابحث عن قسم أو جهة عمل..."
+                                                value={deptSearch}
+                                                onChange={(e) => setDeptSearch(e.target.value)}
+                                                className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-semibold focus:outline-none focus:ring-1 focus:ring-pink-600"
+                                              />
+                                              <div className="max-h-40 overflow-y-auto space-y-1 pr-1 border border-slate-100 rounded p-1.5 bg-slate-50/20">
+                                                {availableDepartments.filter(d => !deptSearch || d.includes(deptSearch)).map(dept => {
+                                                  const active = (currentRule.departments || []).includes(dept);
+                                                  return (
+                                                    <label
+                                                      key={dept}
+                                                      className={`flex items-center justify-between p-1.5 rounded text-[10px] font-semibold cursor-pointer select-none transition-all ${
+                                                        active ? 'bg-pink-50/60 text-pink-800 border border-pink-100' : 'hover:bg-slate-50 text-slate-600 border border-transparent'
+                                                      }`}
+                                                    >
+                                                      <div className="flex items-center gap-1.5">
+                                                        <input
+                                                          type="checkbox"
+                                                          checked={active}
+                                                          onChange={() => toggleRuleValue('departments', dept)}
+                                                          className="rounded text-pink-600 focus:ring-0 w-3 h-3 cursor-pointer"
+                                                        />
+                                                        <span>{dept}</span>
+                                                      </div>
+                                                      {active && <span className="text-[8px] bg-pink-100 text-pink-700 px-1 rounded">محدد</span>}
+                                                    </label>
+                                                  );
+                                                })}
+                                                {availableDepartments.filter(d => !deptSearch || d.includes(deptSearch)).length === 0 && (
+                                                  <div className="text-center py-4 text-slate-400 text-[10px]">لا توجد نتائج مطابقة</div>
+                                                )}
+                                              </div>
+                                            </div>
                                           </div>
                                         </div>
+
+                                        {/* 5. الحالة والخدمة والزوجية */}
+                                        <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                          <h5 className="font-bold text-[11px] text-slate-700">الحالة والخدمة</h5>
+                                          <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                              <span className="text-[10px] text-slate-400 block mb-1">حالة الموظف:</span>
+                                              <div className="flex flex-col gap-1 max-h-24 overflow-y-auto">
+                                                {['مستمر', 'منسب', 'منقول', 'متقاعد', 'مستقيل', 'موقوف', 'مجاز'].map(st => {
+                                                  const active = (currentRule.employeeStatuses || []).includes(st);
+                                                  return (
+                                                    <label key={st} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">
+                                                      <input
+                                                        type="checkbox"
+                                                        checked={active}
+                                                        onChange={() => toggleRuleValue('employeeStatuses', st)}
+                                                        className="rounded text-[#1B3A6B] focus:ring-0 w-3 h-3"
+                                                      />
+                                                      {st}
+                                                    </label>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <span className="text-[10px] text-slate-400 block mb-1">الحالة الزوجية:</span>
+                                              <div className="flex flex-col gap-1 max-h-24 overflow-y-auto">
+                                                {['أعزب', 'متزوج', 'مطلق', 'أرمل'].map(ms => {
+                                                  const active = (currentRule.maritalStatuses || []).includes(ms);
+                                                  return (
+                                                    <label key={ms} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">
+                                                      <input
+                                                        type="checkbox"
+                                                        checked={active}
+                                                        onChange={() => toggleRuleValue('maritalStatuses', ms)}
+                                                        className="rounded text-[#1B3A6B] focus:ring-0 w-3 h-3"
+                                                      />
+                                                      {ms}
+                                                    </label>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <div className="border-t border-slate-200/60 pt-2">
+                                            <span className="text-[10px] text-slate-400 block mb-1 font-bold">نوع الخدمة:</span>
+                                            <div className="flex flex-wrap gap-1.5">
+                                              {['دائم', 'عقد', 'مؤقت', 'إعارة'].map(srv => {
+                                                const active = (currentRule.serviceTypes || []).includes(srv);
+                                                return (
+                                                  <button
+                                                    key={srv}
+                                                    type="button"
+                                                    onClick={() => toggleRuleValue('serviceTypes', srv)}
+                                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                      active ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                    }`}
+                                                  >
+                                                    {srv}
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {/* الهوية الشخصية والديموغرافية */}
+                                        <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                          <h5 className="font-bold text-[11px] text-slate-700">الهوية الشخصية والديموغرافية</h5>
+                                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                            <div>
+                                              <span className="text-[10px] text-slate-500 block mb-1 font-bold">الجنس:</span>
+                                              <div className="flex flex-wrap gap-1.5">
+                                                {['ذكر', 'أنثى'].map(g => {
+                                                  const active = (currentRule.genders || []).includes(g);
+                                                  return (
+                                                    <button
+                                                      key={g}
+                                                      type="button"
+                                                      onClick={() => toggleRuleValue('genders', g)}
+                                                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                        active ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                      }`}
+                                                    >
+                                                      {g}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+
+                                            <div>
+                                              <span className="text-[10px] text-slate-500 block mb-1 font-bold">القومية:</span>
+                                              <div className="flex flex-col gap-1 max-h-28 overflow-y-auto pr-1">
+                                                {['عربي/ة', 'كردي/ة', 'تركماني/ة', 'كلداني/ة', 'آشوري/ة', 'سرياني/ة', 'شبكي/ة', 'إزيدي/ة', 'آخر'].map(eth => {
+                                                  const active = (currentRule.ethnicities || []).includes(eth);
+                                                  return (
+                                                    <label key={eth} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">
+                                                      <input
+                                                        type="checkbox"
+                                                        checked={active}
+                                                        onChange={() => toggleRuleValue('ethnicities', eth)}
+                                                        className="rounded text-[#1B3A6B] focus:ring-0 w-3 h-3"
+                                                      />
+                                                      {eth}
+                                                    </label>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+
+                                            <div>
+                                              <span className="text-[10px] text-slate-500 block mb-1 font-bold">الديانة:</span>
+                                              <div className="flex flex-col gap-1 max-h-28 overflow-y-auto pr-1">
+                                                {['مسلم', 'مسيحي', 'إيزيدي', 'صابئي', 'أخر'].map(rel => {
+                                                  const active = (currentRule.religions || []).includes(rel);
+                                                  return (
+                                                    <label key={rel} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">
+                                                      <input
+                                                        type="checkbox"
+                                                        checked={active}
+                                                        onChange={() => toggleRuleValue('religions', rel)}
+                                                        className="rounded text-[#1B3A6B] focus:ring-0 w-3 h-3"
+                                                      />
+                                                      {rel}
+                                                    </label>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {/* المسؤولية بالوكالة ودرجة الوكيل */}
+                                        <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                          <h5 className="font-bold text-[11px] text-slate-700">المسؤولية بالوكالة ودرجة الوكيل</h5>
+                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <div>
+                                              <span className="text-[10px] text-slate-500 block mb-1 font-bold">المسؤولية بالوكالة:</span>
+                                              <div className="flex flex-col gap-1 max-h-32 overflow-y-auto pr-1">
+                                                {(responsibilityAllowances.length > 0 ? responsibilityAllowances.map(r => r.name) : ['بلا وكالة', 'معاون مدير عام بالوكالة', 'مدير قسم بالوكالة', 'رئيس شعبة بالوكالة', 'رئيس وحدة بالوكالة']).map(actResp => {
+                                                  const active = (currentRule.actingResponsibilities || []).includes(actResp);
+                                                  return (
+                                                    <label key={actResp} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">
+                                                      <input
+                                                        type="checkbox"
+                                                        checked={active}
+                                                        onChange={() => toggleRuleValue('actingResponsibilities', actResp)}
+                                                        className="rounded text-[#1B3A6B] focus:ring-0 w-3 h-3"
+                                                      />
+                                                      {actResp}
+                                                    </label>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+
+                                            <div>
+                                              <span className="text-[10px] text-slate-500 block mb-1 font-bold">درجة/صفة الوكيل:</span>
+                                              <div className="flex flex-wrap gap-1.5">
+                                                {['وكيل أول', 'وكيل ثاني'].map(dl => {
+                                                  const active = (currentRule.deputyLevels || []).includes(dl);
+                                                  return (
+                                                    <button
+                                                      key={dl}
+                                                      type="button"
+                                                      onClick={() => toggleRuleValue('deputyLevels', dl)}
+                                                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                        active ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                      }`}
+                                                    >
+                                                      {dl}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {/* نوع عمل الموظف ونظام المناوبة */}
+                                        <div className="space-y-2 bg-slate-50/50 p-4 rounded-xl border border-slate-100">
+                                          <h5 className="font-bold text-[11px] text-slate-700">نوع عمل الموظف ونظام المناوبة</h5>
+                                          <div className="space-y-2">
+                                            <div>
+                                              <span className="text-[10px] text-slate-500 block mb-1 font-bold">نوع العمل (صباحي / مناوب):</span>
+                                              <div className="flex flex-wrap gap-2">
+                                                {['صباحي', 'مناوب'].map(st => {
+                                                  const active = (currentRule.workShiftTypes || []).includes(st);
+                                                  return (
+                                                    <button
+                                                      key={st}
+                                                      type="button"
+                                                      onClick={() => toggleRuleValue('workShiftTypes', st)}
+                                                      className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all border ${
+                                                        active ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                                                      }`}
+                                                    >
+                                                      {st}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+
+                                            {((currentRule.workShiftTypes || []).includes('مناوب') || (currentRule.shiftSystems || []).length > 0) && (
+                                              <div className="border-t border-slate-200 pt-2 animate-in fade-in duration-200">
+                                                <span className="text-[10px] text-blue-700 font-bold block mb-1">
+                                                  نظام المناوبة المثبت المحدد للمناوبين:
+                                                </span>
+                                                <div className="flex flex-wrap gap-1.5">
+                                                  {(shiftSystems.length > 0 ? shiftSystems.map(s => s.name || s.system_name) : ['نظام 24/48', 'نظام 12/24', 'نظام 8 ساعات', 'وجبة صباحية/مسائية']).map(sysName => {
+                                                    const active = (currentRule.shiftSystems || []).includes(sysName);
+                                                    return (
+                                                      <button
+                                                        key={sysName}
+                                                        type="button"
+                                                        onClick={() => toggleRuleValue('shiftSystems', sysName)}
+                                                        className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                                                          active ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                                                        }`}
+                                                      >
+                                                        {sysName}
+                                                      </button>
+                                                    );
+                                                  })}
+                                                </div>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+
+                                        {/* 6. قائمة الحجب والاستثناء */}
+                                        {(() => {
+                                          const candidateEmps = employees.filter(emp => doesEmployeeMatchCriteria(emp, currentRule));
+                                          const displayList = showAllInRule ? employees : candidateEmps;
+
+                                          return (
+                                            <div className="space-y-3 bg-slate-50/50 p-4 rounded-xl border border-slate-100 col-span-1 md:col-span-2 lg:col-span-3">
+                                              <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-200 pb-2">
+                                                <h5 className="font-bold text-xs text-rose-700 flex items-center gap-1.5">
+                                                  <UserX size={14} className="text-rose-600 animate-pulse" />
+                                                  نظام تصفية المشمولين بالمحددات وحجب الاستثناء
+                                                </h5>
+                                                <div className="flex items-center gap-1.5 mt-2 md:mt-0 flex-wrap">
+                                                  <span className="text-[10px] font-extrabold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
+                                                    المشمولون بالمحددات: <strong>{candidateEmps.length}</strong> من <strong>{employees.length}</strong> موظف
+                                                  </span>
+                                                  <span className="text-[10px] font-extrabold text-rose-800 bg-rose-50 px-2.5 py-1 rounded-md border border-rose-200">
+                                                    المحجوبون: <strong>{(currentRule.blockedEmployees || []).length}</strong>
+                                                  </span>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => setShowAllInRule(prev => !prev)}
+                                                    className="text-[9px] font-black text-indigo-700 hover:bg-indigo-100 bg-indigo-50 border border-indigo-200 px-2 py-1 rounded transition-all"
+                                                  >
+                                                    {showAllInRule ? 'إظهار المشمولين بالمحددات فقط' : 'إظهار كل الموظفين'}
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const candidateIds = candidateEmps.map(e => e.id);
+                                                      setCurrentRule(prev => ({
+                                                        ...prev,
+                                                        blockedEmployees: Array.from(new Set([...(prev.blockedEmployees || []), ...candidateIds]))
+                                                      }));
+                                                    }}
+                                                    className="text-[9px] font-black text-rose-700 hover:bg-rose-100 bg-rose-50 border border-rose-200 px-2 py-1 rounded transition-all"
+                                                  >
+                                                    حجب كافة المشمولين
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const candidateIds = candidateEmps.map(e => e.id);
+                                                      setCurrentRule(prev => ({
+                                                        ...prev,
+                                                        blockedEmployees: (prev.blockedEmployees || []).filter(id => !candidateIds.map(String).includes(String(id)))
+                                                      }));
+                                                    }}
+                                                    className="text-[9px] font-black text-emerald-700 hover:bg-emerald-100 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded transition-all"
+                                                  >
+                                                    إلغاء حجب المشمولين
+                                                  </button>
+                                                </div>
+                                              </div>
+                                              
+                                              <p className="text-[10px] text-slate-500 leading-relaxed">
+                                                ملاحظة: تظهر القائمة أدناه الموظفين المشمولين بحسب المحددات المختارة (كالدرجة، العنوان الوظيفي، القسم). يمكن حجب أو شمل أي موظف استثناءً.
+                                              </p>
+
+                                              {/* Employee search */}
+                                              <div className="relative">
+                                                <input
+                                                  type="text"
+                                                  value={employeeBlockSearch}
+                                                  onChange={(e) => setEmployeeBlockSearch(e.target.value)}
+                                                  placeholder="ابحث عن موظف بالاسم، الرقم الوظيفي، القسم، أو العنوان الوظيفي لتغيير حالة الحجب..."
+                                                  className="w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-rose-500"
+                                                />
+                                                <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                                              </div>
+
+                                              {/* Compact Employees Table with scroll */}
+                                              <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-lg bg-white">
+                                                <table className="w-full text-right text-[11px] border-collapse">
+                                                  <thead className="bg-slate-50 text-slate-600 font-bold sticky top-0 border-b border-slate-200 z-10">
+                                                    <tr>
+                                                      <th className="px-3 py-2">الموظف</th>
+                                                      <th className="px-3 py-2">القسم / جهة العمل</th>
+                                                      <th className="px-3 py-2">العنوان الوظيفي</th>
+                                                      <th className="px-3 py-2 text-center w-32">حالة الشمول</th>
+                                                      <th className="px-3 py-2 text-center w-28">الإجراء</th>
+                                                    </tr>
+                                                  </thead>
+                                                  <tbody className="divide-y divide-slate-100">
+                                                    {displayList
+                                                      .filter(emp => {
+                                                        if (!employeeBlockSearch.trim()) return true;
+                                                        const searchLower = employeeBlockSearch.trim().toLowerCase();
+                                                        const name = (emp.full_name || emp.name || '').toLowerCase();
+                                                        const empNo = String(emp.employee_number || emp.employeeNumber || emp.id || '');
+                                                        const dept = (emp.department || '').toLowerCase();
+                                                        const title = (emp.job_title || emp.jobTitle || '').toLowerCase();
+                                                        return name.includes(searchLower) || 
+                                                               empNo.includes(searchLower) || 
+                                                               dept.includes(searchLower) || 
+                                                               title.includes(searchLower);
+                                                      })
+                                                      .map(emp => {
+                                                        const isBlocked = (currentRule.blockedEmployees || []).map(String).includes(String(emp.id));
+                                                        const isMatched = doesEmployeeMatchCriteria(emp, currentRule);
+
+                                                        return (
+                                                          <tr key={emp.id} className={`hover:bg-slate-50/50 transition-colors ${
+                                                            isBlocked ? 'bg-rose-50/30' : !isMatched ? 'bg-slate-100/30 opacity-70' : 'bg-emerald-50/10'
+                                                          }`}>
+                                                            <td className="px-3 py-2 font-bold text-slate-800">
+                                                              <div className="flex flex-col">
+                                                                <span>{emp.full_name || emp.name}</span>
+                                                                <span className="text-[9px] text-slate-400 font-medium">رقم: #{emp.employee_number || emp.id}</span>
+                                                              </div>
+                                                            </td>
+                                                            <td className="px-3 py-2 text-slate-600">{emp.department || 'غير محدد'}</td>
+                                                            <td className="px-3 py-2 text-slate-600">{emp.job_title || emp.jobTitle || 'غير محدد'}</td>
+                                                            <td className="px-3 py-2 text-center">
+                                                              {isBlocked ? (
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-extrabold bg-rose-50 text-rose-700 border border-rose-200">
+                                                                  محجوب من الصرف ❌
+                                                                </span>
+                                                              ) : isMatched ? (
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                                                  مشمول بالمحددات ✓
+                                                                </span>
+                                                              ) : (
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                                                                  غير مطابق للمحددات ⚪
+                                                                </span>
+                                                              )}
+                                                            </td>
+                                                            <td className="px-3 py-2 text-center">
+                                                              {isBlocked ? (
+                                                                <button
+                                                                  type="button"
+                                                                  onClick={() => handleUnblockEmployee(emp.id)}
+                                                                  className="px-2 py-1 rounded text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-all w-24"
+                                                                >
+                                                                  إلغاء الحجب (شمل)
+                                                                </button>
+                                                              ) : (
+                                                                <button
+                                                                  type="button"
+                                                                  onClick={() => handleBlockEmployee(emp)}
+                                                                  className="px-2 py-1 rounded text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 hover:bg-rose-100 transition-all w-24"
+                                                                >
+                                                                  حجب الموظف
+                                                                </button>
+                                                              )}
+                                                            </td>
+                                                          </tr>
+                                                        );
+                                                      })}
+                                                    {displayList.length === 0 && (
+                                                      <tr>
+                                                        <td colSpan={5} className="text-center py-6 text-slate-400 italic">لا يوجد موظفون ينطبق عليهم هذا المحدد في النظام</td>
+                                                      </tr>
+                                                    )}
+                                                  </tbody>
+                                                </table>
+                                              </div>
+                                            </div>
+                                          );
+                                        })()}
                                       </div>
 
                                       <div className="flex justify-end gap-2 border-t border-slate-200 pt-3">

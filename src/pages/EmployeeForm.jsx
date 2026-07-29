@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiClient } from '@/api/apiClient';
+import { fetchEducationDegreesSorted, fetchResponsibilityAllowancesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
-import { ArrowRight, Save, User, Briefcase, GraduationCap, ChevronDown, ChevronRight, Search, X, Camera, Trash2, Upload } from 'lucide-react';
+import { ArrowRight, Save, User, Briefcase, GraduationCap, ChevronDown, ChevronRight, Search, X, Camera, Trash2, Upload, AlertTriangle, Clock } from 'lucide-react';
 import { getGradeLabel } from '@/lib/salaryTable';
+import { isSupervisoryPosition } from '@/lib/evaluationEngine';
 
 const GRADES = [1,2,3,4,5,6,7,8,9,10,11,12,13];
 const STEPS = [1,2,3,4,5,6,7,8,9,10,11];
@@ -44,16 +46,22 @@ export default function EmployeeForm() {
   const isEdit = !!id;
 
   const [form, setForm] = useState({
+    first_name: '', father_name: '', grandfather_name: '', great_grandfather_name: '',
     full_name: '', surname: '', company_number: '', civil_service_number: '',
-    gender: 'ذكر', birth_date: '', birth_place: '', nationality: 'عراقي',
+    gender: 'ذكر', birth_date: '', birth_place: '', nationality: 'عراقي', ethnicity: 'عربي/ة',
     religion: 'مسلم', marital_status: 'أعزب', children_count: 0,
     national_id: '', passport_number: '', blood_type: 'غير معروف',
-    residence_card: '', nationality_cert: '', address: '', phone: '', email: '',
-    appointment_date: '', first_appointment_date: '', current_appointment_date: '', appointment_order: '', job_title: '', department: '', section: '',
+    residence_card: '', ration_card: '', nationality_cert: '', address: '', phone: '', email: '',
+    appointment_date: '', first_appointment_date: '', current_appointment_date: '', oil_sector_start_date: '', appointment_order: '', job_title: '', department: '', section: '',
     service_record_number: '', employee_id_number: '', employee_number: '',
     service_type: 'دائم', grade: 1, step: 1, grade_date: '', status: 'مستمر',
     status_order_number: '', status_order_date: '', status_notes: '',
     work_nature: 'مكتبي',
+    work_shift_type: 'صباحي',
+    shift_system_id: null,
+    shift_system_name: '',
+    shift_work_days: 0,
+    shift_rest_days: 0,
     retirement_number: '', security_clearance_number: '', security_clearance_date: '',
     education_level: 'بكالوريوس', specialization: '', university: '',
     graduation_year: '', education_order: '', notes: '', role: 'employee', photo: '',
@@ -69,15 +77,38 @@ export default function EmployeeForm() {
   const [workLocations, setWorkLocations] = useState([]);
   const [educationDegrees, setEducationDegrees] = useState([]);
   const [responsibilityAllowances, setResponsibilityAllowances] = useState([]);
+  const [shiftSystems, setShiftSystems] = useState([]);
   const [allJobTitles, setAllJobTitles] = useState([]);
   const [showJobSuggestions, setShowJobSuggestions] = useState(false);
 
-  useEffect(() => {
+  const loadSystemSettingsData = () => {
     apiClient.entities.WorkLocation.list().then(data => {
       setWorkLocations(data || []);
     }).catch(err => {
       console.error('Error fetching work locations:', err);
     });
+
+    fetchEducationDegreesSorted().then(data => {
+      setEducationDegrees(data || []);
+    }).catch(err => {
+      console.error('Error fetching education degrees:', err);
+    });
+
+    fetchResponsibilityAllowancesSorted().then(data => {
+      setResponsibilityAllowances(data || []);
+    }).catch(err => {
+      console.error('Error fetching responsibility allowances:', err);
+    });
+
+    apiClient.entities.ShiftSystem.list().then(data => {
+      setShiftSystems(data || []);
+    }).catch(err => {
+      console.error('Error fetching shift systems:', err);
+    });
+  };
+
+  useEffect(() => {
+    loadSystemSettingsData();
 
     apiClient.entities.Employee.list().then(data => {
       const dbTitles = data ? data.map(e => e.job_title || e.jobTitle).filter(Boolean) : [];
@@ -88,20 +119,11 @@ export default function EmployeeForm() {
       setAllJobTitles(STANDARD_JOB_TITLES);
     });
 
-    apiClient.entities.EducationDegree.list().then(data => {
-      setEducationDegrees(data || []);
-      // Also update localStorage so that any calculations take immediate effect
-      localStorage.setItem('EDUCATION_DEGREES_PRESETS', JSON.stringify(data || []));
-    }).catch(err => {
-      console.error('Error fetching education degrees:', err);
+    const unsubscribe = subscribeToSettingsUpdates(() => {
+      loadSystemSettingsData();
     });
 
-    apiClient.entities.ResponsibilityAllowance.list().then(data => {
-      setResponsibilityAllowances(data || []);
-      localStorage.setItem('RESPONSIBILITY_ALLOWANCES_PRESETS', JSON.stringify(data || []));
-    }).catch(err => {
-      console.error('Error fetching responsibility allowances:', err);
-    });
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -116,6 +138,16 @@ export default function EmployeeForm() {
                 merged[key] = data[key];
               }
             });
+            if (!merged.first_name && merged.full_name) {
+              const parts = (merged.full_name || '').trim().split(/\s+/);
+              merged.first_name = parts[0] || '';
+              merged.father_name = parts[1] || '';
+              merged.grandfather_name = parts[2] || '';
+              merged.great_grandfather_name = parts.slice(3).join(' ') || '';
+            }
+            merged.university = data.university || data.institution || merged.university || '';
+            merged.graduation_year = data.graduation_year || data.graduationYear || merged.graduation_year || '';
+            merged.education_order = data.education_order || data.evaluation_order || data.educationOrder || data.evaluationOrder || merged.education_order || '';
           }
           return merged;
         });
@@ -125,6 +157,15 @@ export default function EmployeeForm() {
   }, [id]);
 
   const set = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+
+  const setNameField = (field, value) => {
+    setForm(prev => {
+      const next = { ...prev, [field]: value };
+      const parts = [next.first_name, next.father_name, next.grandfather_name, next.great_grandfather_name].filter(Boolean);
+      next.full_name = parts.join(' ');
+      return next;
+    });
+  };
 
   const handlePhotoChange = (e) => {
     const file = e.target.files[0];
@@ -142,6 +183,29 @@ export default function EmployeeForm() {
   const [orgSearch, setOrgSearch] = useState('');
   const [expandedPickerIds, setExpandedPickerIds] = useState(new Set());
   const [orgLoading, setOrgLoading] = useState(false);
+  const [formSwitchModal, setFormSwitchModal] = useState(null);
+
+  const handleResponsibilityChange = (newResp) => {
+    const currentResp = form.primary_responsibility || 'بلا مسؤولية';
+    const wasSupervisory = isSupervisoryPosition({ primary_responsibility: currentResp });
+    const isNowSupervisory = isSupervisoryPosition({ primary_responsibility: newResp });
+
+    if (!wasSupervisory && isNowSupervisory) {
+      setFormSwitchModal({
+        newResp,
+        type: 'to_supervisory',
+        message: `تم منح الموظف مسؤولية إشرافية جديدة (${newResp}). هل ترغب بتعديل استمارة تقييم الأداء المعتمدة له تلقائياً إلى (FORM_1 - الوظائف القيادية والإشرافية)؟`
+      });
+    } else if (wasSupervisory && !isNowSupervisory) {
+      setFormSwitchModal({
+        newResp,
+        type: 'from_supervisory',
+        message: `تم سحب المسؤولية الإشرافية عن الموظف. هل ترغب بتحويل استمارة تقييم الأداء المستحقة إلى استمارة الكادر التنفيذي (FORM_2 / FORM_3)؟`
+      });
+    } else {
+      set('primary_responsibility', newResp);
+    }
+  };
 
   useEffect(() => {
     if (showOrgPicker) {
@@ -286,13 +350,33 @@ export default function EmployeeForm() {
                   <h3 className="font-bold text-sm text-[#1B3A6B]">معلومات الهوية الأساسية</h3>
                 </div>
 
-                <div className="lg:col-span-2">
-                  <Label>الاسم الرباعي الكامل *</Label>
-                  <Input className="mt-1 rounded-xl" value={form.full_name || ''} onChange={e => set('full_name', e.target.value)} required placeholder="الاسم الأول / الثاني / الثالث / الرابع" />
+                {/* 1. الاسم الخماسي/الرباعي واللقب */}
+                <div>
+                  <Label>الاسم الأول *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.first_name || ''} onChange={e => setNameField('first_name', e.target.value)} required placeholder="مثال: عمر" />
+                </div>
+                <div>
+                  <Label>اسم الأب *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.father_name || ''} onChange={e => setNameField('father_name', e.target.value)} required placeholder="مثال: محمود" />
+                </div>
+                <div>
+                  <Label>اسم الجد *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.grandfather_name || ''} onChange={e => setNameField('grandfather_name', e.target.value)} required placeholder="مثال: سلمان" />
+                </div>
+                <div>
+                  <Label>اسم والد الجد (الاسم الرابع) *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.great_grandfather_name || ''} onChange={e => setNameField('great_grandfather_name', e.target.value)} required placeholder="مثال: محيميد" />
                 </div>
                 <div>
                   <Label>اللقب *</Label>
-                  <Input className="mt-1 rounded-xl" value={form.surname || ''} onChange={e => set('surname', e.target.value)} required placeholder="اللقب العشائري أو العائلي" />
+                  <Input className="mt-1 rounded-xl" value={form.surname || ''} onChange={e => set('surname', e.target.value)} required placeholder="مثال: المياحي" />
+                </div>
+
+                <div className="col-span-full bg-blue-50/60 border border-blue-200/80 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs">
+                  <span className="text-blue-900 font-semibold">معاينة الاسم الكامل المعتمد:</span>
+                  <span className="font-bold text-[#1B3A6B] text-sm">
+                    {[form.first_name, form.father_name, form.grandfather_name, form.great_grandfather_name, form.surname].filter(Boolean).join(' ') || 'لم يتم إدخال الاسم بعد'}
+                  </span>
                 </div>
                 <div>
                   <Label>الرقم الوظيفي (رقم وزارة التخطيط) *</Label>
@@ -327,6 +411,15 @@ export default function EmployeeForm() {
                 <div>
                   <Label>الجنسية</Label>
                   <Input className="mt-1 rounded-xl" value={form.nationality || ''} onChange={e => set('nationality', e.target.value)} />
+                </div>
+                <div>
+                  <Label>القومية</Label>
+                  <Select value={form.ethnicity || 'عربي/ة'} onValueChange={v => set('ethnicity', v)}>
+                    <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {['عربي/ة', 'كردي/ة', 'تركماني/ة', 'كلداني/ة', 'آشوري/ة', 'سرياني/ة', 'أرمني/ة', 'أخرى', 'غير محدد'].map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>الديانة *</Label>
@@ -373,6 +466,10 @@ export default function EmployeeForm() {
                 <div>
                   <Label>رقم بطاقة السكن</Label>
                   <Input className="mt-1 rounded-xl" value={form.residence_card || ''} onChange={e => set('residence_card', e.target.value)} />
+                </div>
+                <div>
+                  <Label>البطاقة التموينية</Label>
+                  <Input className="mt-1 rounded-xl" value={form.ration_card || ''} onChange={e => set('ration_card', e.target.value)} placeholder="رقم البطاقة التموينية" />
                 </div>
                 <div>
                   <Label>رقم الجواز</Label>
@@ -500,6 +597,11 @@ export default function EmployeeForm() {
                   <Input type="date" className="mt-1 rounded-xl" value={form.current_appointment_date || ''} onChange={e => set('current_appointment_date', e.target.value)} required />
                   <span className="text-[10px] text-slate-400 mt-1 block">تاريخ المباشرة الحالية في هذه الشركة (قد يكون منقولاً)</span>
                 </div>
+                <div>
+                  <Label>تاريخ العمل في القطاع النفطي</Label>
+                  <Input type="date" className="mt-1 rounded-xl" value={form.oil_sector_start_date || ''} onChange={e => set('oil_sector_start_date', e.target.value)} />
+                  <span className="text-[10px] text-slate-400 mt-1 block">تاريخ أول مباشرة/التحاق للعمل في الشركات أو القطاع النفطي</span>
+                </div>
 
                 {/* 2. الموقع الوظيفي والجهة التنظيمية */}
                 <div className="col-span-full pt-2 pb-2 border-b border-slate-100 flex items-center gap-2">
@@ -557,7 +659,7 @@ export default function EmployeeForm() {
                 </div>
                 <div>
                   <Label>المسؤولية الأساسية</Label>
-                  <Select value={form.primary_responsibility || 'بلا مسؤولية'} onValueChange={v => set('primary_responsibility', v)}>
+                  <Select value={form.primary_responsibility || 'بلا مسؤولية'} onValueChange={v => handleResponsibilityChange(v)}>
                     <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {finalPrimaryOptions.map(r => (
@@ -648,7 +750,7 @@ export default function EmployeeForm() {
                   }}>
                     <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {['مستمر','منسب','منقول','متقاعد','مستقيل','موقوف','مجاز'].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                      {['مستمر','منسب','منقول','متقاعد','متقاعد مع تمديد','مستقيل','موقوف','مجاز'].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -687,6 +789,73 @@ export default function EmployeeForm() {
                     </div>
                   </div>
                 )}
+
+                {/* Service Extension Section */}
+                <div className="col-span-full pt-4 pb-2 border-b border-slate-100 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-4 bg-amber-600 rounded-full" />
+                    <h3 className="font-bold text-sm text-[#1B3A6B]">تمديد الخدمة وتأجيل الإحالة للتقاعد</h3>
+                  </div>
+                  <span className="text-xs text-slate-400 font-medium">(اختياري للموظفين الحاصلين على أسباب تمديد الخدمة)</span>
+                </div>
+
+                <div className="col-span-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-50/70 p-4 rounded-2xl border border-slate-200/80">
+                  <div>
+                    <Label>رقم أمر تمديد التقاعد</Label>
+                    <Input
+                      className="mt-1 rounded-xl bg-white"
+                      value={form.retirement_extension_order_number || form.retirementExtensionOrderNumber || ''}
+                      onChange={e => set('retirement_extension_order_number', e.target.value)}
+                      placeholder="مثال: أمر 454/ث"
+                    />
+                  </div>
+                  <div>
+                    <Label>تاريخ أمر تمديد التقاعد</Label>
+                    <Input
+                      type="date"
+                      className="mt-1 rounded-xl bg-white"
+                      value={form.retirement_extension_order_date || form.retirementExtensionOrderDate || ''}
+                      onChange={e => set('retirement_extension_order_date', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label>سنوات التمديد المضافة</Label>
+                    <Select
+                      value={String(form.retirement_extension_years ?? form.retirementExtensionYears ?? 0)}
+                      onValueChange={v => set('retirement_extension_years', parseInt(v) || 0)}
+                    >
+                      <SelectTrigger className="mt-1 rounded-xl bg-white"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(y => (
+                          <SelectItem key={y} value={String(y)}>{y === 0 ? 'بلا تمديد (0 سنة)' : `${y} سنة`}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>أشهر التمديد المضافة</Label>
+                    <Select
+                      value={String(form.retirement_extension_months ?? form.retirementExtensionMonths ?? 0)}
+                      onValueChange={v => set('retirement_extension_months', parseInt(v) || 0)}
+                    >
+                      <SelectTrigger className="mt-1 rounded-xl bg-white"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(m => (
+                          <SelectItem key={m} value={String(m)}>{m === 0 ? '0 شهر' : `${m} شهر`}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="col-span-full">
+                    <Label>سبب / ملاحظة تمديد الخدمة</Label>
+                    <Input
+                      className="mt-1 rounded-xl bg-white"
+                      value={form.retirement_extension_note || form.retirementExtensionNote || ''}
+                      onChange={e => set('retirement_extension_note', e.target.value)}
+                      placeholder="أدخل سبب التأجيل أو ملاحظات أمر التمديد..."
+                    />
+                  </div>
+                </div>
                 <div>
                   <Label>موقع العمل للشركة</Label>
                   <Select value={form.work_location || 'غير محدد'} onValueChange={v => set('work_location', v)}>
@@ -715,6 +884,135 @@ export default function EmployeeForm() {
                     </SelectContent>
                   </Select>
                 </div>
+                <div>
+                  <Label>نوع عمل الموظف</Label>
+                  <Select
+                    value={form.work_shift_type || 'صباحي'}
+                    onValueChange={v => {
+                      set('work_shift_type', v);
+                      if (v === 'صباحي') {
+                        setForm(prev => ({
+                          ...prev,
+                          work_shift_type: 'صباحي',
+                          shift_system_id: null,
+                          shift_system_name: '',
+                          shift_work_days: 0,
+                          shift_rest_days: 0,
+                        }));
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="mt-1 rounded-xl">
+                      <SelectValue placeholder="اختر نوع عمل الموظف" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="صباحي">صباحي</SelectItem>
+                      <SelectItem value="مناوب">مناوب</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {form.work_shift_type === 'مناوب' && (
+                  <>
+                    {shiftSystems.length === 0 ? (
+                      <div className="col-span-full bg-amber-50 border border-amber-200/90 rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-xs">
+                        <div className="flex items-center gap-2.5 text-amber-900 text-xs font-bold">
+                          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                          <span>
+                            لا توجد أنظمة مناوبة مثبتة. يرجى إضافة أنظمة مناوبة أولاً من إعدادات النظام الإدارية والمالية.
+                          </span>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => navigate('/settings')}
+                          className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0 rounded-xl shadow-xs"
+                        >
+                          إضافة أنظمة مناوبة من الإعدادات
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <Label>نظام المناوبة المثبت <span className="text-red-500">*</span></Label>
+                          <Select
+                            value={form.shift_system_id ? String(form.shift_system_id) : ''}
+                            onValueChange={v => {
+                              const selectedSys = shiftSystems.find(s => String(s.id) === String(v));
+                              if (selectedSys) {
+                                setForm(prev => ({
+                                  ...prev,
+                                  shift_system_id: selectedSys.id,
+                                  shift_system_name: selectedSys.name,
+                                  shift_work_days: selectedSys.work_days ?? selectedSys.workDays ?? 0,
+                                  shift_rest_days: selectedSys.rest_days ?? selectedSys.restDays ?? 0,
+                                }));
+                              }
+                            }}
+                          >
+                            <SelectTrigger className="mt-1 rounded-xl">
+                              <SelectValue placeholder="اختر نظام المناوبة" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {shiftSystems.map(sys => {
+                                const wD = sys.work_days ?? sys.workDays ?? 0;
+                                const rD = sys.rest_days ?? sys.restDays ?? 0;
+                                return (
+                                  <SelectItem key={sys.id} value={String(sys.id)}>
+                                    {sys.name} ({wD} أيام عمل * {rD} استراحة)
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {/* Summary of Selected Shift System */}
+                        {form.shift_system_id && (() => {
+                          const sys = shiftSystems.find(s => String(s.id) === String(form.shift_system_id));
+                          if (!sys) return null;
+                          const wD = sys.work_days ?? sys.workDays ?? form.shift_work_days;
+                          const rD = sys.rest_days ?? sys.restDays ?? form.shift_rest_days;
+                          const dHours = sys.daily_hours ?? sys.dailyHours ?? 24;
+                          const hType = sys.shift_hours_type ?? sys.shiftHoursType ?? '24h';
+                          const hTypeLabel = hType === 'rotational' ? 'متناوب' : hType === '24h' ? '24 ساعة' : 'ساعات محددة';
+
+                          return (
+                            <div className="col-span-full bg-blue-50/70 border border-blue-200/80 rounded-2xl p-4 text-xs space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="font-black text-blue-900 flex items-center gap-1.5">
+                                  <Clock size={15} className="text-blue-600" />
+                                  مواصفات نظام المناوبة: {sys.name}
+                                </span>
+                                <span className="bg-blue-100 text-blue-800 text-[11px] font-black px-2.5 py-0.5 rounded-full border border-blue-200">
+                                  {wD} أيام دوام / {rD} أيام استراحة
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                                <div className="bg-white p-2.5 rounded-xl border border-slate-100">
+                                  <span className="text-slate-400 block font-bold">ساعات وطبيعة العمل اليومية</span>
+                                  <span className="font-bold text-slate-800">{dHours} ساعة/يوم ({hTypeLabel})</span>
+                                </div>
+
+                                <div className="bg-white p-2.5 rounded-xl border border-slate-100">
+                                  <span className="text-slate-400 block font-bold">الجدول والتناوب</span>
+                                  <span className="font-bold text-slate-800">{wD}d عمل + {rD}d راحة</span>
+                                </div>
+                              </div>
+
+                              {sys.description && (
+                                <p className="text-slate-600 text-[11px] bg-white p-2.5 rounded-xl border border-slate-100 leading-relaxed">
+                                  {sys.description}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </>
+                )}
 
                 {/* 3. التسكين والدرجة الوظيفية */}
                 <div className="col-span-full pt-2 pb-2 border-b border-slate-100 flex items-center gap-2">
@@ -984,6 +1282,48 @@ export default function EmployeeForm() {
 
             <div className="p-4 border-t border-slate-100 flex justify-end bg-slate-50/50">
               <Button type="button" variant="outline" className="rounded-xl" onClick={() => setShowOrgPicker(false)}>إلغاء</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation modal for evaluation form classification switch upon responsibility change */}
+      {formSwitchModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl border border-slate-100">
+            <div className="flex items-center gap-2.5 text-indigo-700">
+              <AlertTriangle size={22} className="text-amber-500 shrink-0" />
+              <h3 className="font-bold text-slate-900 text-base">تأكيد تحويل استمارة تقييم الأداء</h3>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-100">
+              {formSwitchModal.message}
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl text-xs font-bold"
+                onClick={() => {
+                  set('primary_responsibility', formSwitchModal.newResp);
+                  setFormSwitchModal(null);
+                }}
+              >
+                تغيير المسؤولية فقط دون تحويل الاستمارة
+              </Button>
+              <Button
+                type="button"
+                className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-md"
+                onClick={() => {
+                  set('primary_responsibility', formSwitchModal.newResp);
+                  toast({
+                    title: 'تم تحديث المسؤولية وتحويل فئة التقييم',
+                    description: `تم تحديث مسؤولية الموظف وسيتم توجيه تقييماته السنوية القادمة تلقائياً وفق الاستمارة المخصصة.`
+                  });
+                  setFormSwitchModal(null);
+                }}
+              >
+                تأكيد وتحويل فئة الاستمارة
+              </Button>
             </div>
           </div>
         </div>

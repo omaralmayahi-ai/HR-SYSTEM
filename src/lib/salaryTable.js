@@ -139,6 +139,62 @@ export const CHILD_ALLOWANCE = 30000;
 // نسبة الاستقطاع التقاعدي
 export const RETIREMENT_RATE = 0.05;
 
+// Helper to check if an employee matches custom allowance/deduction criteria
+export function doesEmployeeMatchCriteria(employee, rule) {
+  if (!rule) return true;
+
+  const matchesCondition = (empVal, ruleArray) => {
+    if (!ruleArray || !Array.isArray(ruleArray) || ruleArray.length === 0) return true; // no restriction
+    if (empVal === undefined || empVal === null || empVal === '') return false;
+    const normalizedRuleArray = ruleArray.map(item => String(item).trim().toLowerCase());
+    const normalizedEmpVal = String(empVal).trim().toLowerCase();
+    return normalizedRuleArray.includes(normalizedEmpVal);
+  };
+
+  const matchesGrade = matchesCondition(employee.grade, rule.grades);
+  const matchesStep = matchesCondition(employee.step, rule.steps);
+  const matchesEducation = matchesCondition(employee.education_level || employee.educationLevel, rule.educations);
+  const matchesResponsibility = matchesCondition(employee.primary_responsibility || employee.primaryResponsibility, rule.responsibilities);
+  const matchesLocation = matchesCondition(employee.work_location || employee.workLocation, rule.locations);
+  const matchesTitle = matchesCondition(employee.job_title || employee.jobTitle, rule.titles);
+  const matchesWorkNature = matchesCondition(employee.work_nature || employee.workNature, rule.workNatures);
+  const matchesDept = matchesCondition(employee.department, rule.departments);
+  const matchesStatus = matchesCondition(employee.status || employee.employeeStatus, rule.employeeStatuses);
+  const matchesMarital = matchesCondition(employee.marital_status || employee.maritalStatus, rule.maritalStatuses);
+  const matchesServiceType = matchesCondition(employee.service_type || employee.serviceType, rule.serviceTypes);
+  
+  const matchesGender = matchesCondition(employee.gender, rule.genders);
+  const matchesEthnicity = matchesCondition(employee.ethnicity || employee.nationality, rule.ethnicities || rule.nationalities);
+  const matchesReligion = matchesCondition(employee.religion, rule.religions);
+  const matchesActingResponsibility = matchesCondition(employee.acting_responsibility || employee.actingResponsibility, rule.actingResponsibilities);
+  const matchesDeputyLevel = matchesCondition(employee.deputy_level || employee.deputyLevel || employee.deputy_status || employee.deputyStatus, rule.deputyLevels || rule.deputyStatuses);
+  const matchesWorkShiftType = matchesCondition(employee.work_shift_type || employee.workShiftType, rule.workShiftTypes);
+  
+  const empShiftSys = String(employee.shift_system_name || employee.shiftSystemName || employee.shift_system_id || employee.shiftSystemId || '');
+  const matchesShiftSystem = matchesCondition(empShiftSys, rule.shiftSystems);
+
+  return (
+    matchesGrade && 
+    matchesStep && 
+    matchesEducation && 
+    matchesResponsibility && 
+    matchesLocation && 
+    matchesTitle && 
+    matchesWorkNature && 
+    matchesDept && 
+    matchesStatus && 
+    matchesMarital && 
+    matchesServiceType &&
+    matchesGender &&
+    matchesEthnicity &&
+    matchesReligion &&
+    matchesActingResponsibility &&
+    matchesDeputyLevel &&
+    matchesWorkShiftType &&
+    matchesShiftSystem
+  );
+}
+
 // Helper to check if an employee matches custom allowance/deduction rules
 export function checkEmployeeMatchesRule(employee, allowanceId) {
   if (typeof window === 'undefined') return true; // Server-side fallback or default
@@ -162,41 +218,8 @@ export function checkEmployeeMatchesRule(employee, allowanceId) {
       }
     }
 
-    // Helper to match array conditions (if empty/null/undefined, it means no limit, so match passes)
-    const matchesCondition = (empVal, ruleArray) => {
-      if (!ruleArray || ruleArray.length === 0) return true; // no restriction
-      if (empVal === undefined || empVal === null || empVal === '') return false;
-      const normalizedRuleArray = ruleArray.map(item => String(item).trim());
-      const normalizedEmpVal = String(empVal).trim();
-      return normalizedRuleArray.includes(normalizedEmpVal);
-    };
-
-    // 2. Evaluate all 11 conditions
-    const matchesGrade = matchesCondition(employee.grade, rule.grades);
-    const matchesStep = matchesCondition(employee.step, rule.steps);
-    const matchesEducation = matchesCondition(employee.education_level || employee.educationLevel, rule.educations);
-    const matchesResponsibility = matchesCondition(employee.primary_responsibility || employee.primaryResponsibility, rule.responsibilities);
-    const matchesLocation = matchesCondition(employee.work_location || employee.workLocation, rule.locations);
-    const matchesTitle = matchesCondition(employee.job_title || employee.jobTitle, rule.titles);
-    const matchesWorkNature = matchesCondition(employee.work_nature || employee.workNature, rule.workNatures);
-    const matchesDept = matchesCondition(employee.department, rule.departments);
-    const matchesStatus = matchesCondition(employee.status, rule.employeeStatuses);
-    const matchesMarital = matchesCondition(employee.marital_status || employee.maritalStatus, rule.maritalStatuses);
-    const matchesServiceType = matchesCondition(employee.service_type || employee.serviceType, rule.serviceTypes);
-
-    return (
-      matchesGrade && 
-      matchesStep && 
-      matchesEducation && 
-      matchesResponsibility && 
-      matchesLocation && 
-      matchesTitle && 
-      matchesWorkNature && 
-      matchesDept && 
-      matchesStatus && 
-      matchesMarital && 
-      matchesServiceType
-    );
+    // 2. Evaluate criteria
+    return doesEmployeeMatchCriteria(employee, rule);
   } catch (e) {
     console.error("Error evaluating custom allowance rule:", e);
     return true; // fail-safe to grant if evaluation fails
@@ -226,8 +249,10 @@ export function getActiveFinancialRates() {
 export function calculateSalary(employee, extraAllowances = 0, loanDeduction = 0, penaltyDeduction = 0, absenceDeduction = 0, otherDeductions = 0, customSalaryTable = null, customWorkLocations = null, customEducationDegrees = null, customAllowances = null, customSystemSettings = null, targetMonth = null, targetYear = null) {
   const grade = employee.grade || 1;
   const step = employee.step || 1;
-  const selectedTable = customSalaryTable || SALARY_TABLE;
-  const baseSalary = (selectedTable[grade] && selectedTable[grade][step]) || 250000;
+  const baseSalary = (customSalaryTable && (customSalaryTable[grade]?.[step] || customSalaryTable[String(grade)]?.[String(step)]))
+    || (SALARY_TABLE[grade] && SALARY_TABLE[grade][step])
+    || (SALARY_TABLE[String(grade)] && SALARY_TABLE[String(grade)][String(step)])
+    || 250000;
 
   const rates = getActiveFinancialRates();
   const activeSpouseAllowance = rates.spouse;

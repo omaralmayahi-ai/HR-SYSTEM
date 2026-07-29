@@ -244,8 +244,10 @@ export default function Salaries() {
                   <td className="px-3 py-2 text-center font-bold text-slate-700">{PROMOTION_YEARS[g] ? `${PROMOTION_YEARS[g]} سنوات` : '-'}</td>
                   <td className="px-3 py-2 text-center font-bold text-emerald-700">{new Intl.NumberFormat('ar-IQ').format(ANNUAL_INCREMENTS[g])} د.ع</td>
                   {[1,2,3,4,5,6,7,8,9,10,11].map(s => {
-                    const currentScale = dbSalaryScale || SALARY_TABLE;
-                    const amount = currentScale[g]?.[s] || 0;
+                    const amount = (dbSalaryScale && (dbSalaryScale[g]?.[s] || dbSalaryScale[String(g)]?.[String(s)]))
+                      || SALARY_TABLE[g]?.[s]
+                      || SALARY_TABLE[String(g)]?.[String(s)]
+                      || 0;
                     return (
                       <td key={s} className="px-3 py-2 text-center text-slate-600 font-mono">
                         {amount > 0 ? new Intl.NumberFormat('ar-IQ').format(amount) : '-'}

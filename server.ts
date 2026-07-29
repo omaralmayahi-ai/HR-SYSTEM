@@ -3,7 +3,8 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { db, schema, eq, and, desc, asc } from './src/db/index.ts';
+import { db, schema, eq, and, desc, asc, ensureSchema } from './src/db/index.ts';
+import { getTableColumns } from 'drizzle-orm';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
 
@@ -11,6 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
+  await ensureSchema().catch(() => {});
   const app = express();
   const PORT = 3000;
 
@@ -210,11 +212,161 @@ async function startServer() {
     return obj;
   }
 
+  // Helper to ensure employee name fields and full_name are in sync
+  function processEmployeeNameData(mappedData: any, isCreate = false) {
+    const hasFirstName = mappedData.firstName !== undefined;
+    const hasFatherName = mappedData.fatherName !== undefined;
+    const hasGrandfatherName = mappedData.grandfatherName !== undefined;
+    const hasGreatGrandfatherName = mappedData.greatGrandfatherName !== undefined;
+    const hasFullName = mappedData.fullName !== undefined;
+
+    // If updating and no name parameters were passed, leave name fields untouched
+    if (!isCreate && !hasFirstName && !hasFatherName && !hasGrandfatherName && !hasGreatGrandfatherName && !hasFullName) {
+      return;
+    }
+
+    const nameParts = [mappedData.firstName, mappedData.fatherName, mappedData.grandfatherName, mappedData.greatGrandfatherName].filter(Boolean);
+    if (nameParts.length > 0) {
+      mappedData.fullName = nameParts.join(' ');
+    } else if (mappedData.fullName && mappedData.fullName !== 'غير محدد') {
+      const parts = mappedData.fullName.trim().split(/\s+/);
+      if (!mappedData.firstName) mappedData.firstName = parts[0] || '';
+      if (!mappedData.fatherName) mappedData.fatherName = parts[1] || '';
+      if (!mappedData.grandfatherName) mappedData.grandfatherName = parts[2] || '';
+      if (!mappedData.greatGrandfatherName) mappedData.greatGrandfatherName = parts.slice(3).join(' ') || '';
+    } else if (isCreate) {
+      mappedData.fullName = 'غير محدد';
+    }
+  }
+
+  function processEmployeeEducationData(mappedData: any) {
+    if (mappedData.university || mappedData.institution) {
+      const univ = mappedData.university || mappedData.institution;
+      mappedData.university = univ;
+      mappedData.institution = univ;
+    }
+    if (mappedData.graduationYear !== undefined || mappedData.graduation_year !== undefined) {
+      const yrVal = mappedData.graduationYear ?? mappedData.graduation_year;
+      const yr = yrVal ? parseInt(String(yrVal)) : null;
+      mappedData.graduationYear = isNaN(yr as number) ? null : yr;
+    }
+    if (mappedData.educationOrder || mappedData.education_order || mappedData.evaluationOrder || mappedData.evaluation_order || mappedData.equationNumber) {
+      const ord = mappedData.educationOrder || mappedData.education_order || mappedData.evaluationOrder || mappedData.evaluation_order || mappedData.equationNumber;
+      mappedData.educationOrder = ord;
+      mappedData.evaluationOrder = ord;
+    }
+  }
+
+  async function syncEmployeeQualificationFromEmployee(employeeId: number, mappedData: any) {
+    if (!employeeId || isNaN(employeeId)) return;
+    try {
+      const level = mappedData.educationLevel || mappedData.education_level;
+      const spec = mappedData.specialization;
+      const univ = mappedData.university || mappedData.institution;
+      const gradYearVal = mappedData.graduationYear ?? mappedData.graduation_year;
+      const gradYear = gradYearVal ? parseInt(String(gradYearVal)) : null;
+      const eduOrder = mappedData.educationOrder || mappedData.education_order || mappedData.evaluationOrder || mappedData.evaluation_order || mappedData.equationNumber;
+
+      if (!level && !spec && !univ && !gradYear && !eduOrder) return;
+
+      const activeQuals = await db.select()
+        .from(schema.qualifications)
+        .where(and(
+          eq(schema.qualifications.employeeId, employeeId),
+          eq(schema.qualifications.isActive, true)
+        ))
+        .orderBy(desc(schema.qualifications.createdAt), desc(schema.qualifications.id));
+
+      if (activeQuals.length > 0) {
+        const topQual = activeQuals[0];
+        const updateData: any = {};
+        if (level) updateData.level = level;
+        if (spec !== undefined) updateData.specialization = spec;
+        if (univ !== undefined) updateData.university = univ;
+        if (gradYear) updateData.graduationYear = gradYear;
+        if (eduOrder !== undefined) updateData.equationNumber = eduOrder;
+
+        if (Object.keys(updateData).length > 0) {
+          await db.update(schema.qualifications)
+            .set(updateData)
+            .where(eq(schema.qualifications.id, topQual.id));
+        }
+      } else if (level) {
+        await db.insert(schema.qualifications).values({
+          employeeId,
+          level,
+          specialization: spec || null,
+          university: univ || null,
+          graduationYear: gradYear || new Date().getFullYear(),
+          equationNumber: eduOrder || null,
+          isActive: true,
+        });
+      }
+    } catch (err) {
+      console.error('Error syncing qualification from employee:', err);
+    }
+  }
+
+  function sanitizeEmployeeData(mappedData: any) {
+    const allowedKeys = new Set(Object.keys(getTableColumns(schema.employees)));
+    const clean: any = {};
+    for (const [k, v] of Object.entries(mappedData)) {
+      if (allowedKeys.has(k) && k !== 'id' && k !== 'createdAt') {
+        clean[k] = v;
+      }
+    }
+    return clean;
+  }
+
+  function enhanceEmployeeRecord(emp: any) {
+    if (!emp) return emp;
+    const mapped = mapKeys(emp, camelToSnake);
+    if ((!mapped.full_name || mapped.full_name === 'غير محدد') && (mapped.first_name || mapped.father_name)) {
+      const nameParts = [mapped.first_name, mapped.father_name, mapped.grandfather_name, mapped.great_grandfather_name].filter(Boolean);
+      if (nameParts.length > 0) {
+        mapped.full_name = nameParts.join(' ');
+      }
+    } else if (!mapped.first_name && mapped.full_name && mapped.full_name !== 'غير محدد') {
+      const parts = (mapped.full_name || '').trim().split(/\s+/);
+      mapped.first_name = parts[0] || '';
+      mapped.father_name = parts[1] || '';
+      mapped.grandfather_name = parts[2] || '';
+      mapped.great_grandfather_name = parts.slice(3).join(' ') || '';
+    }
+
+    // Ensure education fields are explicitly provided in snake_case format
+    mapped.education_level = mapped.education_level || emp.educationLevel || '';
+    mapped.specialization = mapped.specialization || emp.specialization || '';
+    mapped.university = mapped.university || mapped.institution || emp.university || emp.institution || '';
+    mapped.institution = mapped.institution || mapped.university || emp.institution || emp.university || '';
+    mapped.graduation_year = mapped.graduation_year || emp.graduationYear || '';
+    mapped.education_order = mapped.education_order || mapped.evaluation_order || emp.educationOrder || emp.evaluationOrder || '';
+    mapped.evaluation_order = mapped.evaluation_order || mapped.education_order || emp.evaluationOrder || emp.educationOrder || '';
+
+    return mapped;
+  }
+
   // Employees API
   app.get('/api/employees', requireAuth, async (req, res) => {
     try {
       const allEmployees = await db.select().from(schema.employees).orderBy(desc(schema.employees.createdAt));
-      res.json(mapKeys(allEmployees, camelToSnake));
+
+      // Auto-repair any employees whose full_name was set to 'غير محدد' by mistake
+      for (const emp of allEmployees) {
+        if ((!emp.fullName || emp.fullName === 'غير محدد') && (emp.firstName || emp.fatherName)) {
+          const nameParts = [emp.firstName, emp.fatherName, emp.grandfatherName, emp.greatGrandfatherName].filter(Boolean);
+          if (nameParts.length > 0) {
+            const repairedFullName = nameParts.join(' ');
+            emp.fullName = repairedFullName;
+            await db.update(schema.employees)
+              .set({ fullName: repairedFullName })
+              .where(eq(schema.employees.id, emp.id))
+              .catch(e => console.error('Error auto-repairing employee name:', e));
+          }
+        }
+      }
+
+      res.json(allEmployees.map(enhanceEmployeeRecord));
     } catch (error: any) {
       console.error('Error fetching employees:', error);
       res.status(500).json({ error: 'Database query failed' });
@@ -225,14 +377,117 @@ async function startServer() {
     try {
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
-      delete mappedData.id;
-      delete mappedData.createdAt;
+      processEmployeeNameData(mappedData, true);
+      processEmployeeEducationData(mappedData);
+      const cleanData = sanitizeEmployeeData(mappedData);
 
-      const [newEmployee] = await db.insert(schema.employees).values(mappedData).returning();
-      res.status(210).json(mapKeys(newEmployee, camelToSnake));
+      const [newEmployee] = await db.insert(schema.employees).values(cleanData).returning();
+      if (newEmployee && newEmployee.id) {
+        await syncEmployeeQualificationFromEmployee(newEmployee.id, mappedData);
+      }
+      res.status(201).json(enhanceEmployeeRecord(newEmployee));
     } catch (error: any) {
       console.error('Error creating employee:', error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/employees/bulk-import', requireAuth, async (req, res) => {
+    try {
+      const { employees } = req.body;
+      if (!Array.isArray(employees) || employees.length === 0) {
+        return res.status(400).json({ error: 'لم يتم تزويد قائمة موظفين صالحة للترحيل' });
+      }
+
+      let insertedCount = 0;
+      let updatedCount = 0;
+      let skippedCount = 0;
+      const processedEmployees: any[] = [];
+
+      for (const empItem of employees) {
+        const action = empItem.action || (empItem.overwrite ? 'update' : 'insert');
+        if (action === 'skip') {
+          skippedCount++;
+          continue;
+        }
+
+        const empData = empItem.data || empItem;
+        const mappedData = mapKeys(empData, snakeToCamel);
+        delete mappedData.id;
+        delete mappedData.createdAt;
+
+        processEmployeeNameData(mappedData, true);
+        processEmployeeEducationData(mappedData);
+
+        if (!mappedData.status) mappedData.status = 'مستمر بالخدمة';
+        if (!mappedData.serviceType) mappedData.serviceType = 'ملاك دائم';
+        if (!mappedData.gender) mappedData.gender = 'ذكر';
+
+        const companyNum = mappedData.companyNumber ? String(mappedData.companyNumber).trim() : null;
+        const civilNum = mappedData.civilServiceNumber ? String(mappedData.civilServiceNumber).trim() : null;
+
+        // Check if employee already exists in DB by companyNumber or civilServiceNumber
+        let existingEmp = null;
+        if (companyNum) {
+          const [found] = await db.select().from(schema.employees).where(eq(schema.employees.companyNumber, companyNum));
+          existingEmp = found;
+        }
+        if (!existingEmp && civilNum) {
+          const [found] = await db.select().from(schema.employees).where(eq(schema.employees.civilServiceNumber, civilNum));
+          existingEmp = found;
+        }
+
+        const cleanData = sanitizeEmployeeData(mappedData);
+
+        if (existingEmp && action === 'update') {
+          // Perform update/overwrite on existing employee
+          const [updated] = await db.update(schema.employees)
+            .set(cleanData)
+            .where(eq(schema.employees.id, existingEmp.id))
+            .returning();
+
+          updatedCount++;
+          if (updated) {
+            processedEmployees.push(enhanceEmployeeRecord(updated));
+          }
+        } else {
+          // Perform fresh insertion
+          const [inserted] = await db.insert(schema.employees).values(cleanData).returning();
+          insertedCount++;
+
+          // If education level provided, create qualification entry
+          if (inserted && inserted.educationLevel && inserted.educationLevel !== 'بدون') {
+            try {
+              await db.insert(schema.qualifications).values({
+                employeeId: inserted.id,
+                level: inserted.educationLevel,
+                specialization: inserted.specialization || 'عام',
+                university: 'مستوردة من الملف',
+                graduationYear: new Date().getFullYear(),
+                isActive: true,
+              });
+            } catch (qErr) {
+              console.error('Error auto-creating qualification on bulk import:', qErr);
+            }
+          }
+
+          if (inserted) {
+            processedEmployees.push(enhanceEmployeeRecord(inserted));
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        count: processedEmployees.length,
+        insertedCount,
+        updatedCount,
+        skippedCount,
+        employees: processedEmployees
+      });
+    } catch (error: any) {
+      console.error('Error in bulk import:', error);
+      res.status(500).json({ error: error.message || 'فشلت عملية ترحيل الموظفين' });
     }
   });
 
@@ -246,7 +501,7 @@ async function startServer() {
       if (!employee) {
         return res.status(404).json({ error: 'Employee not found' });
       }
-      res.json(mapKeys(employee, camelToSnake));
+      res.json(enhanceEmployeeRecord(employee));
     } catch (error: any) {
       console.error('Error fetching employee details:', error);
       res.status(500).json({ error: error.message });
@@ -261,14 +516,20 @@ async function startServer() {
       }
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
-      delete mappedData.id;
-      delete mappedData.createdAt;
+      processEmployeeNameData(mappedData, false);
+      processEmployeeEducationData(mappedData);
+      const cleanData = sanitizeEmployeeData(mappedData);
 
       const [updatedEmployee] = await db.update(schema.employees)
-        .set(mappedData)
+        .set(cleanData)
         .where(eq(schema.employees.id, id))
         .returning();
-      res.json(mapKeys(updatedEmployee, camelToSnake));
+
+      if (updatedEmployee && updatedEmployee.id) {
+        await syncEmployeeQualificationFromEmployee(updatedEmployee.id, mappedData);
+      }
+
+      res.json(enhanceEmployeeRecord(updatedEmployee));
     } catch (error: any) {
       console.error('Error updating employee:', error);
       res.status(500).json({ error: error.message });
@@ -292,13 +553,14 @@ async function startServer() {
   // Leave Requests API
   app.get('/api/leaves', requireAuth, async (req, res) => {
     try {
-      const employeeId = req.query.employeeId ? parseInt(req.query.employeeId as string) : undefined;
+      const empIdParam = req.query.employeeId || req.query.employee_id;
+      const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
       let query = db.select().from(schema.leaveRequests);
       if (employeeId && !isNaN(employeeId)) {
         query = db.select().from(schema.leaveRequests).where(eq(schema.leaveRequests.employeeId, employeeId)) as any;
       }
       const leaves = await query.orderBy(desc(schema.leaveRequests.createdAt));
-      res.json(leaves);
+      res.json(leaves.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
       console.error('Error fetching leaves:', error);
       res.status(500).json({ error: error.message });
@@ -308,8 +570,25 @@ async function startServer() {
   app.post('/api/leaves', requireAuth, async (req, res) => {
     try {
       const data = req.body;
-      const [newLeave] = await db.insert(schema.leaveRequests).values(data).returning();
-      res.status(210).json(newLeave);
+      const mappedData = mapKeys(data, snakeToCamel);
+      if (mappedData.employeeId !== undefined) {
+        mappedData.employeeId = parseInt(mappedData.employeeId);
+      }
+      if (mappedData.daysCount !== undefined) {
+        mappedData.daysCount = parseInt(mappedData.daysCount);
+      }
+      if (mappedData.remainingBalance !== undefined && mappedData.remainingBalance !== null) {
+        mappedData.remainingBalance = parseInt(mappedData.remainingBalance);
+      }
+      delete mappedData.id;
+      delete mappedData.createdAt;
+
+      if (!mappedData.employeeId || isNaN(mappedData.employeeId)) {
+        return res.status(400).json({ error: 'employee_id is required' });
+      }
+
+      const [newLeave] = await db.insert(schema.leaveRequests).values(mappedData).returning();
+      res.status(201).json(mapKeys(newLeave, camelToSnake));
     } catch (error: any) {
       console.error('Error creating leave:', error);
       res.status(500).json({ error: error.message });
@@ -323,11 +602,21 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid ID format' });
       }
       const data = req.body;
+      const mappedData = mapKeys(data, snakeToCamel);
+      if (mappedData.employeeId !== undefined) {
+        mappedData.employeeId = parseInt(mappedData.employeeId);
+      }
+      if (mappedData.daysCount !== undefined) {
+        mappedData.daysCount = parseInt(mappedData.daysCount);
+      }
+      delete mappedData.id;
+      delete mappedData.createdAt;
+
       const [updatedLeave] = await db.update(schema.leaveRequests)
-        .set(data)
+        .set(mappedData)
         .where(eq(schema.leaveRequests.id, id))
         .returning();
-      res.json(updatedLeave);
+      res.json(mapKeys(updatedLeave, camelToSnake));
     } catch (error: any) {
       console.error('Error updating leave request:', error);
       res.status(500).json({ error: error.message });
@@ -337,13 +626,14 @@ async function startServer() {
   // Penalties API
   app.get('/api/penalties', requireAuth, async (req, res) => {
     try {
-      const employeeId = req.query.employeeId ? parseInt(req.query.employeeId as string) : undefined;
+      const empIdParam = req.query.employeeId || req.query.employee_id;
+      const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
       let query = db.select().from(schema.penalties);
       if (employeeId && !isNaN(employeeId)) {
         query = db.select().from(schema.penalties).where(eq(schema.penalties.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.penalties.createdAt));
-      res.json(results);
+      res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
       console.error('Error fetching penalties:', error);
       res.status(500).json({ error: error.message });
@@ -353,10 +643,120 @@ async function startServer() {
   app.post('/api/penalties', requireAuth, async (req, res) => {
     try {
       const data = req.body;
-      const [newPenalty] = await db.insert(schema.penalties).values(data).returning();
-      res.status(210).json(newPenalty);
+      const mappedData = mapKeys(data, snakeToCamel);
+      if (mappedData.employeeId !== undefined) {
+        mappedData.employeeId = parseInt(mappedData.employeeId);
+      }
+      delete mappedData.id;
+      delete mappedData.createdAt;
+
+      if (!mappedData.employeeId || isNaN(mappedData.employeeId)) {
+        return res.status(400).json({ error: 'employee_id is required' });
+      }
+
+      const [newPenalty] = await db.insert(schema.penalties).values(mappedData).returning();
+      res.status(201).json(mapKeys(newPenalty, camelToSnake));
     } catch (error: any) {
       console.error('Error creating penalty:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/penalties/:id', requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const data = req.body;
+      const mappedData = mapKeys(data, snakeToCamel);
+      if (mappedData.employeeId !== undefined) {
+        mappedData.employeeId = parseInt(mappedData.employeeId);
+      }
+      delete mappedData.id;
+      delete mappedData.createdAt;
+
+      const [updated] = await db.update(schema.penalties).set(mappedData).where(eq(schema.penalties.id, parseInt(id))).returning();
+      res.json(mapKeys(updated, camelToSnake));
+    } catch (error: any) {
+      console.error('Error updating penalty:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/penalties/:id', requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      await db.delete(schema.penalties).where(eq(schema.penalties.id, parseInt(id)));
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting penalty:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Appreciations API (كتب الشكر والتقدير)
+  app.get('/api/appreciations', requireAuth, async (req, res) => {
+    try {
+      const empIdParam = req.query.employeeId || req.query.employee_id;
+      const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
+      let query = db.select().from(schema.appreciations);
+      if (employeeId && !isNaN(employeeId)) {
+        query = db.select().from(schema.appreciations).where(eq(schema.appreciations.employeeId, employeeId)) as any;
+      }
+      const results = await query.orderBy(desc(schema.appreciations.createdAt));
+      res.json(results.map(r => mapKeys(r, camelToSnake)));
+    } catch (error: any) {
+      console.error('Error fetching appreciations:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/appreciations', requireAuth, async (req, res) => {
+    try {
+      const data = req.body;
+      const mappedData = mapKeys(data, snakeToCamel);
+      if (mappedData.employeeId !== undefined) {
+        mappedData.employeeId = parseInt(mappedData.employeeId);
+      }
+      delete mappedData.id;
+      delete mappedData.createdAt;
+
+      if (!mappedData.employeeId || isNaN(mappedData.employeeId)) {
+        return res.status(400).json({ error: 'employee_id is required' });
+      }
+
+      const [newAppreciation] = await db.insert(schema.appreciations).values(mappedData).returning();
+      res.status(201).json(mapKeys(newAppreciation, camelToSnake));
+    } catch (error: any) {
+      console.error('Error creating appreciation:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/appreciations/:id', requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const data = req.body;
+      const mappedData = mapKeys(data, snakeToCamel);
+      if (mappedData.employeeId !== undefined) {
+        mappedData.employeeId = parseInt(mappedData.employeeId);
+      }
+      delete mappedData.id;
+      delete mappedData.createdAt;
+
+      const [updated] = await db.update(schema.appreciations).set(mappedData).where(eq(schema.appreciations.id, parseInt(id))).returning();
+      res.json(mapKeys(updated, camelToSnake));
+    } catch (error: any) {
+      console.error('Error updating appreciation:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/appreciations/:id', requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      await db.delete(schema.appreciations).where(eq(schema.appreciations.id, parseInt(id)));
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting appreciation:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -364,13 +764,14 @@ async function startServer() {
   // Performance Evaluations API
   app.get('/api/performance', requireAuth, async (req, res) => {
     try {
-      const employeeId = req.query.employeeId ? parseInt(req.query.employeeId as string) : undefined;
+      const empIdParam = req.query.employeeId || req.query.employee_id;
+      const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
       let query = db.select().from(schema.performanceEvaluations);
       if (employeeId && !isNaN(employeeId)) {
         query = db.select().from(schema.performanceEvaluations).where(eq(schema.performanceEvaluations.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.performanceEvaluations.createdAt));
-      res.json(results);
+      res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
       console.error('Error fetching performance:', error);
       res.status(500).json({ error: error.message });
@@ -380,8 +781,38 @@ async function startServer() {
   app.post('/api/performance', requireAuth, async (req, res) => {
     try {
       const data = req.body;
-      const [newEval] = await db.insert(schema.performanceEvaluations).values(data).returning();
-      res.status(210).json(newEval);
+      const mappedData = mapKeys(data, snakeToCamel);
+      if (mappedData.employeeId !== undefined) {
+        mappedData.employeeId = parseInt(mappedData.employeeId);
+      }
+      if (mappedData.totalScore !== undefined) {
+        mappedData.totalScore = parseInt(mappedData.totalScore);
+      }
+      delete mappedData.id;
+      delete mappedData.createdAt;
+
+      if (!mappedData.employeeId || isNaN(mappedData.employeeId)) {
+        return res.status(400).json({ error: 'employee_id is required' });
+      }
+
+      const evalYear = String(mappedData.year || (mappedData.evaluationDate ? new Date(mappedData.evaluationDate).getFullYear() : new Date().getFullYear()));
+
+      // Check if duplicate evaluation exists for same employee in same year
+      const existing = await db.select().from(schema.performanceEvaluations).where(
+        and(
+          eq(schema.performanceEvaluations.employeeId, mappedData.employeeId),
+          eq(schema.performanceEvaluations.year, evalYear)
+        )
+      );
+
+      if (existing.length > 0) {
+        return res.status(400).json({
+          error: `الموظف لديه تقييم أداء مسجل سابقاً لسنة ${evalYear}. لا يُسمح بإدخال أكثر من تقييم واحد للموظف خلال نفس السنة التقييمية.`
+        });
+      }
+
+      const [newEval] = await db.insert(schema.performanceEvaluations).values(mappedData).returning();
+      res.status(201).json(mapKeys(newEval, camelToSnake));
     } catch (error: any) {
       console.error('Error creating performance evaluation:', error);
       res.status(500).json({ error: error.message });
@@ -395,13 +826,34 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid ID format' });
       }
       const data = req.body;
+      const mappedData = mapKeys(data, snakeToCamel);
+      if (mappedData.employeeId !== undefined) {
+        mappedData.employeeId = parseInt(mappedData.employeeId);
+      }
+      delete mappedData.id;
+      delete mappedData.createdAt;
+
       const [updatedEval] = await db.update(schema.performanceEvaluations)
-        .set(data)
+        .set(mappedData)
         .where(eq(schema.performanceEvaluations.id, id))
         .returning();
-      res.json(updatedEval);
+      res.json(mapKeys(updatedEval, camelToSnake));
     } catch (error: any) {
       console.error('Error updating performance evaluation:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/performance/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: 'Invalid ID format' });
+      }
+      await db.delete(schema.performanceEvaluations).where(eq(schema.performanceEvaluations.id, id));
+      res.json({ success: true, message: 'تم حذف التقييم بنجاح' });
+    } catch (error: any) {
+      console.error('Error deleting performance evaluation:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -409,7 +861,8 @@ async function startServer() {
   // Career Histories API
   app.get('/api/career', requireAuth, async (req, res) => {
     try {
-      const employeeId = req.query.employeeId ? parseInt(req.query.employeeId as string) : undefined;
+      const empIdParam = req.query.employeeId || req.query.employee_id;
+      const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
       if (!employeeId || isNaN(employeeId)) {
         return res.status(400).json({ error: 'Missing or invalid employeeId' });
       }
@@ -417,7 +870,7 @@ async function startServer() {
         .from(schema.careerHistories)
         .where(eq(schema.careerHistories.employeeId, employeeId))
         .orderBy(desc(schema.careerHistories.createdAt));
-      res.json(results);
+      res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
       console.error('Error fetching career history:', error);
       res.status(500).json({ error: error.message });
@@ -427,8 +880,19 @@ async function startServer() {
   app.post('/api/career', requireAuth, async (req, res) => {
     try {
       const data = req.body;
-      const [newHistory] = await db.insert(schema.careerHistories).values(data).returning();
-      res.status(210).json(newHistory);
+      const mappedData = mapKeys(data, snakeToCamel);
+      if (mappedData.employeeId !== undefined) {
+        mappedData.employeeId = parseInt(mappedData.employeeId);
+      }
+      delete mappedData.id;
+      delete mappedData.createdAt;
+
+      if (!mappedData.employeeId || isNaN(mappedData.employeeId)) {
+        return res.status(400).json({ error: 'employee_id is required' });
+      }
+
+      const [newHistory] = await db.insert(schema.careerHistories).values(mappedData).returning();
+      res.status(201).json(mapKeys(newHistory, camelToSnake));
     } catch (error: any) {
       console.error('Error creating career history:', error);
       res.status(500).json({ error: error.message });
@@ -1173,6 +1637,645 @@ async function startServer() {
     }
   });
 
+  // --- Penalty Types API (أنواع العقوبات الإدارية - المادة 8 قانون 14 لسنة 1991) ---
+  const LEGAL_ARTICLE_8_PENALTIES = [
+    {
+      name: 'لفت النظر',
+      delayMonths: 3,
+      description: 'إشعار الموظف تحريرياً بالمخالفة وتوجيهه لتحسين سلوكه الوظيفي',
+      salaryDeductionDays: 0,
+      status: 'فعال'
+    },
+    {
+      name: 'الإنذار',
+      delayMonths: 6,
+      description: 'إشعار تحريري بالمخالفة وتحذيره من الإخلال بواجباته مستقبلاً',
+      salaryDeductionDays: 0,
+      status: 'فعال'
+    },
+    {
+      name: 'قطع الراتب',
+      delayMonths: 5,
+      description: 'حسم القسط اليومي من الراتب بأمر تحريري يذكر فيه المخالفة (حتى 10 أيام كحد أقصى)',
+      salaryDeductionDays: 10,
+      status: 'فعال'
+    },
+    {
+      name: 'التوبيخ',
+      delayMonths: 12,
+      description: 'إشعار تحريري بالمخالفة وأسباب عدم رضا السلوك، مع طلب تحسينه',
+      salaryDeductionDays: 0,
+      status: 'فعال'
+    },
+    {
+      name: 'إنقاص الراتب',
+      delayMonths: 24,
+      description: 'قطع نسبة لا تتجاوز 10% من الراتب بأمر تحريري يشعر الموظف بالفعل المرتكب (لمدة 6 أشهر - سنتين)',
+      salaryDeductionDays: 0,
+      status: 'فعال'
+    },
+    {
+      name: 'تنزيل الدرجة',
+      delayMonths: 36,
+      description: 'تنزيل الراتب إلى الحد الأدنى للدرجة الأدنى مباشرة، مع منحه العلاوات المكتسبة سابقاً',
+      salaryDeductionDays: 0,
+      status: 'فعال'
+    },
+    {
+      name: 'الفصل',
+      delayMonths: 0,
+      description: 'تنحية الموظف عن الوظيفة مؤقتاً (من سنة إلى 3 سنوات)؛ تُفرض عند تكرار عقوبات مرتين خلال 5 سنوات',
+      salaryDeductionDays: 0,
+      status: 'فعال'
+    },
+    {
+      name: 'العزل',
+      delayMonths: 0,
+      description: 'تنحية نهائية عن الوظيفة مع منع إعادة التوظيف في دوائر الدولة؛ تُفرض بقرار مسبب من الوزير',
+      salaryDeductionDays: 0,
+      status: 'فعال'
+    }
+  ];
+
+  const LEGAL_ARTICLE_8_MAP: Record<string, { deductionType: string; deductionValue: string; delayRule: string }> = {
+    'لفت النظر': {
+      deductionType: 'بدون قطع مالي',
+      deductionValue: 'بدون قطع مالي',
+      delayRule: '3 أشهر'
+    },
+    'الإنذار': {
+      deductionType: 'بدون قطع مالي',
+      deductionValue: 'بدون قطع مالي',
+      delayRule: '6 أشهر'
+    },
+    'إنذار خطي': {
+      deductionType: 'بدون قطع مالي',
+      deductionValue: 'بدون قطع مالي',
+      delayRule: '6 أشهر'
+    },
+    'قطع الراتب': {
+      deductionType: 'حسم القسط اليومي',
+      deductionValue: 'حتى 10 أيام كحد أقصى',
+      delayRule: 'حالتان: • ≤5 أيام قطع ← 5 أشهر | • أكثر من 5 أيام ← شهر واحد عن كل يوم قطع'
+    },
+    'التوبيخ': {
+      deductionType: 'بدون قطع مالي',
+      deductionValue: 'بدون قطع مالي',
+      delayRule: '12 شهر (سنة واحدة)'
+    },
+    'إنقاص الراتب': {
+      deductionType: 'نسبة مئوية %',
+      deductionValue: 'نسبة لا تتجاوز 10% (لمدة 6 أشهر - سنتين)',
+      delayRule: '24 شهر (سنتان)'
+    },
+    'تنزيل الدرجة': {
+      deductionType: 'لا ينطبق (تأثير وظيفي)',
+      deductionValue: 'لا ينطبق',
+      delayRule: 'يُعاد لراتبه السابق بعد 3 سنوات من فرض العقوبة'
+    },
+    'الفصل': {
+      deductionType: 'لا ينطبق (إبعاد مؤقت)',
+      deductionValue: 'مدة الفصل من سنة إلى 3 سنوات',
+      delayRule: 'مدة الفصل من سنة إلى 3 سنوات'
+    },
+    'العزل': {
+      deductionType: 'لا ينطبق (نهائي)',
+      deductionValue: 'لا ينطبق',
+      delayRule: 'لا ينطبق (تنحية نهائية)'
+    }
+  };
+
+  const enrichPenaltyRecord = (record: any) => {
+    const meta = LEGAL_ARTICLE_8_MAP[record.name] || {
+      deductionType: record.salaryDeductionDays > 0 ? 'حسم القسط اليومي' : 'بدون قطع مالي',
+      deductionValue: record.salaryDeductionDays > 0 ? `${record.salaryDeductionDays} أيام` : 'بدون قطع مالي',
+      delayRule: record.delayMonths > 0 ? `${record.delayMonths} أشهر` : 'لا يوجد تأخير'
+    };
+    return {
+      ...record,
+      deductionType: meta.deductionType,
+      deductionValue: meta.deductionValue,
+      delayRule: meta.delayRule
+    };
+  };
+
+  app.get('/api/penalty-types', requireAuth, async (req, res) => {
+    try {
+      let records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
+      
+      // Auto upgrade if database contains old erroneous records or is empty
+      const isOldData = records.length === 0 || records.some(r => r.name.includes('(يوم)') || r.name.includes('(أيام)') || r.name === 'إنذار خطي') || !records.some(r => r.name === 'العزل');
+
+      if (isOldData || req.query.reset === 'true') {
+        await db.delete(schema.penaltyTypes);
+        for (const item of LEGAL_ARTICLE_8_PENALTIES) {
+          await db.insert(schema.penaltyTypes).values(item).catch(() => {});
+        }
+        records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
+      }
+
+      const enrichedRecords = records.map(enrichPenaltyRecord);
+      res.json(mapKeys(enrichedRecords, camelToSnake));
+    } catch (error: any) {
+      console.error('Error fetching penalty types:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/penalty-types/reset-legal', requireAuth, async (req, res) => {
+    try {
+      await db.delete(schema.penaltyTypes);
+      for (const item of LEGAL_ARTICLE_8_PENALTIES) {
+        await db.insert(schema.penaltyTypes).values(item).catch(() => {});
+      }
+      const records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
+      const enrichedRecords = records.map(enrichPenaltyRecord);
+      res.json(mapKeys(enrichedRecords, camelToSnake));
+    } catch (error: any) {
+      console.error('Error resetting penalty types:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/penalty-types', requireAuth, async (req, res) => {
+    try {
+      const data = mapKeys(req.body, snakeToCamel);
+      const { name, delayMonths, description, salaryDeductionDays, status } = data;
+      if (!name) return res.status(400).json({ error: 'اسم نوع العقوبة مطلوب' });
+      const [newRecord] = await db.insert(schema.penaltyTypes).values({
+        name,
+        delayMonths: delayMonths ? parseInt(delayMonths) : 0,
+        description: description || '',
+        salaryDeductionDays: salaryDeductionDays ? parseInt(salaryDeductionDays) : 0,
+        status: status || 'فعال',
+      }).returning();
+      res.status(201).json(mapKeys(enrichPenaltyRecord(newRecord), camelToSnake));
+    } catch (error: any) {
+      console.error('Error creating penalty type:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/penalty-types/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
+      const data = mapKeys(req.body, snakeToCamel);
+      const { name, delayMonths, description, salaryDeductionDays, status } = data;
+      const [updated] = await db.update(schema.penaltyTypes)
+        .set({
+          name: name !== undefined ? name : undefined,
+          delayMonths: delayMonths !== undefined ? (delayMonths ? parseInt(delayMonths) : 0) : undefined,
+          description: description !== undefined ? description : undefined,
+          salaryDeductionDays: salaryDeductionDays !== undefined ? (salaryDeductionDays ? parseInt(salaryDeductionDays) : 0) : undefined,
+          status: status !== undefined ? status : undefined,
+        })
+        .where(eq(schema.penaltyTypes.id, id))
+        .returning();
+      if (!updated) return res.status(404).json({ error: 'نوع العقوبة غير موجود' });
+      res.json(mapKeys(enrichPenaltyRecord(updated), camelToSnake));
+    } catch (error: any) {
+      console.error('Error updating penalty type:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/penalty-types/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
+      await db.delete(schema.penaltyTypes).where(eq(schema.penaltyTypes.id, id));
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting penalty type:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // --- Evaluation Forms API (استمارات تقييم الأداء حسب الفئات) ---
+  const CANONICAL_SEED_FORMS = [
+    {
+      title: 'استمارة تقييم أداء شاغلي الوظائف القيادية والإشرافية (FORM_1)',
+      category: 'الوظائف القيادية والإشرافية',
+      targetGrades: 'الدرجات (الأولى - الخامسة) مع مسؤولية إشرافية',
+      applicableResponsibilities: JSON.stringify(['مدير عام', 'معاون مدير عام', 'مدير هيئة', 'مدير قسم مركزي', 'مدير قسم', 'مسؤول شعبة']),
+      applicableQualifications: JSON.stringify(['دكتوراه', 'ماجستير', 'دبلوم عالي', 'بكالوريوس', 'دبلوم', 'إعدادية', 'متوسطة', 'ابتدائية', 'يقرأ ويكتب', 'أمي']),
+      maxScore: 100,
+      passingScore: 50,
+      description: 'خاصة بالمدراء ومسؤولي الشُّعب فأعلى ممن يملكون مسؤولية إشرافية (18 عنصرًا، المجموع 100)',
+      status: 'فعال',
+      sections: JSON.stringify([
+        {
+          id: 's1',
+          title: 'محور الأداء الوظيفي',
+          weight: 49,
+          criteria: [
+            { id: 'c1_1', name: 'المساهمة في تحقيق أهداف المنظمة', maxScore: 6 },
+            { id: 'c1_2', name: 'المهارة في التخطيط ومتابعة التنفيذ', maxScore: 6 },
+            { id: 'c1_3', name: 'المهارة في اتخاذ القرارات', maxScore: 6 },
+            { id: 'c1_4', name: 'المعرفة والالتزام بالتشريعات النافذة والمحافظة على سرية المعلومات', maxScore: 6 },
+            { id: 'c1_5', name: 'القدرة على توجيه ومتابعة تنفيذ المرؤوسين وترتيب الأولويات بالعمل', maxScore: 6 },
+            { id: 'c1_6_hse', name: 'الالتزام بتعليمات وإجراءات الصحة والسلامة والبيئة (HSE)', maxScore: 8, isHseConditional: true },
+            { id: 'c1_7', name: 'القابلية على تطوير الذات وتأهيل وتدريب المرؤوسين ضمن برامج تطويرية حديثة', maxScore: 6 },
+            { id: 'c1_8', name: 'معرفة استخدام تكنولوجيا المعلومات في العمل', maxScore: 5 }
+          ]
+        },
+        {
+          id: 's2',
+          title: 'محور الصفات الشخصية',
+          weight: 36,
+          criteria: [
+            { id: 'c2_1', name: 'الاهتمام بالمظهر وحسن التصرف', maxScore: 4 },
+            { id: 'c2_2', name: 'القدرة على الحوار وعرض الرأي', maxScore: 5 },
+            { id: 'c2_3', name: 'القدرة على التعامل مع ضغوطات العمل', maxScore: 5 },
+            { id: 'c2_4', name: 'تحمل المسؤولية', maxScore: 5 },
+            { id: 'c2_5', name: 'الشخصية القيادية', maxScore: 6 },
+            { id: 'c2_6', name: 'تقديم أفكار إبداعية', maxScore: 6 },
+            { id: 'c2_7', name: 'المستوى في اللغة الإنكليزية', maxScore: 5 }
+          ]
+        },
+        {
+          id: 's3',
+          title: 'محور علاقات العمل',
+          weight: 15,
+          criteria: [
+            { id: 'c3_1', name: 'العلاقة مع الرؤساء', maxScore: 5 },
+            { id: 'c3_2', name: 'العلاقة مع الزملاء', maxScore: 5 },
+            { id: 'c3_3', name: 'العلاقة مع المرؤوسين', maxScore: 5 }
+          ]
+        }
+      ])
+    },
+    {
+      title: 'استمارة تقييم أداء الموظفين والمهنيين (شهادة إعدادية فأعلى) (FORM_2)',
+      category: 'الكادر التنفيذي والتخصصي (شهادة إعدادية فأعلى)',
+      targetGrades: 'الدرجات (1 - 8) - بلا مسؤولية إشرافية',
+      applicableResponsibilities: JSON.stringify(['بلا مسؤولية', 'مسؤول وحدة', 'مسؤول وجبة']),
+      applicableQualifications: JSON.stringify(['دكتوراه', 'ماجستير', 'دبلوم عالي', 'بكالوريوس', 'دبلوم', 'إعدادية']),
+      maxScore: 100,
+      passingScore: 50,
+      description: 'للمرؤوسين درجة 8→1 من حملة شهادة إعدادية فأعلى بلا مسؤولية إشرافية (16 عنصرًا، المجموع 100)',
+      status: 'فعال',
+      sections: JSON.stringify([
+        {
+          id: 's1',
+          title: 'محور الأداء الوظيفي',
+          weight: 51,
+          criteria: [
+            { id: 'c1_1', name: 'المعرفة الكاملة بأهداف وسياسات التشكيل والعاملين به', maxScore: 7 },
+            { id: 'c1_2', name: 'المشاركة في وضع الخطط وتنفيذها ضمن الوقت المحدد', maxScore: 6 },
+            { id: 'c1_3', name: 'المعرفة والالتزام بالتشريعات النافذة والمحافظة على سرية المعلومات', maxScore: 7 },
+            { id: 'c1_4', name: 'مدى تنفيذ القرارات والتوجيهات الصادرة من الجهات المسؤولة', maxScore: 6 },
+            { id: 'c1_5_hse', name: 'الالتزام بتعليمات وإجراءات الصحة والسلامة والبيئة (HSE)', maxScore: 8, isHseConditional: true },
+            { id: 'c1_6', name: 'القابلية على ترتيب الأولويات وإدارة الوقت', maxScore: 7 },
+            { id: 'c1_7', name: 'القابلية على تطوير الذات والاستفادة من التجارب والبرامج التدريبية النافذة', maxScore: 5 },
+            { id: 'c1_8', name: 'معرفة استخدام تكنولوجيا المعلومات في العمل', maxScore: 5 }
+          ]
+        },
+        {
+          id: 's2',
+          title: 'محور الصفات الشخصية',
+          weight: 36,
+          criteria: [
+            { id: 'c2_1', name: 'الاهتمام بالمظهر وحسن التصرف', maxScore: 6 },
+            { id: 'c2_2', name: 'القدرة على الحوار وإبداء الرأي', maxScore: 7 },
+            { id: 'c2_3', name: 'القدرة على التعامل مع ضغوطات العمل', maxScore: 6 },
+            { id: 'c2_4', name: 'القدرة على الإبداع والابتكار', maxScore: 5 },
+            { id: 'c2_5', name: 'تقدير وتحمل المسؤولية الأعلى', maxScore: 7 },
+            { id: 'c2_6', name: 'المستوى باللغة الإنكليزية', maxScore: 5 }
+          ]
+        },
+        {
+          id: 's3',
+          title: 'محور علاقات العمل',
+          weight: 13,
+          criteria: [
+            { id: 'c3_1', name: 'العلاقة مع الرؤساء', maxScore: 7 },
+            { id: 'c3_2', name: 'العلاقة مع الزملاء', maxScore: 6 }
+          ]
+        }
+      ])
+    },
+    {
+      title: 'استمارة تقييم أداء الكوادر والمهن الحرفية (شهادة متوسطة فأدنى) (FORM_3)',
+      category: 'المهن الحرفية والخدمية (شهادة متوسطة فأدنى)',
+      targetGrades: 'كافة الدرجات - بلا مسؤولية إشرافية',
+      applicableResponsibilities: JSON.stringify(['بلا مسؤولية', 'مسؤول وحدة', 'مسؤول وجبة']),
+      applicableQualifications: JSON.stringify(['متوسطة', 'ابتدائية', 'يقرأ ويكتب', 'أمي']),
+      maxScore: 100,
+      passingScore: 50,
+      description: 'للمهن الحرفية والخدمية بكافة الدرجات من حملة شهادة متوسطة فأدنى بلا مسؤولية إشرافية (13 عنصرًا، المجموع 100)',
+      status: 'فعال',
+      sections: JSON.stringify([
+        {
+          id: 's1',
+          title: 'محور الأداء الوظيفي',
+          weight: 63,
+          criteria: [
+            { id: 'c1_1', name: 'الالتزام بمواعيد العمل الرسمية', maxScore: 10 },
+            { id: 'c1_2', name: 'الالتزام بتعليمات وإجراءات الصحة والسلامة والبيئة (HSE)', maxScore: 9 },
+            { id: 'c1_3', name: 'المحافظة على وسائل العمل المتاحة', maxScore: 9 },
+            { id: 'c1_4', name: 'مدى التكيف مع ظروف العمل المختلفة', maxScore: 9 },
+            { id: 'c1_5', name: 'القدرة على تنفيذ الأعمال ضمن الوقت المحدد', maxScore: 9 },
+            { id: 'c1_6', name: 'نوعية وكمية العمل المنجز خلال فترة التقييم', maxScore: 9 },
+            { id: 'c1_7', name: 'المهارات في تطوير الأداء واستخدام تقنيات حديثة في العمل', maxScore: 8 }
+          ]
+        },
+        {
+          id: 's2',
+          title: 'محور الصفات الشخصية',
+          weight: 26,
+          criteria: [
+            { id: 'c2_1', name: 'الاهتمام بالمظهر وحسن التصرف', maxScore: 6 },
+            { id: 'c2_2', name: 'القدرة على تحمل المسؤولية والإبداع', maxScore: 7 },
+            { id: 'c2_3', name: 'العمل بروح الفريق', maxScore: 7 },
+            { id: 'c2_4', name: 'القابلية على إنجاز الأعمال بدون متابعة مباشرة', maxScore: 6 }
+          ]
+        },
+        {
+          id: 's3',
+          title: 'محور علاقات العمل',
+          weight: 11,
+          criteria: [
+            { id: 'c3_1', name: 'العلاقة مع الرؤساء', maxScore: 5 },
+            { id: 'c3_2', name: 'العلاقة مع الزملاء', maxScore: 6 }
+          ]
+        }
+      ])
+    }
+  ];
+
+  app.get('/api/evaluation-forms', requireAuth, async (req, res) => {
+    try {
+      let records = await db.select().from(schema.evaluationForms).orderBy(asc(schema.evaluationForms.id));
+      const hasCanonicalForms = records.some(r => r.title.includes('FORM_1') || r.title.includes('FORM_2') || r.title.includes('FORM_3'));
+      
+      if (records.length === 0 || !hasCanonicalForms) {
+        for (const form of CANONICAL_SEED_FORMS) {
+          const exists = records.find(r => r.title === form.title);
+          if (!exists) {
+            await db.insert(schema.evaluationForms).values(form).catch(() => {});
+          }
+        }
+        records = await db.select().from(schema.evaluationForms).orderBy(asc(schema.evaluationForms.id));
+      } else {
+        // Migration update for existing canonical forms if they contain obsolete default responsibilities
+        for (const form of CANONICAL_SEED_FORMS) {
+          const existing = records.find(r => r.title === form.title);
+          if (existing) {
+            const respStr = existing.applicableResponsibilities || '';
+            if (existing.title.includes('FORM_1') && respStr.includes('مسؤول وحدة')) {
+              await db.update(schema.evaluationForms).set({
+                applicableResponsibilities: form.applicableResponsibilities
+              }).where(eq(schema.evaluationForms.id, existing.id)).catch(() => {});
+            } else if (existing.title.includes('FORM_2') && !respStr.includes('مسؤول وحدة')) {
+              await db.update(schema.evaluationForms).set({
+                applicableResponsibilities: form.applicableResponsibilities
+              }).where(eq(schema.evaluationForms.id, existing.id)).catch(() => {});
+            }
+          }
+        }
+        records = await db.select().from(schema.evaluationForms).orderBy(asc(schema.evaluationForms.id));
+      }
+      res.json(mapKeys(records, camelToSnake));
+    } catch (error: any) {
+      console.error('Error fetching evaluation forms:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/evaluation-forms/seed-defaults', requireAuth, async (req, res) => {
+    try {
+      for (const form of CANONICAL_SEED_FORMS) {
+        const [existing] = await db.select().from(schema.evaluationForms).where(eq(schema.evaluationForms.title, form.title));
+        if (!existing) {
+          await db.insert(schema.evaluationForms).values(form);
+        } else {
+          await db.update(schema.evaluationForms).set({
+            category: form.category,
+            targetGrades: form.targetGrades,
+            applicableResponsibilities: form.applicableResponsibilities,
+            applicableQualifications: form.applicableQualifications,
+            maxScore: form.maxScore,
+            passingScore: form.passingScore,
+            description: form.description,
+            sections: form.sections,
+            status: 'فعال'
+          }).where(eq(schema.evaluationForms.id, existing.id));
+        }
+      }
+      const records = await db.select().from(schema.evaluationForms).orderBy(asc(schema.evaluationForms.id));
+      res.json({ success: true, message: 'تم إعادة ضبط وسيد القوالب الثلاثة القياسية بنجاح', data: records.map(r => mapKeys(r, camelToSnake)) });
+    } catch (error: any) {
+      console.error('Error seeding canonical forms:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/evaluation-forms', requireAuth, async (req, res) => {
+    try {
+      const data = mapKeys(req.body, snakeToCamel);
+      const {
+        title,
+        category,
+        targetGrades,
+        applicableResponsibilities,
+        applicableQualifications,
+        maxScore,
+        passingScore,
+        description,
+        sections,
+        status,
+        enableWeaknesses,
+        enableStrengths,
+        enableTrainingNeeds,
+        enableEmployeeOpinion
+      } = data;
+      if (!title) return res.status(400).json({ error: 'عنوان استمارة التقييم مطلوب' });
+      if (!category) return res.status(400).json({ error: 'الفئة الوظيفية المستهدفة مطلوبة' });
+
+      const [newRecord] = await db.insert(schema.evaluationForms).values({
+        title: title.trim(),
+        category: category.trim(),
+        targetGrades: targetGrades || 'جميع الدرجات',
+        applicableResponsibilities: typeof applicableResponsibilities === 'object' ? JSON.stringify(applicableResponsibilities) : applicableResponsibilities,
+        applicableQualifications: typeof applicableQualifications === 'object' ? JSON.stringify(applicableQualifications) : applicableQualifications,
+        maxScore: maxScore ? parseInt(maxScore) : 100,
+        passingScore: passingScore ? parseInt(passingScore) : 50,
+        description: description || '',
+        sections: typeof sections === 'object' ? JSON.stringify(sections) : (sections || '[]'),
+        enableWeaknesses: Boolean(enableWeaknesses),
+        enableStrengths: Boolean(enableStrengths),
+        enableTrainingNeeds: Boolean(enableTrainingNeeds),
+        enableEmployeeOpinion: Boolean(enableEmployeeOpinion),
+        status: status || 'فعال',
+      }).returning();
+      res.status(201).json(mapKeys(newRecord, camelToSnake));
+    } catch (error: any) {
+      console.error('Error creating evaluation form:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/evaluation-forms/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
+      const data = mapKeys(req.body, snakeToCamel);
+      const {
+        title,
+        category,
+        targetGrades,
+        applicableResponsibilities,
+        applicableQualifications,
+        maxScore,
+        passingScore,
+        description,
+        sections,
+        status,
+        enableWeaknesses,
+        enableStrengths,
+        enableTrainingNeeds,
+        enableEmployeeOpinion
+      } = data;
+
+      const [updated] = await db.update(schema.evaluationForms)
+        .set({
+          title: title !== undefined ? title : undefined,
+          category: category !== undefined ? category : undefined,
+          targetGrades: targetGrades !== undefined ? targetGrades : undefined,
+          applicableResponsibilities: applicableResponsibilities !== undefined ? (typeof applicableResponsibilities === 'object' ? JSON.stringify(applicableResponsibilities) : applicableResponsibilities) : undefined,
+          applicableQualifications: applicableQualifications !== undefined ? (typeof applicableQualifications === 'object' ? JSON.stringify(applicableQualifications) : applicableQualifications) : undefined,
+          maxScore: maxScore !== undefined ? (maxScore ? parseInt(maxScore) : 100) : undefined,
+          passingScore: passingScore !== undefined ? (passingScore ? parseInt(passingScore) : 50) : undefined,
+          description: description !== undefined ? description : undefined,
+          sections: sections !== undefined ? (typeof sections === 'object' ? JSON.stringify(sections) : sections) : undefined,
+          enableWeaknesses: enableWeaknesses !== undefined ? Boolean(enableWeaknesses) : undefined,
+          enableStrengths: enableStrengths !== undefined ? Boolean(enableStrengths) : undefined,
+          enableTrainingNeeds: enableTrainingNeeds !== undefined ? Boolean(enableTrainingNeeds) : undefined,
+          enableEmployeeOpinion: enableEmployeeOpinion !== undefined ? Boolean(enableEmployeeOpinion) : undefined,
+          status: status !== undefined ? status : undefined,
+        })
+        .where(eq(schema.evaluationForms.id, id))
+        .returning();
+      res.json(mapKeys(updated, camelToSnake));
+    } catch (error: any) {
+      console.error('Error updating evaluation form:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/evaluation-forms/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
+      await db.delete(schema.evaluationForms).where(eq(schema.evaluationForms.id, id));
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting evaluation form:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // --- Shift Systems API ---
+  app.get('/api/shift-systems', requireAuth, async (req, res) => {
+    try {
+      const records = await db.select().from(schema.shiftSystems).orderBy(asc(schema.shiftSystems.id));
+      res.json(mapKeys(records, camelToSnake));
+    } catch (error: any) {
+      console.error('Error fetching shift systems:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/shift-systems', requireAuth, async (req, res) => {
+    try {
+      const {
+        name,
+        work_days,
+        rest_days,
+        shift_hours_type,
+        daily_hours,
+        description,
+        allowance_percentage,
+        allowance_flat_amount,
+        overtime_factor,
+        notes,
+      } = req.body;
+
+      const [newRecord] = await db.insert(schema.shiftSystems).values({
+        name,
+        workDays: work_days !== undefined ? parseInt(work_days) : 1,
+        restDays: rest_days !== undefined ? parseInt(rest_days) : 3,
+        shiftHoursType: shift_hours_type || '24h',
+        dailyHours: daily_hours !== undefined ? parseInt(daily_hours) : 24,
+        description: description || '',
+        allowancePercentage: allowance_percentage !== undefined ? parseFloat(allowance_percentage) : 0,
+        allowanceFlatAmount: allowance_flat_amount !== undefined ? parseInt(allowance_flat_amount) : 0,
+        overtimeFactor: overtime_factor !== undefined ? parseFloat(overtime_factor) : 1.0,
+        notes: notes || '',
+      }).returning();
+
+      res.status(201).json(mapKeys(newRecord, camelToSnake));
+    } catch (error: any) {
+      console.error('Error creating shift system:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/shift-systems/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+
+      const {
+        name,
+        work_days,
+        rest_days,
+        shift_hours_type,
+        daily_hours,
+        description,
+        allowance_percentage,
+        allowance_flat_amount,
+        overtime_factor,
+        notes,
+      } = req.body;
+
+      const [updated] = await db.update(schema.shiftSystems)
+        .set({
+          name: name !== undefined ? name : undefined,
+          workDays: work_days !== undefined ? parseInt(work_days) : undefined,
+          restDays: rest_days !== undefined ? parseInt(rest_days) : undefined,
+          shiftHoursType: shift_hours_type !== undefined ? shift_hours_type : undefined,
+          dailyHours: daily_hours !== undefined ? parseInt(daily_hours) : undefined,
+          description: description !== undefined ? description : undefined,
+          allowancePercentage: allowance_percentage !== undefined ? parseFloat(allowance_percentage) : undefined,
+          allowanceFlatAmount: allowance_flat_amount !== undefined ? parseInt(allowance_flat_amount) : undefined,
+          overtimeFactor: overtime_factor !== undefined ? parseFloat(overtime_factor) : undefined,
+          notes: notes !== undefined ? notes : undefined,
+        })
+        .where(eq(schema.shiftSystems.id, id))
+        .returning();
+
+      res.json(mapKeys(updated, camelToSnake));
+    } catch (error: any) {
+      console.error('Error updating shift system:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/shift-systems/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      await db.delete(schema.shiftSystems).where(eq(schema.shiftSystems.id, id));
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting shift system:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // System Settings API
   app.get('/api/settings', async (req, res) => {
     try {
@@ -1237,6 +2340,45 @@ async function startServer() {
 
   // --- New Iraqi Civil Service Modules Endpoints ---
 
+  // Helper to sync employee primary education_level with the latest active qualification
+  async function syncEmployeeEducationQualification(employeeId: number) {
+    if (!employeeId || isNaN(employeeId)) return;
+    try {
+      const activeQuals = await db.select()
+        .from(schema.qualifications)
+        .where(and(
+          eq(schema.qualifications.employeeId, employeeId),
+          eq(schema.qualifications.isActive, true)
+        ))
+        .orderBy(desc(schema.qualifications.graduationYear), desc(schema.qualifications.createdAt), desc(schema.qualifications.id));
+
+      if (activeQuals.length > 0) {
+        const latestActive = activeQuals[0];
+        await db.update(schema.employees)
+          .set({
+            educationLevel: latestActive.level,
+            specialization: latestActive.specialization || null,
+            university: latestActive.university || null,
+            institution: latestActive.university || null,
+            graduationYear: latestActive.graduationYear || null,
+            educationOrder: latestActive.equationNumber || null,
+            evaluationOrder: latestActive.equationNumber || null,
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.employees.id, employeeId));
+      } else {
+        await db.update(schema.employees)
+          .set({
+            educationLevel: 'بدون',
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.employees.id, employeeId));
+      }
+    } catch (err) {
+      console.error('Error syncing employee education qualification:', err);
+    }
+  }
+
   // 1. Qualifications API
   app.get('/api/qualifications', requireAuth, async (req, res) => {
     try {
@@ -1252,6 +2394,7 @@ async function startServer() {
         institution: r.university,
         graduation_year: r.graduationYear,
         evaluation_order: r.equationNumber,
+        is_active: r.isActive ?? true,
       }));
       res.json(resultsMapped);
     } catch (error: any) {
@@ -1269,6 +2412,8 @@ async function startServer() {
       const level = data.level || data.education_level || data.educationLevel;
       if (!level) return res.status(400).json({ error: 'level/education_level is required' });
 
+      const isActiveVal = data.is_active !== undefined ? Boolean(data.is_active) : (data.isActive !== undefined ? Boolean(data.isActive) : true);
+
       const [record] = await db.insert(schema.qualifications).values({
         employeeId,
         level,
@@ -1281,7 +2426,10 @@ async function startServer() {
         grade: data.grade,
         equationNumber: data.equation_number || data.equationNumber || data.evaluation_order || data.evaluationOrder,
         equationDate: data.equation_date || data.equationDate,
+        isActive: isActiveVal,
       }).returning();
+
+      await syncEmployeeEducationQualification(employeeId);
 
       const recordMapped = {
         ...record,
@@ -1289,6 +2437,7 @@ async function startServer() {
         institution: record.university,
         graduation_year: record.graduationYear,
         evaluation_order: record.equationNumber,
+        is_active: record.isActive ?? true,
       };
       res.json(recordMapped);
     } catch (error: any) {
@@ -1297,11 +2446,86 @@ async function startServer() {
     }
   });
 
+  app.put('/api/qualifications/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      const data = req.body;
+
+      const existing = await db.select().from(schema.qualifications).where(eq(schema.qualifications.id, id));
+      if (existing.length === 0) return res.status(404).json({ error: 'Qualification not found' });
+
+      const empId = existing[0].employeeId;
+      const updateValues: any = {};
+      if (data.level || data.education_level) updateValues.level = data.level || data.education_level;
+      if (data.specialization !== undefined) updateValues.specialization = data.specialization;
+      if (data.sub_specialization || data.subSpecialization) updateValues.subSpecialization = data.sub_specialization || data.subSpecialization;
+      if (data.university || data.institution) updateValues.university = data.university || data.institution;
+      if (data.country !== undefined) updateValues.country = data.country;
+      if (data.graduation_year || data.graduationYear) updateValues.graduationYear = parseInt(data.graduation_year || data.graduationYear);
+      if (data.is_active !== undefined) updateValues.isActive = Boolean(data.is_active);
+      if (data.isActive !== undefined) updateValues.isActive = Boolean(data.isActive);
+
+      const [updated] = await db.update(schema.qualifications)
+        .set(updateValues)
+        .where(eq(schema.qualifications.id, id))
+        .returning();
+
+      await syncEmployeeEducationQualification(empId);
+
+      res.json({
+        ...updated,
+        education_level: updated.level,
+        institution: updated.university,
+        graduation_year: updated.graduationYear,
+        evaluation_order: updated.equationNumber,
+        is_active: updated.isActive ?? true,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.patch('/api/qualifications/:id/toggle', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+
+      const existing = await db.select().from(schema.qualifications).where(eq(schema.qualifications.id, id));
+      if (existing.length === 0) return res.status(404).json({ error: 'Qualification not found' });
+
+      const newActiveState = !(existing[0].isActive ?? true);
+
+      const [updated] = await db.update(schema.qualifications)
+        .set({ isActive: newActiveState })
+        .where(eq(schema.qualifications.id, id))
+        .returning();
+
+      await syncEmployeeEducationQualification(existing[0].employeeId);
+
+      res.json({
+        ...updated,
+        education_level: updated.level,
+        institution: updated.university,
+        graduation_year: updated.graduationYear,
+        evaluation_order: updated.equationNumber,
+        is_active: updated.isActive ?? true,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.delete('/api/qualifications/:id', requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
-      await db.delete(schema.qualifications).where(eq(schema.qualifications.id, id));
+      const existing = await db.select().from(schema.qualifications).where(eq(schema.qualifications.id, id));
+      if (existing.length > 0) {
+        const empId = existing[0].employeeId;
+        await db.delete(schema.qualifications).where(eq(schema.qualifications.id, id));
+        await syncEmployeeEducationQualification(empId);
+      }
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1751,6 +2975,150 @@ async function startServer() {
       res.status(500).json({ error: error.message });
     }
   });
+
+  // --- Service Records (احتساب الخدمة وتمديد الخدمة) API ---
+  app.get('/api/service-records', requireAuth, async (req, res) => {
+    try {
+      const { employeeId } = req.query;
+      let query = db.select().from(schema.serviceRecords);
+      if (employeeId) {
+        const empId = parseInt(employeeId as string);
+        if (!isNaN(empId)) {
+          query = db.select().from(schema.serviceRecords).where(eq(schema.serviceRecords.employeeId, empId)) as any;
+        }
+      }
+      const results = await query.orderBy(desc(schema.serviceRecords.createdAt));
+      res.json(results);
+    } catch (error: any) {
+      console.error('Error fetching service records:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/service-records', requireAuth, async (req, res) => {
+    try {
+      const data = req.body;
+      const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
+      if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
+
+      const recordType = data.record_type || data.recordType || 'احتساب خدمة';
+      const orderNumber = data.order_number || data.orderNumber || '';
+      const orderDate = data.order_date || data.orderDate || '';
+      const years = parseInt(data.years) || 0;
+      const months = parseInt(data.months) || 0;
+      const days = parseInt(data.days) || 0;
+      const reason = data.reason || '';
+
+      const [record] = await db.insert(schema.serviceRecords).values({
+        employeeId,
+        recordType,
+        orderNumber,
+        orderDate,
+        years,
+        months,
+        days,
+        purpose: data.purpose || 'promotion_allowance_pension',
+        reason,
+        notes: data.notes || '',
+      }).returning();
+
+      // Sync employee record if record type is extension
+      if (recordType === 'تمديد خدمة') {
+        const emp = await db.select().from(schema.employees).where(eq(schema.employees.id, employeeId));
+        if (emp.length > 0) {
+          const currentEmp = emp[0];
+          const newStatus = currentEmp.status === 'متقاعد' ? 'متقاعد مع تمديد' : (currentEmp.status || 'مستمر');
+          await db.update(schema.employees).set({
+            retirementExtensionOrderNumber: orderNumber,
+            retirementExtensionOrderDate: orderDate,
+            retirementExtensionYears: years,
+            retirementExtensionMonths: months,
+            retirementExtensionNote: reason,
+            status: newStatus,
+          }).where(eq(schema.employees.id, employeeId));
+        }
+      }
+
+      res.json(record);
+    } catch (error: any) {
+      console.error('Error creating service record:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/service-records/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      const data = req.body;
+
+      const [updated] = await db.update(schema.serviceRecords)
+        .set({
+          orderNumber: data.order_number || data.orderNumber,
+          orderDate: data.order_date || data.orderDate,
+          years: data.years !== undefined ? parseInt(data.years) : undefined,
+          months: data.months !== undefined ? parseInt(data.months) : undefined,
+          days: data.days !== undefined ? parseInt(data.days) : undefined,
+          purpose: data.purpose,
+          reason: data.reason,
+          notes: data.notes,
+        })
+        .where(eq(schema.serviceRecords.id, id))
+        .returning();
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error('Error updating service record:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/service-records/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      
+      const existing = await db.select().from(schema.serviceRecords).where(eq(schema.serviceRecords.id, id));
+      if (existing.length === 0) {
+        return res.json({ success: true });
+      }
+
+      const recordToDelete = existing[0];
+      await db.delete(schema.serviceRecords).where(eq(schema.serviceRecords.id, id));
+
+      if (recordToDelete.recordType === 'تمديد خدمة') {
+        const remainingExts = await db.select().from(schema.serviceRecords).where(and(
+          eq(schema.serviceRecords.employeeId, recordToDelete.employeeId),
+          eq(schema.serviceRecords.recordType, 'تمديد خدمة')
+        ));
+
+        if (remainingExts.length === 0) {
+          await db.update(schema.employees).set({
+            retirementExtensionOrderNumber: null,
+            retirementExtensionOrderDate: null,
+            retirementExtensionYears: 0,
+            retirementExtensionMonths: 0,
+            retirementExtensionNote: null,
+          }).where(eq(schema.employees.id, recordToDelete.employeeId));
+        } else {
+          const latest = remainingExts[remainingExts.length - 1];
+          await db.update(schema.employees).set({
+            retirementExtensionOrderNumber: latest.orderNumber,
+            retirementExtensionOrderDate: latest.orderDate,
+            retirementExtensionYears: latest.years,
+            retirementExtensionMonths: latest.months,
+            retirementExtensionNote: latest.reason || latest.notes,
+          }).where(eq(schema.employees.id, recordToDelete.employeeId));
+        }
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting service record:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
 
   // --- Vite & Asset Serving Middleware ---
 

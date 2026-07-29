@@ -2,7 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   Users, LayoutDashboard, Wallet, CalendarDays, Clock,
   ShieldAlert, Star, GraduationCap, FileText, Settings,
-  ChevronLeft, ChevronRight, Building2, UserCog, Network, SlidersHorizontal
+  ChevronLeft, ChevronRight, Building2, UserCog, Network, SlidersHorizontal, Hourglass
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
@@ -13,9 +13,10 @@ const navItems = [
   { path: '/salaries', icon: Wallet, label: 'الرواتب' },
   { path: '/leaves', icon: CalendarDays, label: 'الإجازات' },
   { path: '/attendance', icon: Clock, label: 'الحضور والغياب' },
-  { path: '/penalties', icon: ShieldAlert, label: 'العقوبات' },
+  { path: '/penalties', icon: ShieldAlert, label: 'التشكرات والعقوبات' },
   { path: '/performance', icon: Star, label: 'تقييم الأداء' },
   { path: '/training', icon: GraduationCap, label: 'التدريب والدورات' },
+  { path: '/service-management', icon: Hourglass, label: 'التمديدات والخدمات المضافة' },
   { path: '/reports', icon: FileText, label: 'التقارير' },
   { path: '/org-chart', icon: Network, label: 'الهيكل التنظيمي', adminOnly: true },
   { path: '/users', icon: UserCog, label: 'إدارة المستخدمين', adminOnly: true },

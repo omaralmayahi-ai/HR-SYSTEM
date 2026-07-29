@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
-import { Plus, Trash2, Edit2, Check, X, RefreshCw, GraduationCap, GripVertical } from 'lucide-react';
+import { Plus, Trash2, Edit2, Check, X, RefreshCw, GraduationCap, GripVertical, Award, Download } from 'lucide-react';
+import { notifySettingsChanged } from '@/lib/settingsUtils';
 
 export default function EducationDegreesSettings() {
   const [records, setRecords] = useState([]);
@@ -56,6 +57,7 @@ export default function EducationDegreesSettings() {
       
       // Update local storage for immediate consumption in salary calculations
       localStorage.setItem('EDUCATION_DEGREES_PRESETS', JSON.stringify(sortedData));
+      notifySettingsChanged('education_degrees', sortedData);
     } catch (error) {
       toast({
         title: 'خطأ في جلب البيانات',
@@ -94,6 +96,7 @@ export default function EducationDegreesSettings() {
     // Persist to localStorage
     localStorage.setItem('EDUCATION_DEGREES_ORDER', JSON.stringify(nextRecords.map(r => r.id)));
     localStorage.setItem('EDUCATION_DEGREES_PRESETS', JSON.stringify(nextRecords));
+    notifySettingsChanged('education_degrees', nextRecords);
 
     setDraggedIndex(null);
     setDraggedOverIndex(null);
@@ -217,20 +220,56 @@ export default function EducationDegreesSettings() {
     }
   };
 
+  // Quick update higher degree allowance rate
+  const handleQuickUpdateHigherRate = async (id, newRate) => {
+    const record = records.find(r => r.id === id);
+    if (!record) return;
+    const val = parseInt(newRate);
+    if (isNaN(val) || val < 0) return;
+
+    try {
+      const payload = {
+        name: record.name,
+        is_higher_education: true,
+        allowance_rate: record.allowance_rate || record.allowanceRate || 0,
+        higher_allowance_rate: val,
+      };
+      await apiClient.entities.EducationDegree.update(id, payload);
+      toast({
+        title: 'تم تثبيت وتعديل مخصص الشهادة العليا',
+        description: `تم تحديث مخصص الشهادة العليا لـ "${record.name}" إلى ${val}% بنجاح`,
+        variant: 'success',
+      });
+      fetchRecords();
+
+      await apiClient.logs.create({
+        action: 'تعديل مخصص الشهادة العليا',
+        details: `تعديل مخصص الشهادة العليا لـ (${record.name}) إلى ${val}%`
+      }).catch(() => {});
+    } catch (error) {
+      toast({
+        title: 'خطأ أثناء التحديث',
+        description: error.message,
+        variant: 'destructive',
+      });
+    }
+  };
+
   // Seeding Standard Presets compliant with Iraq Civil Service / Salary scale 2023 norms
   const handleLoadStandardPresets = async () => {
     if (!window.confirm('هل تريد استيراد مخصصات الشهادات الدراسية القياسية في العراق؟ سيتم تفعيل مخصص الشهادة ومخصص الشهادة العليا تلقائياً.')) return;
     setLoading(true);
     try {
       const presets = [
-        { name: 'دكتوراه', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 50 },
-        { name: 'ماجستير', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 50 },
-        { name: 'دبلوم عالي', is_higher_education: true, allowance_rate: 60, higher_allowance_rate: 35 },
-        { name: 'بكالوريوس', is_higher_education: false, allowance_rate: 45, higher_allowance_rate: 0 },
-        { name: 'دبلوم', is_higher_education: false, allowance_rate: 35, higher_allowance_rate: 0 },
-        { name: 'إعدادية', is_higher_education: false, allowance_rate: 25, higher_allowance_rate: 0 },
-        { name: 'متوسطة', is_higher_education: false, allowance_rate: 15, higher_allowance_rate: 0 },
+        { name: 'دون الابتدائية', is_higher_education: false, allowance_rate: 0, higher_allowance_rate: 0 },
         { name: 'ابتدائية', is_higher_education: false, allowance_rate: 10, higher_allowance_rate: 0 },
+        { name: 'متوسطة', is_higher_education: false, allowance_rate: 15, higher_allowance_rate: 0 },
+        { name: 'إعدادية', is_higher_education: false, allowance_rate: 25, higher_allowance_rate: 0 },
+        { name: 'دبلوم', is_higher_education: false, allowance_rate: 35, higher_allowance_rate: 0 },
+        { name: 'بكالوريوس', is_higher_education: false, allowance_rate: 45, higher_allowance_rate: 0 },
+        { name: 'دبلوم عالي', is_higher_education: true, allowance_rate: 60, higher_allowance_rate: 35 },
+        { name: 'ماجستير', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 50 },
+        { name: 'دكتوراه', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 50 },
       ];
 
       for (const item of presets) {
@@ -271,6 +310,15 @@ export default function EducationDegreesSettings() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
+            onClick={handleLoadStandardPresets}
+            className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl px-3 py-2.5 text-xs transition-all flex items-center gap-1.5"
+            title="استيراد المخصصات والشهادات القياسية في العراق"
+          >
+            <Download size={14} className="text-violet-600" />
+            استيراد المخصصات القياسية
+          </button>
+          <button
+            type="button"
             onClick={() => setAdding(true)}
             className="bg-[#1B3A6B] hover:bg-[#1B3A6B]/90 text-white rounded-xl px-4 py-2.5 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm"
           >
@@ -278,6 +326,108 @@ export default function EducationDegreesSettings() {
             إضافة شهادة جديدة
           </button>
         </div>
+      </div>
+
+      {/* Higher Degree Allowances Dedicated Management Card */}
+      <div className="bg-gradient-to-r from-violet-900/5 via-purple-900/5 to-indigo-900/5 border border-violet-200 rounded-2xl p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-violet-200/60 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-violet-600 text-white rounded-xl shadow-xs">
+              <Award size={20} />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                تثبيت وتعديل مخصصات الشهادة العليا
+                <span className="bg-violet-100 text-violet-800 text-[10px] px-2 py-0.5 rounded-full font-bold border border-violet-200">
+                  مخصصات علمية إضافية
+                </span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                مخصص الشهادة العليا هو مخصص علمي إضافي يُصرف فوق مخصص الشهادة الأساسي لحملة الشهادات العليا (دكتوراه، ماجستير، دبلوم عالي). يمكنك تثبيت وتعديل النسبة المحددة أدناه بسهولة.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Grid of Higher Education Degrees */}
+        {records.filter(r => r.is_higher_education || r.isHigherEducation).length === 0 ? (
+          <div className="text-center py-6 bg-white/60 rounded-xl border border-dashed border-violet-200">
+            <p className="text-xs font-bold text-slate-600">لم يتم تحديد أي شهادة كـ "شهادة عليا" في القائمة أدناه حالياً.</p>
+            <p className="text-[11px] text-slate-500 mt-1">
+              انقر على "استيراد المخصصات القياسية" أعلاه أو حدد خيار "شهادة عليا" عند إضافة أو تعديل أي شهادة لتخصيص نسبة مخصص الشهادة العليا لها.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {records.filter(r => r.is_higher_education || r.isHigherEducation).map((degree) => {
+              const primaryRate = degree.allowance_rate || degree.allowanceRate || 0;
+              const higherRate = degree.higher_allowance_rate || degree.higherAllowanceRate || 0;
+              const totalRate = primaryRate + higherRate;
+
+              return (
+                <div key={degree.id} className="bg-white rounded-xl border border-violet-200/80 p-3.5 shadow-xs hover:border-violet-300 transition-all space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                      <GraduationCap size={15} className="text-violet-600" />
+                      {degree.name}
+                    </span>
+                    <span className="text-[10px] font-bold bg-violet-50 text-violet-700 px-2 py-0.5 rounded-md border border-violet-200">
+                      شهادة عليا
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-center text-xs">
+                    <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
+                      <span className="text-[10px] text-slate-500 block font-semibold mb-0.5">المخصص الأساسي</span>
+                      <span className="font-mono font-bold text-emerald-600">{primaryRate}%</span>
+                    </div>
+                    <div className="bg-violet-50/60 p-2 rounded-lg border border-violet-100">
+                      <span className="text-[10px] text-violet-700 block font-semibold mb-0.5">مخصص الشهادة العليا</span>
+                      <span className="font-mono font-bold text-violet-700">{higherRate}%</span>
+                    </div>
+                  </div>
+
+                  {/* Quick Edit Higher Rate */}
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-2">
+                    <span className="text-[11px] font-bold text-slate-600">تثبيت/تعديل مخصص العليا:</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min="0"
+                        max="150"
+                        defaultValue={higherRate}
+                        key={`quick-${degree.id}-${higherRate}`}
+                        onBlur={(e) => {
+                          const val = parseInt(e.target.value);
+                          if (!isNaN(val) && val !== higherRate) {
+                            handleQuickUpdateHigherRate(degree.id, val);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const val = parseInt(e.target.value);
+                            if (!isNaN(val) && val !== higherRate) {
+                              handleQuickUpdateHigherRate(degree.id, val);
+                            }
+                          }
+                        }}
+                        className="w-16 bg-violet-50/50 border border-violet-300 rounded-lg py-1 px-2 text-center text-xs font-bold text-violet-900 focus:bg-white focus:ring-2 focus:ring-violet-500/20"
+                        title="اضغط Enter أو انقر خارج المربع للحفظ والتثبيت"
+                      />
+                      <span className="text-xs font-bold text-violet-700">%</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-900/5 px-2.5 py-1.5 rounded-lg flex justify-between items-center text-[10px] font-bold text-slate-700">
+                    <span>إجمالي المخصص العلمي الممنوح:</span>
+                    <span className="font-mono text-xs text-[#1B3A6B]">{totalRate}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Adding Form */}
@@ -393,6 +543,7 @@ export default function EducationDegreesSettings() {
                 <th className="px-4 py-3 text-center">نوع الشهادة</th>
                 <th className="px-4 py-3 text-center">مخصص الشهادة الأساسي (%)</th>
                 <th className="px-4 py-3 text-center">مخصص الشهادة العليا (%)</th>
+                <th className="px-4 py-3 text-center">إجمالي المخصص العلمي (%)</th>
                 <th className="px-4 py-3 text-left">التحكم</th>
               </tr>
             </thead>
@@ -492,6 +643,18 @@ export default function EducationDegreesSettings() {
                         ) : (
                           <span className="text-slate-300 font-normal">-</span>
                         )
+                      )}
+                    </td>
+
+                    <td className="px-4 py-3 text-center font-mono font-bold text-[#1B3A6B]">
+                      {isEditing ? (
+                        <span>
+                          {(parseInt(editAllowanceRate) || 0) + (editIsHigher ? (parseInt(editHigherAllowanceRate) || 0) : 0)}%
+                        </span>
+                      ) : (
+                        <span>
+                          {(r.allowance_rate || r.allowanceRate || 0) + (isHigher ? (r.higher_allowance_rate || r.higherAllowanceRate || 0) : 0)}%
+                        </span>
                       )}
                     </td>
 

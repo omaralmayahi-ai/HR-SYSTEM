@@ -1,7 +1,7 @@
 // src/api/apiClient.js
 
 // Request helper to handle automatic bearer tokens and json content type
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const token = localStorage.getItem('hr_session_token');
   const headers = {
     'Content-Type': 'application/json',
@@ -136,13 +136,17 @@ export const apiClient = {
     CareerHistory: createEntityClient('career'),
     LeaveRequest: createEntityClient('leaves'),
     Penalty: createEntityClient('penalties'),
+    Appreciation: createEntityClient('appreciations'),
     PerformanceEvaluation: createEntityClient('performance'),
     Training: createEntityClient('trainings'),
     TrainingEnrollment: TrainingEnrollmentClient,
     SalaryRecord: createEntityClient('salaries'),
     Attendance: createEntityClient('attendance'),
     OrgUnit: createEntityClient('org-units'),
-    Qualification: createEntityClient('qualifications'),
+    Qualification: {
+      ...createEntityClient('qualifications'),
+      toggle: async (id) => request(`/api/qualifications/${id}/toggle`, { method: 'PATCH' })
+    },
     JobAssignment: createEntityClient('job-assignments'),
     PromotionIncrement: createEntityClient('promotions'),
     SalaryAllowance: createEntityClient('salary-allowances'),
@@ -156,7 +160,11 @@ export const apiClient = {
     LeaveType: createEntityClient('leave-types'),
     WorkLocation: createEntityClient('work-locations'),
     EducationDegree: createEntityClient('education-degrees'),
-    ResponsibilityAllowance: createEntityClient('responsibility-allowances')
+    ResponsibilityAllowance: createEntityClient('responsibility-allowances'),
+    ShiftSystem: createEntityClient('shift-systems'),
+    ServiceRecord: createEntityClient('service-records'),
+    PenaltyType: createEntityClient('penalty-types'),
+    EvaluationForm: createEntityClient('evaluation-forms')
   },
   settings: {
     get: async () => request('/api/settings'),
