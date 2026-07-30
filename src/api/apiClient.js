@@ -139,7 +139,13 @@ export const apiClient = {
     Appreciation: createEntityClient('appreciations'),
     PerformanceEvaluation: createEntityClient('performance'),
     Training: createEntityClient('trainings'),
-    TrainingEnrollment: TrainingEnrollmentClient,
+    TrainingEnrollment: {
+      ...TrainingEnrollmentClient,
+      update: (id, data) => request(`/api/trainings/enrollments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+      delete: (id) => request(`/api/trainings/enrollments/${id}`, { method: 'DELETE' })
+    },
+    Trainer: createEntityClient('trainers'),
+    AnnualPlan: createEntityClient('annual-plans'),
     SalaryRecord: createEntityClient('salaries'),
     Attendance: createEntityClient('attendance'),
     OrgUnit: createEntityClient('org-units'),

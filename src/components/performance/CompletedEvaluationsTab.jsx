@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
+import { useAuth } from '@/lib/AuthContext';
 import { apiClient } from '@/api/apiClient';
 import { EVALUATION_GRADE_SCALE } from '@/lib/evaluationEngine';
 import {
-  CheckCircle2, Search, Eye, Edit3, Trash2, Printer, Award, Sliders, Network
+  Search, Eye, Edit3, Trash2, Printer, Award, Sliders, Network
 } from 'lucide-react';
 import FillEvaluationModal from './FillEvaluationModal';
 import PrintSingleEvaluationModal from './PrintSingleEvaluationModal';
@@ -22,6 +23,8 @@ export default function CompletedEvaluationsTab({
   onRefreshData
 }) {
   const { toast } = useToast();
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedOrgFilter, setSelectedOrgFilter] = useState('all');
   const [selectedGradeFilter, setSelectedGradeFilter] = useState('all');
@@ -129,18 +132,14 @@ export default function CompletedEvaluationsTab({
   return (
     <div className="space-y-6">
       {/* Header Banner */}
-      <div className="bg-[#1B3A6B] text-white rounded-2xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div 
+        className="rounded-2xl p-6 text-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors"
+        style={{ background: `linear-gradient(to left, ${primaryColor}, ${primaryColor}e6, ${primaryColor}cc)` }}
+      >
         <div className="space-y-1">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/10 text-white rounded-full text-xs font-medium">
-            <CheckCircle2 size={14} />
-            التقييمات المكتملة والمعتمدة رسمياً
-          </div>
           <h2 className="text-xl font-bold tracking-tight">
             الاستمارات المنجزة لسنة ({year})
           </h2>
-          <p className="text-xs text-slate-200 max-w-2xl leading-relaxed">
-            استعراض نتائج التقييمات المنجزة، التقديرات المعتمدة، طباعة الاستمارات الرسمية والتعديل على سجلات التقييم للسنة التقييمية الحالية والسنوات السابقة.
-          </p>
         </div>
 
         <div className="flex items-center gap-3">

@@ -3,7 +3,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { db, schema, eq, and, desc, asc, ensureSchema } from './src/db/index.ts';
+import { db, schema, eq, and, desc, asc, ensureSchema, pool } from './src/db/index.ts';
 import { getTableColumns } from 'drizzle-orm';
 import { requireAuth, AuthRequest } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
@@ -899,11 +899,123 @@ async function startServer() {
     }
   });
 
+  function enhanceTrainingRecord(c: any) {
+    if (!c) return c;
+    const mapped = mapKeys(c, camelToSnake);
+    mapped.courseName = c.courseName || mapped.course_name;
+    mapped.course_name = mapped.course_name || c.courseName;
+    mapped.startDate = c.startDate || mapped.start_date;
+    mapped.start_date = mapped.start_date || c.startDate;
+    mapped.endDate = c.endDate || mapped.end_date;
+    mapped.end_date = mapped.end_date || c.endDate;
+    mapped.courseType = c.courseType || mapped.course_type;
+    mapped.course_type = mapped.course_type || c.courseType;
+    mapped.locationType = c.locationType || mapped.location_type;
+    mapped.location_type = mapped.location_type || c.locationType;
+    mapped.trainerId = c.trainerId ?? mapped.trainer_id;
+    mapped.trainer_id = mapped.trainer_id ?? c.trainerId;
+    mapped.trainerName = c.trainerName || mapped.trainer_name;
+    mapped.trainer_name = mapped.trainer_name || c.trainerName;
+    mapped.orderNumber = c.orderNumber || mapped.order_number;
+    mapped.order_number = mapped.order_number || c.orderNumber;
+    mapped.courseCode = c.courseCode || mapped.course_code;
+    mapped.course_code = mapped.course_code || c.courseCode;
+    mapped.isOutsidePlan = c.isOutsidePlan ?? mapped.is_outside_plan ?? false;
+    mapped.is_outside_plan = mapped.is_outside_plan ?? c.isOutsidePlan ?? false;
+    mapped.targetAudience = c.targetAudience || mapped.target_audience;
+    mapped.target_audience = mapped.target_audience || c.targetAudience;
+    mapped.durationValue = c.durationValue ?? mapped.duration_value ?? c.days ?? 1;
+    mapped.duration_value = mapped.duration_value ?? c.durationValue ?? c.days ?? 1;
+    mapped.durationUnit = c.durationUnit || mapped.duration_unit || 'بالأيام';
+    mapped.duration_unit = mapped.duration_unit || c.durationUnit || 'بالأيام';
+    mapped.outsidePlanReason = c.outsidePlanReason || mapped.outside_plan_reason;
+    mapped.outside_plan_reason = mapped.outside_plan_reason || c.outsidePlanReason;
+    mapped.trainerRating = c.trainerRating || mapped.trainer_rating;
+    mapped.trainer_rating = mapped.trainer_rating || c.trainerRating;
+    mapped.courseFeedback = c.courseFeedback || mapped.course_feedback;
+    mapped.course_feedback = mapped.course_feedback || c.courseFeedback;
+    return mapped;
+  }
+
+  function enhanceEnrollmentRecord(e: any) {
+    if (!e) return e;
+    const mapped = mapKeys(e, camelToSnake);
+    mapped.trainingId = e.trainingId ?? mapped.training_id;
+    mapped.training_id = mapped.training_id ?? e.trainingId;
+    mapped.employeeId = e.employeeId ?? mapped.employee_id;
+    mapped.employee_id = mapped.employee_id ?? e.employeeId;
+    mapped.isExternalParticipant = e.isExternalParticipant ?? mapped.is_external_participant;
+    mapped.is_external_participant = mapped.is_external_participant ?? e.isExternalParticipant;
+    mapped.externalParticipantName = e.externalParticipantName || mapped.external_participant_name;
+    mapped.external_participant_name = mapped.external_participant_name || e.externalParticipantName;
+    mapped.externalParticipantEntity = e.externalParticipantEntity || mapped.external_participant_entity;
+    mapped.external_participant_entity = mapped.external_participant_entity || e.externalParticipantEntity;
+    mapped.externalParticipantPhone = e.externalParticipantPhone || mapped.external_participant_phone;
+    mapped.external_participant_phone = mapped.external_participant_phone || e.externalParticipantPhone;
+    mapped.certificateNumber = e.certificateNumber || mapped.certificate_number;
+    mapped.certificate_number = mapped.certificate_number || e.certificateNumber;
+    mapped.certificateType = e.certificateType || mapped.certificate_type || 'شهادة مشاركة';
+    mapped.certificate_type = mapped.certificate_type || e.certificateType || 'شهادة مشاركة';
+    mapped.certificateIssueDate = e.certificateIssueDate || mapped.certificate_issue_date;
+    mapped.certificate_issue_date = mapped.certificate_issue_date || e.certificateIssueDate;
+    mapped.trainerRating = e.trainerRating || mapped.trainer_rating;
+    mapped.trainer_rating = mapped.trainer_rating || e.trainerRating;
+    mapped.courseFeedback = e.courseFeedback || mapped.course_feedback;
+    mapped.course_feedback = mapped.course_feedback || e.courseFeedback;
+    mapped.enrollmentDate = e.enrollmentDate || mapped.enrollment_date;
+    mapped.enrollment_date = mapped.enrollment_date || e.enrollmentDate;
+    return mapped;
+  }
+
+  function enhanceTrainerRecord(t: any) {
+    if (!t) return t;
+    const mapped = mapKeys(t, camelToSnake);
+    mapped.fullName = t.fullName || mapped.full_name;
+    mapped.full_name = mapped.full_name || t.fullName;
+    mapped.trainerType = t.trainerType || mapped.trainer_type;
+    mapped.trainer_type = mapped.trainer_type || t.trainerType;
+    mapped.employeeId = t.employeeId ?? mapped.employee_id;
+    mapped.employee_id = mapped.employee_id ?? t.employeeId;
+    mapped.employeeCode = t.employeeCode || mapped.employee_code;
+    mapped.employee_code = mapped.employee_code || t.employeeCode;
+    mapped.trainerCode = t.trainerCode || mapped.trainer_code;
+    mapped.trainer_code = mapped.trainer_code || t.trainerCode;
+    mapped.courseCategories = t.courseCategories || mapped.course_categories;
+    mapped.course_categories = mapped.course_categories || t.courseCategories;
+    mapped.specialtyDetails = t.specialtyDetails || mapped.specialty_details;
+    mapped.specialty_details = mapped.specialty_details || t.specialtyDetails;
+    mapped.workPhone = t.workPhone || mapped.work_phone;
+    mapped.work_phone = mapped.work_phone || t.workPhone;
+    return mapped;
+  }
+
+  function enhancePlanRecord(p: any) {
+    if (!p) return p;
+    const mapped = mapKeys(p, camelToSnake);
+    mapped.plannedCoursesCount = p.plannedCoursesCount ?? mapped.planned_courses_count;
+    mapped.planned_courses_count = mapped.planned_courses_count ?? p.plannedCoursesCount;
+    mapped.plannedTraineesCount = p.plannedTraineesCount ?? mapped.planned_trainees_count;
+    mapped.planned_trainees_count = mapped.planned_trainees_count ?? p.plannedTraineesCount;
+    mapped.plannedBudget = p.plannedBudget ?? mapped.planned_budget;
+    mapped.planned_budget = mapped.planned_budget ?? p.plannedBudget;
+    return mapped;
+  }
+
   // Training Courses API
   app.get('/api/trainings', requireAuth, async (req, res) => {
     try {
-      const courses = await db.select().from(schema.trainings).orderBy(desc(schema.trainings.startDate));
-      res.json(courses);
+      const track = req.query.track as string;
+      const year = req.query.year ? parseInt(req.query.year as string) : undefined;
+      let query = db.select().from(schema.trainings);
+      if (track && year) {
+        query = db.select().from(schema.trainings).where(and(eq(schema.trainings.track, track), eq(schema.trainings.year, year))) as any;
+      } else if (track) {
+        query = db.select().from(schema.trainings).where(eq(schema.trainings.track, track)) as any;
+      } else if (year) {
+        query = db.select().from(schema.trainings).where(eq(schema.trainings.year, year)) as any;
+      }
+      const courses = await query.orderBy(desc(schema.trainings.startDate));
+      res.json(courses.map(enhanceTrainingRecord));
     } catch (error: any) {
       console.error('Error fetching trainings:', error);
       res.status(500).json({ error: error.message });
@@ -912,11 +1024,58 @@ async function startServer() {
 
   app.post('/api/trainings', requireAuth, async (req, res) => {
     try {
-      const data = req.body;
+      const data = mapKeys(req.body, snakeToCamel);
+      if (data.trainerId !== undefined && data.trainerId !== null) {
+        if (typeof data.trainerId === 'string') {
+          data.trainerId = data.trainerId.trim() ? parseInt(data.trainerId) || null : null;
+        } else if (typeof data.trainerId === 'number' && isNaN(data.trainerId)) {
+          data.trainerId = null;
+        }
+      } else {
+        data.trainerId = null;
+      }
+      if (data.year !== undefined) data.year = parseInt(data.year) || 2026;
+      if (data.days !== undefined) data.days = parseInt(data.days) || 1;
+      if (data.hours !== undefined) data.hours = parseInt(data.hours) || 0;
+
       const [newCourse] = await db.insert(schema.trainings).values(data).returning();
-      res.status(210).json(newCourse);
+      res.status(201).json(enhanceTrainingRecord(newCourse));
     } catch (error: any) {
       console.error('Error creating training course:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/trainings/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const data = mapKeys(req.body, snakeToCamel);
+      if (data.trainerId !== undefined && data.trainerId !== null) {
+        if (typeof data.trainerId === 'string') {
+          data.trainerId = data.trainerId.trim() ? parseInt(data.trainerId) || null : null;
+        } else if (typeof data.trainerId === 'number' && isNaN(data.trainerId)) {
+          data.trainerId = null;
+        }
+      }
+      if (data.year !== undefined) data.year = parseInt(data.year) || 2026;
+      if (data.days !== undefined) data.days = parseInt(data.days) || 1;
+      if (data.hours !== undefined) data.hours = parseInt(data.hours) || 0;
+
+      const [updated] = await db.update(schema.trainings).set(data).where(eq(schema.trainings.id, id)).returning();
+      res.json(enhanceTrainingRecord(updated));
+    } catch (error: any) {
+      console.error('Error updating training:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/trainings/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await db.delete(schema.trainings).where(eq(schema.trainings.id, id));
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting training:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -925,12 +1084,15 @@ async function startServer() {
   app.get('/api/trainings/enrollments', requireAuth, async (req, res) => {
     try {
       const employeeId = req.query.employeeId ? parseInt(req.query.employeeId as string) : undefined;
+      const trainingId = req.query.trainingId ? parseInt(req.query.trainingId as string) : undefined;
       let query = db.select().from(schema.trainingEnrollments);
       if (employeeId && !isNaN(employeeId)) {
         query = db.select().from(schema.trainingEnrollments).where(eq(schema.trainingEnrollments.employeeId, employeeId)) as any;
+      } else if (trainingId && !isNaN(trainingId)) {
+        query = db.select().from(schema.trainingEnrollments).where(eq(schema.trainingEnrollments.trainingId, trainingId)) as any;
       }
       const enrollments = await query.orderBy(desc(schema.trainingEnrollments.createdAt));
-      res.json(enrollments);
+      res.json(enrollments.map(enhanceEnrollmentRecord));
     } catch (error: any) {
       console.error('Error fetching enrollments:', error);
       res.status(500).json({ error: error.message });
@@ -939,14 +1101,316 @@ async function startServer() {
 
   app.post('/api/trainings/enroll', requireAuth, async (req, res) => {
     try {
-      const data = req.body;
-      const [newEnroll] = await db.insert(schema.trainingEnrollments).values({
-        ...data,
-        enrollmentDate: data.enrollmentDate || new Date().toISOString().split('T')[0]
-      }).returning();
-      res.status(210).json(newEnroll);
+      const data = mapKeys(req.body, snakeToCamel);
+      if (data.trainingId) data.trainingId = parseInt(data.trainingId);
+      if (data.employeeId) data.employeeId = parseInt(data.employeeId) || null;
+      data.enrollmentDate = data.enrollmentDate || new Date().toISOString().split('T')[0];
+
+      const [newEnroll] = await db.insert(schema.trainingEnrollments).values(data).returning();
+
+      // If internal employee & result is passed/completed, auto-sync to employee's career training record
+      if (newEnroll.employeeId && (newEnroll.result === 'اجتاز' || newEnroll.result === 'مشارك')) {
+        const [course] = await db.select().from(schema.trainings).where(eq(schema.trainings.id, newEnroll.trainingId)).limit(1);
+        if (course) {
+          await db.insert(schema.trainingCourses).values({
+            employeeId: newEnroll.employeeId,
+            courseName: course.courseName,
+            courseType: course.courseType || 'حضوري',
+            provider: course.provider || 'قسم التدريب والتطوير',
+            location: course.location || (course.locationType === 'موقعي' ? 'داخل الشركة' : 'خارج العراق'),
+            startDate: course.startDate,
+            endDate: course.endDate,
+            durationDays: course.days || 1,
+            average: newEnroll.score || '',
+            grade: newEnroll.grade || newEnroll.result,
+            rank: 'مشارك'
+          }).catch(() => {});
+        }
+      }
+
+      res.status(201).json(enhanceEnrollmentRecord(newEnroll));
     } catch (error: any) {
       console.error('Error enrolling training course:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/trainings/enrollments/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const data = mapKeys(req.body, snakeToCamel);
+      if (data.trainingId) data.trainingId = parseInt(data.trainingId);
+      if (data.employeeId) data.employeeId = parseInt(data.employeeId) || null;
+
+      const [updated] = await db.update(schema.trainingEnrollments).set(data).where(eq(schema.trainingEnrollments.id, id)).returning();
+
+      // If internal employee & result is passed/completed, auto-sync to employee's career training record
+      if (updated && updated.employeeId && (updated.result === 'اجتاز' || updated.result === 'مشارك')) {
+        const [course] = await db.select().from(schema.trainings).where(eq(schema.trainings.id, updated.trainingId)).limit(1);
+        if (course) {
+          await db.insert(schema.trainingCourses).values({
+            employeeId: updated.employeeId,
+            courseName: course.courseName,
+            courseType: course.courseType || 'حضوري',
+            provider: course.provider || 'قسم التدريب والتطوير',
+            location: course.location || (course.locationType === 'موقعي' ? 'داخل الشركة' : 'خارج العراق'),
+            startDate: course.startDate,
+            endDate: course.endDate,
+            durationDays: course.days || 1,
+            average: updated.score || '',
+            grade: updated.grade || updated.result,
+            rank: 'مشارك'
+          }).catch(() => {});
+        }
+      }
+
+      res.json(enhanceEnrollmentRecord(updated));
+    } catch (error: any) {
+      console.error('Error updating enrollment:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/trainings/enrollments/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await db.delete(schema.trainingEnrollments).where(eq(schema.trainingEnrollments.id, id));
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting enrollment:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Helper to dynamically inspect existing database table columns
+  async function getExistingColumns(tableName: string): Promise<Set<string>> {
+    try {
+      const res = await pool.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_name = $1`,
+        [tableName]
+      );
+      return new Set(res.rows.map((r: any) => r.column_name));
+    } catch {
+      return new Set();
+    }
+  }
+
+  // Trainers API (دليل المدربين)
+  app.get('/api/trainers', requireAuth, async (req, res) => {
+    try {
+      const result = await pool.query('SELECT * FROM trainers ORDER BY id DESC');
+      res.json(result.rows.map(enhanceTrainerRecord));
+    } catch (error: any) {
+      console.error('Error fetching trainers:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/trainers/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const result = await pool.query('SELECT * FROM trainers WHERE id = $1', [id]);
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'المدرب غير موجود' });
+      }
+      res.json(enhanceTrainerRecord(result.rows[0]));
+    } catch (error: any) {
+      console.error('Error fetching trainer by id:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/trainers', requireAuth, async (req, res) => {
+    try {
+      const rawData = req.body;
+      const existingCols = await getExistingColumns('trainers');
+      
+      const snakeData: Record<string, any> = {};
+      const addField = (colName: string, val: any) => {
+        if (existingCols.size === 0 || existingCols.has(colName)) {
+          if (val !== undefined && val !== null) snakeData[colName] = val;
+        }
+      };
+
+      addField('full_name', rawData.full_name || rawData.fullName);
+      addField('specialization', rawData.specialization);
+      addField('trainer_type', rawData.trainer_type || rawData.trainerType || 'داخلي');
+      addField('organization', rawData.organization);
+      addField('phone', rawData.phone);
+      addField('email', rawData.email);
+      addField('status', rawData.status || 'معتمد');
+      addField('rating', rawData.rating || 'ممتاز');
+      addField('notes', rawData.notes);
+
+      const rawEmpId = rawData.employee_id ?? rawData.employeeId;
+      let parsedEmpId: number | null = null;
+      if (rawEmpId !== undefined && rawEmpId !== null && rawEmpId !== '' && !isNaN(parseInt(rawEmpId))) {
+        parsedEmpId = parseInt(rawEmpId);
+      }
+      addField('employee_id', parsedEmpId);
+
+      addField('employee_code', rawData.employee_code || rawData.employeeCode);
+      addField('trainer_code', rawData.trainer_code || rawData.trainerCode);
+      
+      const cats = rawData.course_categories ?? rawData.courseCategories;
+      if (cats !== undefined && cats !== null) {
+        let catVal = cats;
+        if (typeof cats === 'string') {
+          try {
+            const parsed = JSON.parse(cats);
+            if (typeof parsed === 'string') {
+              catVal = parsed;
+            }
+          } catch {
+            // Keep original string
+          }
+        } else {
+          catVal = JSON.stringify(cats);
+        }
+        addField('course_categories', typeof catVal === 'string' ? catVal : JSON.stringify(catVal));
+      }
+      addField('specialty_details', rawData.specialty_details || rawData.specialtyDetails);
+      addField('work_phone', rawData.work_phone || rawData.workPhone);
+
+      const keys = Object.keys(snakeData);
+      if (keys.length === 0) {
+        return res.status(400).json({ error: 'بيانات المدرب غير مكتملة' });
+      }
+
+      const cols = keys.join(', ');
+      const params = keys.map((_, i) => `$${i + 1}`).join(', ');
+      const values = keys.map(k => snakeData[k]);
+
+      const query = `INSERT INTO trainers (${cols}) VALUES (${params}) RETURNING *`;
+      const result = await pool.query(query, values);
+      res.status(201).json(enhanceTrainerRecord(result.rows[0]));
+    } catch (error: any) {
+      console.error('Error creating trainer:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put('/api/trainers/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const rawData = req.body;
+      const existingCols = await getExistingColumns('trainers');
+      
+      const snakeData: Record<string, any> = {};
+      const addField = (colName: string, val: any) => {
+        if (existingCols.size === 0 || existingCols.has(colName)) {
+          if (val !== undefined) snakeData[colName] = val;
+        }
+      };
+
+      addField('full_name', rawData.full_name ?? rawData.fullName);
+      addField('specialization', rawData.specialization);
+      addField('trainer_type', rawData.trainer_type ?? rawData.trainerType);
+      addField('organization', rawData.organization);
+      addField('phone', rawData.phone);
+      addField('email', rawData.email);
+      addField('status', rawData.status);
+      addField('rating', rawData.rating);
+      addField('notes', rawData.notes);
+
+      const rawEmpId = rawData.employee_id ?? rawData.employeeId;
+      if (rawEmpId !== undefined) {
+        let parsedEmpId: number | null = null;
+        if (rawEmpId !== null && rawEmpId !== '' && !isNaN(parseInt(rawEmpId))) {
+          parsedEmpId = parseInt(rawEmpId);
+        }
+        addField('employee_id', parsedEmpId);
+      }
+
+      addField('employee_code', rawData.employee_code ?? rawData.employeeCode);
+      addField('trainer_code', rawData.trainer_code ?? rawData.trainerCode);
+      
+      const cats = rawData.course_categories ?? rawData.courseCategories;
+      if (cats !== undefined && cats !== null) {
+        let catVal = cats;
+        if (typeof cats === 'string') {
+          try {
+            const parsed = JSON.parse(cats);
+            if (typeof parsed === 'string') {
+              catVal = parsed;
+            }
+          } catch {
+            // Keep original string
+          }
+        } else {
+          catVal = JSON.stringify(cats);
+        }
+        addField('course_categories', typeof catVal === 'string' ? catVal : JSON.stringify(catVal));
+      }
+      addField('specialty_details', rawData.specialty_details ?? rawData.specialtyDetails);
+      addField('work_phone', rawData.work_phone ?? rawData.workPhone);
+
+      const keys = Object.keys(snakeData);
+      if (keys.length === 0) {
+        const existingRow = await pool.query(`SELECT * FROM trainers WHERE id = $1`, [id]);
+        return res.json(enhanceTrainerRecord(existingRow.rows[0]));
+      }
+
+      const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+      const values = keys.map(k => snakeData[k]);
+      values.push(id);
+
+      const query = `UPDATE trainers SET ${setClause} WHERE id = $${values.length} RETURNING *`;
+      const result = await pool.query(query, values);
+      res.json(enhanceTrainerRecord(result.rows[0]));
+    } catch (error: any) {
+      console.error('Error updating trainer:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/trainers/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await pool.query('UPDATE trainings SET trainer_id = NULL WHERE trainer_id = $1', [id]);
+      await pool.query('DELETE FROM trainers WHERE id = $1', [id]);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting trainer:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Annual Training Plans API (خطط التدريب السنوية)
+  app.get('/api/annual-plans', requireAuth, async (req, res) => {
+    try {
+      const plans = await db.select().from(schema.annualTrainingPlans).orderBy(desc(schema.annualTrainingPlans.year));
+      res.json(plans.map(enhancePlanRecord));
+    } catch (error: any) {
+      console.error('Error fetching annual plans:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/annual-plans', requireAuth, async (req, res) => {
+    try {
+      const data = mapKeys(req.body, snakeToCamel);
+      if (data.year) data.year = parseInt(data.year);
+      if (data.plannedCoursesCount) data.plannedCoursesCount = parseInt(data.plannedCoursesCount);
+      if (data.plannedTraineesCount) data.plannedTraineesCount = parseInt(data.plannedTraineesCount);
+      if (data.plannedBudget) data.plannedBudget = parseInt(data.plannedBudget);
+
+      const { year, track } = data;
+      const existing = await db.select().from(schema.annualTrainingPlans)
+        .where(and(eq(schema.annualTrainingPlans.year, year), eq(schema.annualTrainingPlans.track, track))).limit(1);
+
+      if (existing.length > 0) {
+        const [updated] = await db.update(schema.annualTrainingPlans)
+          .set(data)
+          .where(eq(schema.annualTrainingPlans.id, existing[0].id))
+          .returning();
+        return res.json(enhancePlanRecord(updated));
+      }
+
+      const [newPlan] = await db.insert(schema.annualTrainingPlans).values(data).returning();
+      res.status(201).json(enhancePlanRecord(newPlan));
+    } catch (error: any) {
+      console.error('Error saving annual plan:', error);
       res.status(500).json({ error: error.message });
     }
   });

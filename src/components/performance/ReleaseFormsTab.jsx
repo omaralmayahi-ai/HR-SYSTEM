@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { apiClient } from '@/api/apiClient';
+import { useAuth } from '@/lib/AuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { determineTargetForm } from '@/lib/evaluationEngine';
@@ -20,6 +21,8 @@ export default function ReleaseFormsTab({
   onRefreshData
 }) {
   const { toast } = useToast();
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
   const [selectedOrgUnit, setSelectedOrgUnit] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmpIds, setSelectedEmpIds] = useState(new Set());
@@ -281,30 +284,27 @@ export default function ReleaseFormsTab({
 
   return (
     <div className="space-y-6">
-      {/* Top Banner & Control Bar */}
-      <div className="bg-gradient-to-l from-[#1B3A6B] to-[#2C5282] rounded-3xl p-6 text-white shadow-lg space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
+      {/* Control & Filter Bar */}
+      <div 
+        className="rounded-2xl p-6 text-white shadow-sm space-y-5 text-right transition-colors"
+        style={{ background: `linear-gradient(to left, ${primaryColor}, ${primaryColor}e6, ${primaryColor}cc)` }}
+        dir="rtl"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/15 pb-4">
           <div className="space-y-1">
-            <span className="bg-white/10 text-white/90 px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-xs flex items-center gap-1.5 w-fit">
-              <Sparkles size={14} className="text-amber-300" />
-              المطابقة التلقائية وفق الهيكل والنظام الموحد
-            </span>
-            <h2 className="text-xl font-bold tracking-tight">إعداد وتحضير الاستمارات وفق الهيكل التنظيمي ({year})</h2>
-            <p className="text-slate-200 text-xs max-w-2xl leading-relaxed">
-              اختر التشكيل أو القسم الإداري لتخصيص الاستمارات المعتمدة تلقائياً بناءً على الدرجة الوظيفية والعنوان للموظف.
-            </p>
+            <h2 className="text-xl font-bold text-white tracking-tight">إطلاق استمارات التقييم المعتمدة لعام ({year})</h2>
           </div>
 
           <div className="flex items-center gap-2">
             <Button
               onClick={handlePrintSelectedForms}
               variant="outline"
-              className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border-amber-400/30 backdrop-blur-xs font-bold text-xs py-2 px-4 rounded-xl flex items-center gap-2 cursor-pointer transition-all"
+              className="bg-amber-400 hover:bg-amber-500 text-slate-950 border-amber-400 font-bold text-xs py-2 px-4 rounded-xl flex items-center gap-2 cursor-pointer transition-all"
             >
               <Printer size={16} />
               <span>طباعة الاستمارات الورقية المحددة</span>
               {selectedEmpIds.size > 0 && (
-                <span className="bg-amber-500 text-slate-950 font-black px-1.5 py-0.5 rounded-md text-[10px] font-mono">
+                <span className="bg-slate-900 text-white font-black px-1.5 py-0.5 rounded-md text-[10px] font-mono">
                   {selectedEmpIds.size}
                 </span>
               )}
@@ -313,11 +313,11 @@ export default function ReleaseFormsTab({
         </div>
 
         {/* Filters and Org Unit Selector */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
           {/* Org Unit Single Tree Selector Button */}
           <div className="space-y-1.5 md:col-span-2">
             <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-              <Building2 size={14} />
+              <Building2 size={14} className="text-amber-300" />
               <span>التشكيل / القسم المحدد وفق الهيكل التنظيمي:</span>
             </label>
 
@@ -330,7 +330,7 @@ export default function ReleaseFormsTab({
                 <div className="p-1.5 rounded-lg bg-amber-400 text-slate-950 flex-shrink-0">
                   <Network size={16} />
                 </div>
-                <span className="truncate text-xs font-black">
+                <span className="truncate text-xs font-black text-white">
                   {selectedOrgUnit === 'all'
                     ? 'جميع التشكيلات والأقسام'
                     : selectedOrgUnit === 'unassigned'
@@ -348,7 +348,7 @@ export default function ReleaseFormsTab({
           {/* Search Box */}
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-              <Search size={14} />
+              <Search size={14} className="text-amber-300" />
               <span>البحث السريع المباشر:</span>
             </label>
             <div className="relative">

@@ -82,7 +82,7 @@ export default function Dashboard() {
           }
         } else if (daysToRetirement > 0 && daysToRetirement <= notificationDays && !isRetired) {
           approachingCount++;
-          approachingList.push({ ...emp, age, daysToRetirement, statusBadge: `باقي ${Math.round(daysToRetirement/30)} شهر` });
+          approachingList.push({ ...emp, age, daysToRetirement, statusBadge: `باقي ${daysToRetirement} يوم` });
         }
       });
 

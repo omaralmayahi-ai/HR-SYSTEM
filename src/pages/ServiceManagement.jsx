@@ -911,7 +911,7 @@ export default function ServiceManagement() {
                   </tr>
                 ) : (
                   filteredMonitoredEmployees.map((emp) => {
-                    const { age, reachedAge, isApproaching, monthsToRetirement, hasExtension, isRetired } = emp.retirementAnalysis;
+                    const { age, reachedAge, isApproaching, daysToRetirement, hasExtension, isRetired } = emp.retirementAnalysis;
 
                     return (
                       <tr key={emp.id} className="hover:bg-slate-50/80 transition-colors">
@@ -949,7 +949,7 @@ export default function ServiceManagement() {
                           ) : isApproaching ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-200">
                               <Hourglass size={12} className="text-amber-700" />
-                              يقترب من التقاعد (باقي {monthsToRetirement} شهر)
+                              يقترب من التقاعد (باقي {daysToRetirement} يوم)
                             </span>
                           ) : (
                             <span className="text-slate-400">—</span>

@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiClient } from '@/api/apiClient';
+import { useAuth } from '@/lib/AuthContext';
 import { useToast } from '@/components/ui/use-toast';
+import { Button } from '@/components/ui/button';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Send, Clock, CheckCircle2, User, Calendar, RefreshCw, Loader2, Award
+  Send, Clock, CheckCircle2, User, Calendar, RefreshCw, Loader2, Award, ChevronRight, ChevronLeft
 } from 'lucide-react';
 import ReleaseFormsTab from '@/components/performance/ReleaseFormsTab';
 import PendingEvaluationsTab from '@/components/performance/PendingEvaluationsTab';
@@ -17,6 +19,8 @@ const DEFAULT_YEARS = Array.from({ length: baseEndYear - baseStartYear + 1 }, (_
 
 export default function Performance() {
   const { toast } = useToast();
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
   const [searchParams] = useSearchParams();
 
   // Active Tab State: 'release', 'pending', 'completed', 'history'
@@ -78,135 +82,138 @@ export default function Performance() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto font-sans" dir="rtl">
-      {/* Top Main Navigation Header */}
-      <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="p-3 bg-[#1B3A6B]/10 text-[#1B3A6B] rounded-2xl">
-            <Award size={26} />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-[#1B3A6B]">
-              إدارة وتقييم الأداء السنوي للموظفين
-            </h1>
-            <p className="text-slate-500 text-sm">
-              نظام متكامل لتعبئة درجات التقييمات، اعتماد النتائج، ومتابعة السجل السنوي وفق الهيكل التنظيمي المعتمد
-            </p>
-          </div>
-        </div>
+      {/* Unified Master Banner Card */}
+      <div 
+        className="rounded-2xl p-6 text-white shadow-md relative overflow-hidden text-right transition-colors"
+        style={{ background: `linear-gradient(to left, ${primaryColor}, ${primaryColor}e6, ${primaryColor}cc)` }}
+        dir="rtl"
+      >
+        <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-white/5 -skew-x-12 pointer-events-none" />
 
-        {/* Flexible Unlimited Year Selector & Refresh */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs">
-            <Calendar size={16} className="text-[#1B3A6B]" />
-            <span className="text-xs font-bold text-slate-700">سنة التقييم:</span>
-            <div className="flex items-center gap-1">
+        <div className="flex flex-col gap-6 relative z-10">
+          {/* Top Row: Main Title, Logo & Year Control */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+            {/* Top Right: Logo, Main Title & Description */}
+            <div className="flex items-start gap-3.5 text-right max-w-2xl">
+              <div className="p-3 bg-white/10 backdrop-blur-sm rounded-2xl text-amber-300 border border-white/20 shrink-0 mt-0.5 shadow-sm">
+                <Award size={28} />
+              </div>
+              <div>
+                <h1 className="text-xl sm:text-2xl font-black text-white leading-tight">
+                  إدارة وتقييم الأداء السنوي للموظفين
+                </h1>
+              </div>
+            </div>
+
+            {/* Top Left: Prominent Year Selector */}
+            <div className="flex items-center gap-2 text-white shrink-0 self-start lg:self-center">
+              <Calendar size={18} className="text-amber-300 shrink-0" />
+              <span className="text-xs font-bold text-blue-100 hidden sm:inline">سنة التقييم:</span>
+
+              <div className="flex items-center gap-1 bg-white/10 px-1 py-0.5 rounded-lg border border-white/15">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 text-white hover:bg-white/20 hover:text-white rounded-md"
+                  onClick={() => setSelectedYear(prev => (Number(prev) || currentYearNum) - 1)}
+                  title="السنة السابقة"
+                >
+                  <ChevronRight size={16} />
+                </Button>
+
+                <div className="px-2 font-black text-lg text-white text-center min-w-[50px] select-none font-mono">
+                  {selectedYear}
+                </div>
+
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 text-white hover:bg-white/20 hover:text-white rounded-md"
+                  onClick={() => setSelectedYear(prev => (Number(prev) || currentYearNum) + 1)}
+                  title="السنة التالية"
+                >
+                  <ChevronLeft size={16} />
+                </Button>
+              </div>
+
               <button
-                type="button"
-                onClick={() => setSelectedYear(prev => (Number(prev) || currentYearNum) - 1)}
-                className="w-6 h-6 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 font-black text-xs flex items-center justify-center transition-colors cursor-pointer"
-                title="السنة السابقة"
+                onClick={fetchData}
+                disabled={loading}
+                className="p-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-all border border-white/15 cursor-pointer"
+                title="تحديث البيانات"
               >
-                -
-              </button>
-              <input
-                type="number"
-                value={selectedYear ?? ''}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) setSelectedYear(val);
-                  else if (e.target.value === '') setSelectedYear('');
-                }}
-                onBlur={() => {
-                  if (!selectedYear || isNaN(selectedYear)) setSelectedYear(currentYearNum);
-                }}
-                placeholder="السنة"
-                className="w-16 text-center font-black text-xs text-[#1B3A6B] bg-white border border-slate-300 rounded-lg py-1 focus:ring-2 focus:ring-[#1B3A6B] focus:outline-none font-mono"
-              />
-              <button
-                type="button"
-                onClick={() => setSelectedYear(prev => (Number(prev) || currentYearNum) + 1)}
-                className="w-6 h-6 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 font-black text-xs flex items-center justify-center transition-colors cursor-pointer"
-                title="السنة التالية"
-              >
-                +
+                <RefreshCw size={16} className={loading ? 'animate-spin text-amber-300' : ''} />
               </button>
             </div>
           </div>
 
-          <button
-            onClick={fetchData}
-            disabled={loading}
-            className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-all shadow-2xs"
-            title="تحديث البيانات"
-          >
-            <RefreshCw size={18} className={loading ? 'animate-spin text-[#1B3A6B]' : ''} />
-          </button>
+          {/* Bottom Row: Centered Navigation Tabs */}
+          <div className="pt-4 border-t border-white/15 flex justify-center w-full">
+            <div className="bg-white/10 p-1.5 rounded-2xl border border-white/20 flex flex-wrap sm:flex-nowrap items-center justify-center gap-1.5 max-w-full">
+              <button
+                onClick={() => setActiveTab('release')}
+                className={`px-4 py-2 rounded-xl font-bold text-xs transition-all flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'release'
+                    ? 'bg-white text-[#1B3A6B] shadow-sm'
+                    : 'text-blue-100 hover:bg-white/15 hover:text-white'
+                }`}
+              >
+                <Send size={15} />
+                <span>إطلاق استمارة التقييم</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('pending')}
+                className={`px-4 py-2 rounded-xl font-bold text-xs transition-all flex items-center gap-2 relative cursor-pointer ${
+                  activeTab === 'pending'
+                    ? 'bg-white text-[#1B3A6B] shadow-sm'
+                    : 'text-blue-100 hover:bg-white/15 hover:text-white'
+                }`}
+              >
+                <Clock size={15} />
+                <span>استمارات بانتظار التقييم</span>
+                {pendingCountForYear > 0 && (
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-black ${
+                    activeTab === 'pending' ? 'bg-amber-500 text-white' : 'bg-amber-400/30 text-amber-200 border border-amber-400/30'
+                  }`}>
+                    {pendingCountForYear}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setActiveTab('completed')}
+                className={`px-4 py-2 rounded-xl font-bold text-xs transition-all flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'completed'
+                    ? 'bg-white text-[#1B3A6B] shadow-sm'
+                    : 'text-blue-100 hover:bg-white/15 hover:text-white'
+                }`}
+              >
+                <CheckCircle2 size={15} />
+                <span>التقييمات المنجزة</span>
+                {completedCountForYear > 0 && (
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-black ${
+                    activeTab === 'completed' ? 'bg-emerald-500 text-white' : 'bg-emerald-400/30 text-emerald-200 border border-emerald-400/30'
+                  }`}>
+                    {completedCountForYear}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setActiveTab('history')}
+                className={`px-4 py-2 rounded-xl font-bold text-xs transition-all flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'history'
+                    ? 'bg-white text-[#1B3A6B] shadow-sm'
+                    : 'text-blue-100 hover:bg-white/15 hover:text-white'
+                }`}
+              >
+                <User size={15} />
+                <span>سجل وتاريخ موظف محدد</span>
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
-
-      {/* Main Tabs Bar */}
-      <div className="flex items-center gap-2 bg-white p-2 rounded-2xl border border-slate-100 shadow-sm overflow-x-auto text-xs font-bold">
-        <button
-          onClick={() => setActiveTab('release')}
-          className={`flex-1 min-w-[160px] py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'release'
-              ? 'bg-[#1B3A6B] text-white shadow-sm'
-              : 'text-slate-600 hover:text-[#1B3A6B] hover:bg-slate-50'
-          }`}
-        >
-          <Send size={15} />
-          <span>إطلاق استمارات التقييم</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('pending')}
-          className={`flex-1 min-w-[160px] py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 relative ${
-            activeTab === 'pending'
-              ? 'bg-[#1B3A6B] text-white shadow-sm'
-              : 'text-slate-600 hover:text-[#1B3A6B] hover:bg-slate-50'
-          }`}
-        >
-          <Clock size={15} />
-          <span>استمارات بانتظار التقييم</span>
-          {pendingCountForYear > 0 && (
-            <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
-              activeTab === 'pending' ? 'bg-amber-500 text-white' : 'bg-amber-100 text-amber-800'
-            }`}>
-              {pendingCountForYear}
-            </span>
-          )}
-        </button>
-
-        <button
-          onClick={() => setActiveTab('completed')}
-          className={`flex-1 min-w-[160px] py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'completed'
-              ? 'bg-[#1B3A6B] text-white shadow-sm'
-              : 'text-slate-600 hover:text-[#1B3A6B] hover:bg-slate-50'
-          }`}
-        >
-          <CheckCircle2 size={15} />
-          <span>التقييمات المنجزة</span>
-          {completedCountForYear > 0 && (
-            <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
-              activeTab === 'completed' ? 'bg-emerald-500 text-white' : 'bg-emerald-100 text-emerald-800'
-            }`}>
-              {completedCountForYear}
-            </span>
-          )}
-        </button>
-
-        <button
-          onClick={() => setActiveTab('history')}
-          className={`flex-1 min-w-[160px] py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'history'
-              ? 'bg-[#1B3A6B] text-white shadow-sm'
-              : 'text-slate-600 hover:text-[#1B3A6B] hover:bg-slate-50'
-          }`}
-        >
-          <User size={15} />
-          <span>سجل وتاريخ موظف محدد</span>
-        </button>
       </div>
 
       {/* Loading Overlay or Sub-View Content */}

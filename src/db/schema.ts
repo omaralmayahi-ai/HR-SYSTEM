@@ -182,34 +182,92 @@ export const performanceEvaluations = pgTable('performance_evaluations', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// 7. Trainings table
-export const trainings = pgTable('trainings', {
+// 7. Trainers table (دليل المدربين)
+export const trainers = pgTable('trainers', {
   id: serial('id').primaryKey(),
-  courseName: text('course_name').notNull(),
-  courseType: text('course_type').notNull(),
-  provider: text('provider'),
-  location: text('location'),
-  startDate: text('start_date').notNull(),
-  endDate: text('end_date').notNull(),
-  hours: integer('hours'),
-  days: integer('days'),
-  orderNumber: text('order_number'),
-  description: text('description'),
-  status: text('status').default('مخطط'),
+  employeeId: integer('employee_id'),
+  employeeCode: text('employee_code'),
+  fullName: text('full_name').notNull(),
+  trainerCode: text('trainer_code'), // كود المدرب عند الاعتماد
+  courseCategories: text('course_categories'), // طبيعة الدورات (إدارية، حاسوب، HSE، اختصاص)
+  specialtyDetails: text('specialty_details'), // طبيعة الاختصاص (إذا تم اختيار اختصاص)
+  specialization: text('specialization'), // التخصص العام والخبرة
+  trainerType: text('trainer_type').default('داخلي'), // 'داخلي' أو 'خارجي'
+  organization: text('organization'), // الجهة / الشركة / المعهد
+  phone: text('phone'), // رقم الهاتف المحمول
+  workPhone: text('work_phone'), // رقم هاتف العمل
+  email: text('email'),
+  status: text('status').default('معتمد'), // 'معتمد', 'قيد الاعتماد', 'محظور'
+  rating: text('rating'), // تقييم المدرب
+  notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// 8. Training Enrollments table
+// 8. Annual Training Plans table (خطط التدريب السنوية)
+export const annualTrainingPlans = pgTable('annual_training_plans', {
+  id: serial('id').primaryKey(),
+  year: integer('year').notNull(), // السنة (2024, 2025, 2026, إلخ)
+  track: text('track').notNull(), // 'تدريب داخلي', 'تدريب خارجي وإيفادات', 'تدريب صيفي'
+  plannedCoursesCount: integer('planned_courses_count').default(0), // عدد الدورات المخطط
+  plannedTraineesCount: integer('planned_trainees_count').default(0), // عدد المتدربين المخطط
+  plannedBudget: integer('planned_budget').default(0), // الميزانية المخططة
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 9. Trainings table (جدول الدورات والإيفادات والتدريب الصيفي)
+export const trainings = pgTable('trainings', {
+  id: serial('id').primaryKey(),
+  year: integer('year').default(2026),
+  track: text('track').default('تدريب داخلي'), // 'تدريب داخلي', 'تدريب خارجي وإيفادات', 'تدريب صيفي'
+  courseName: text('course_name').notNull(),
+  category: text('category').default('إدارية'), // 'إدارية', 'حاسوب', 'اختصاص', 'HSE'
+  courseType: text('course_type').default('حضوري'), // 'حضوري', 'إلكتروني'
+  locationType: text('location_type').default('موقعي'), // 'موقعي', 'خارجي', 'دولي'
+  location: text('location'), // تفاصيل المكان (المقر، المعهد النفطي، إلخ)
+  country: text('country'), // الدولة (للتدريب الخارجي)
+  provider: text('provider'), // الجهة المنفذة / الجامعة للتدريب الصيفي
+  trainerId: integer('trainer_id'), // مرجع المدرب (اختياري)
+  trainerName: text('trainer_name'), // اسم المدرب (للتوافق والسهولة)
+  startDate: text('start_date').notNull(),
+  endDate: text('end_date').notNull(),
+  hours: integer('hours').default(0),
+  days: integer('days').default(1),
+  orderNumber: text('order_number'), // رقم الأمر الإداري / كتاب الإيفاد
+  courseCode: text('course_code'), // رمز الدورة
+  isOutsidePlan: boolean('is_outside_plan').default(false), // هل الدورة خارج الخطة؟
+  targetAudience: text('target_audience'), // الفئة المستهدفة (الدرجات الوظيفية)
+  durationValue: integer('duration_value').default(1), // مدة الدورة (قيمة عدشية)
+  durationUnit: text('duration_unit').default('بالأيام'), // مدة الدورة (بالأيام - بالأسابيع - بالأشهر)
+  outsidePlanReason: text('outside_plan_reason'), // سبب إنشاء دورة تدريبية خارج الخطة
+  trainerRating: text('trainer_rating'), // تقييم المتدربين للمدرب
+  courseFeedback: text('course_feedback'), // الملاحظات والتقييم للبرنامج التدريبي
+  description: text('description'), // الوصف والأهداف
+  status: text('status').default('مخطط'), // 'مخطط', 'جاري', 'منتهي', 'ملغى'
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 10. Training Enrollments table (جدول تسجيل المتدربين والنتائج)
 export const trainingEnrollments = pgTable('training_enrollments', {
   id: serial('id').primaryKey(),
   trainingId: integer('training_id')
     .references(() => trainings.id, { onDelete: 'cascade' })
     .notNull(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
-    .notNull(),
+    .references(() => employees.id, { onDelete: 'cascade' }), // غير إجباري ليتيح تسجيل المتدربين الخارجيين والطلاب
+  isExternalParticipant: boolean('is_external_participant').default(false), // هل المشارك خارجي / طالب؟
+  externalParticipantName: text('external_participant_name'), // اسم المشارك الخارجي / الطالب
+  externalParticipantEntity: text('external_participant_entity'), // الجهة الخارجية / الجامعة
+  externalParticipantPhone: text('external_participant_phone'), // رقم هاتف المشارك الخارجي
   enrollmentDate: text('enrollment_date'),
-  result: text('result').default('قيد التقييم'),
+  result: text('result').default('قيد التقييم'), // 'اجتاز', 'لم يجتز', 'مشارك', 'انسحب', 'قيد التقييم'
+  score: text('score'), // الدرجة المئوية (مثل: 85%)
+  grade: text('grade'), // التقدير (ممتاز، جيد جداً، إلخ)
+  certificateNumber: text('certificate_number'), // رقم شهادة المشاركة
+  certificateType: text('certificate_type'), // 'شهادة مشاركة' أو 'شهادة اجتياز'
+  certificateIssueDate: text('certificate_issue_date'), // تاريخ استصدار الشهادة
+  trainerRating: text('trainer_rating'), // تقييم المتدرب للمدرب
+  courseFeedback: text('course_feedback'), // ملاحظات المتدرب على البرنامج
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
 });
