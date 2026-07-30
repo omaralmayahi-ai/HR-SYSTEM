@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { apiClient } from '@/api/apiClient';
+import { useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Award, ShieldAlert, Search, Trash2, Edit3, CheckCircle2, FileText, AlertTriangle, Building2, MapPin, RotateCcw, Check, User, Users } from 'lucide-react';
+import { Award, ShieldAlert, Search, Trash2, Edit3, FileText, AlertTriangle, Building2, MapPin, RotateCcw, Check, User, Users } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useSearchParams } from 'react-router-dom';
 import { formatCurrency, getGradeLabel, getStepLabel } from '@/lib/salaryTable';
@@ -119,6 +120,10 @@ function EmployeeSearchSelect({ employees, value, onChange, placeholder = "اب�
 }
 
 export default function Penalties() {
+  const { toast } = useToast();
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
+  const secondaryColor = appPublicSettings?.secondaryColor || '#C8960C';
   const [searchParams] = useSearchParams();
 
   // Active Tab: add_appreciation | add_penalty | query_employee | query_order
@@ -148,8 +153,6 @@ export default function Penalties() {
   const [orderTypeFilter, setOrderTypeFilter] = useState('all');
   const [orderQuerySearchTerm, setOrderQuerySearchTerm] = useState('');
   const [isOrderDropdownOpen, setIsOrderDropdownOpen] = useState(false);
-
-  const { toast } = useToast();
 
   // Appreciation Form
   const [appreciationForm, setAppreciationForm] = useState({
@@ -999,93 +1002,89 @@ export default function Penalties() {
 
   return (
     <div className="space-y-6" dir="rtl">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4" dir="rtl">
-        <div className="text-right">
-          <h1 className="text-2xl font-black text-[#1B3A6B]">التشكرات والعقوبات الإدارية</h1>
-          <p className="text-slate-500 text-xs mt-1">
-            إضافة وتوثيق كتب الشكر والتقدير والعقوبات الإدارية والاستعلام المباشر عن الموظفين والكتب الرسمية
-          </p>
-        </div>
-      </div>
+      {/* Main Tabs Container */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full space-y-6" dir="rtl">
+        {/* Header Banner Card */}
+        <div 
+          className="rounded-2xl p-6 text-white shadow-md relative overflow-hidden text-right transition-colors"
+          style={{ background: `linear-gradient(to left, ${primaryColor}, ${primaryColor}e6, ${primaryColor}cc)` }}
+          dir="rtl"
+        >
+          <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-white/5 -skew-x-12 pointer-events-none" />
+          <div className="flex items-center gap-3.5 relative z-10">
+            <div className="p-3 bg-white/10 backdrop-blur-sm rounded-2xl text-amber-300 border border-white/20 shrink-0 shadow-sm">
+              <Award size={28} />
+            </div>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-black text-white leading-tight">
+                التشكرات والعقوبات الإدارية
+              </h1>
+              <p className="text-blue-100 text-xs mt-1 leading-relaxed">
+                إضافة وتوثيق كتب الشكر والتقدير والعقوبات الإدارية والاستعلام المباشر عن الموظفين والكتب الرسمية
+              </p>
+            </div>
+          </div>
 
-      {/* Main Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full" dir="rtl">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200 pb-3" dir="rtl">
-          <TabsList className="bg-slate-100 p-1 rounded-2xl gap-1 flex flex-wrap">
-            <TabsTrigger
-              value="add_appreciation"
-              className="rounded-xl px-4 py-2 text-xs font-bold gap-2 data-[state=active]:bg-emerald-700 data-[state=active]:text-white transition-all"
-            >
-              <Award size={16} />
-              إضافة كتاب شكر وتقدير
-            </TabsTrigger>
+          {/* Horizontally Centered Tab Buttons at the Bottom of Card */}
+          <div className="mt-5 pt-4 border-t border-white/20 flex justify-center relative z-10">
+            <TabsList className="bg-white/15 backdrop-blur-md p-1.5 rounded-2xl gap-1.5 flex flex-wrap justify-center border border-white/20 h-auto">
+              <TabsTrigger
+                value="add_appreciation"
+                style={activeTab === 'add_appreciation' ? { backgroundColor: '#ffffff', color: primaryColor } : {}}
+                className={`rounded-xl px-4 py-2 text-xs font-bold gap-2 transition-all cursor-pointer ${
+                  activeTab === 'add_appreciation'
+                    ? 'bg-white shadow-xs font-black'
+                    : 'text-white hover:bg-white/10'
+                }`}
+              >
+                <Award size={16} />
+                إضافة كتاب شكر وتقدير
+              </TabsTrigger>
 
-            <TabsTrigger
-              value="add_penalty"
-              className="rounded-xl px-4 py-2 text-xs font-bold gap-2 data-[state=active]:bg-rose-700 data-[state=active]:text-white transition-all"
-            >
-              <ShieldAlert size={16} />
-              تسجيل عقوبة إدارية
-            </TabsTrigger>
+              <TabsTrigger
+                value="add_penalty"
+                style={activeTab === 'add_penalty' ? { backgroundColor: '#ffffff', color: primaryColor } : {}}
+                className={`rounded-xl px-4 py-2 text-xs font-bold gap-2 transition-all cursor-pointer ${
+                  activeTab === 'add_penalty'
+                    ? 'bg-white shadow-xs font-black'
+                    : 'text-white hover:bg-white/10'
+                }`}
+              >
+                <ShieldAlert size={16} />
+                تسجيل عقوبة إدارية
+              </TabsTrigger>
 
-            <TabsTrigger
-              value="query_employee"
-              className="rounded-xl px-4 py-2 text-xs font-bold gap-2 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white transition-all"
-            >
-              <Search size={16} />
-              الاستعلام عن موظف
-            </TabsTrigger>
+              <TabsTrigger
+                value="query_employee"
+                style={activeTab === 'query_employee' ? { backgroundColor: '#ffffff', color: primaryColor } : {}}
+                className={`rounded-xl px-4 py-2 text-xs font-bold gap-2 transition-all cursor-pointer ${
+                  activeTab === 'query_employee'
+                    ? 'bg-white shadow-xs font-black'
+                    : 'text-white hover:bg-white/10'
+                }`}
+              >
+                <Search size={16} />
+                الاستعلام عن موظف
+              </TabsTrigger>
 
-            <TabsTrigger
-              value="query_order"
-              className="rounded-xl px-4 py-2 text-xs font-bold gap-2 data-[state=active]:bg-amber-600 data-[state=active]:text-white transition-all"
-            >
-              <FileText size={16} />
-              الاستعلام عن كتاب (شكر / عقوبة)
-            </TabsTrigger>
-          </TabsList>
+              <TabsTrigger
+                value="query_order"
+                style={activeTab === 'query_order' ? { backgroundColor: '#ffffff', color: primaryColor } : {}}
+                className={`rounded-xl px-4 py-2 text-xs font-bold gap-2 transition-all cursor-pointer ${
+                  activeTab === 'query_order'
+                    ? 'bg-white shadow-xs font-black'
+                    : 'text-white hover:bg-white/10'
+                }`}
+              >
+                <FileText size={16} />
+                الاستعلام عن كتاب (شكر / عقوبة)
+              </TabsTrigger>
+            </TabsList>
+          </div>
         </div>
 
         {/* ----------------- TAB 1: ADD APPRECIATION ----------------- */}
         <TabsContent value="add_appreciation" className="space-y-5 mt-5" dir="rtl">
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" dir="rtl">
-            <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-4 flex items-center justify-between text-right">
-              <div className="text-right">
-                <p className="text-emerald-800 text-xs font-bold mb-0.5">إجمالي كتب الشكر</p>
-                <p className="text-2xl font-black text-emerald-900">{uniqueAppreciationOrders.totalCount}</p>
-              </div>
-              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                <Award size={20} />
-              </div>
-            </div>
-
-            <div className="bg-blue-50/60 border border-blue-100 rounded-2xl p-4 flex items-center justify-between text-right">
-              <div className="text-right">
-                <p className="text-blue-800 text-xs font-bold mb-0.5">شكر بأثر قدم ممتاز</p>
-                <p className="text-2xl font-black text-blue-900">
-                  {uniqueAppreciationOrders.seniorityCount}
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center shrink-0">
-                <FileText size={20} />
-              </div>
-            </div>
-
-            <div className="bg-amber-50/60 border border-amber-100 rounded-2xl p-4 flex items-center justify-between text-right">
-              <div className="text-right">
-                <p className="text-amber-800 text-xs font-bold mb-0.5">شكر معنوي فقط</p>
-                <p className="text-2xl font-black text-amber-900">
-                  {uniqueAppreciationOrders.moralCount}
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                <CheckCircle2 size={20} />
-              </div>
-            </div>
-          </div>
-
           {/* Form for Adding / Editing Appreciation */}
           {showAppreciationForm && (
             <form onSubmit={handleAppreciationSubmit} dir="rtl" className="bg-white rounded-2xl p-6 shadow-sm border border-emerald-200/80 space-y-5 text-right">
@@ -1104,9 +1103,10 @@ export default function Penalties() {
                     <button
                       type="button"
                       onClick={() => setAppreciationTargetMode('single')}
-                      className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                      style={appreciationTargetMode === 'single' ? { backgroundColor: primaryColor, borderColor: primaryColor, color: '#fff' } : {}}
+                      className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
                         appreciationTargetMode === 'single'
-                          ? 'bg-emerald-700 text-white border-emerald-700 shadow-sm'
+                          ? 'text-white shadow-sm'
                           : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
@@ -1116,9 +1116,10 @@ export default function Penalties() {
                     <button
                       type="button"
                       onClick={() => setAppreciationTargetMode('multiple')}
-                      className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                      style={appreciationTargetMode === 'multiple' ? { backgroundColor: primaryColor, borderColor: primaryColor, color: '#fff' } : {}}
+                      className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
                         appreciationTargetMode === 'multiple'
-                          ? 'bg-emerald-700 text-white border-emerald-700 shadow-sm'
+                          ? 'text-white shadow-sm'
                           : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
@@ -1128,9 +1129,10 @@ export default function Penalties() {
                     <button
                       type="button"
                       onClick={() => setAppreciationTargetMode('category')}
-                      className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                      style={appreciationTargetMode === 'category' ? { backgroundColor: primaryColor, borderColor: primaryColor, color: '#fff' } : {}}
+                      className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
                         appreciationTargetMode === 'category'
-                          ? 'bg-emerald-700 text-white border-emerald-700 shadow-sm'
+                          ? 'text-white shadow-sm'
                           : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                       }`}
                     >
@@ -1569,9 +1571,10 @@ export default function Penalties() {
                                   return { ...prev, selectedQualifications: updated, qualification: 'all' };
                                 });
                               }}
-                              className={`text-xs px-2.5 py-1 rounded-xl transition-all border font-medium ${
+                              style={isSelected ? { backgroundColor: primaryColor, borderColor: primaryColor, color: '#fff' } : {}}
+                              className={`text-xs px-2.5 py-1 rounded-xl transition-all border font-medium cursor-pointer ${
                                 isSelected
-                                  ? 'bg-[#1B3A6B] text-white border-[#1B3A6B] shadow-xs'
+                                  ? 'text-white shadow-xs'
                                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                               }`}
                             >
@@ -1822,7 +1825,8 @@ export default function Penalties() {
                       <Button
                         type="button"
                         size="sm"
-                        className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs rounded-xl px-3"
+                        style={{ backgroundColor: primaryColor }}
+                        className="text-white text-xs rounded-xl px-3 hover:opacity-90 transition-opacity"
                         onClick={() => {
                           if (newIssuerText.trim()) {
                             handleAddCustomIssuer(newIssuerText);
@@ -1928,7 +1932,8 @@ export default function Penalties() {
                 <Button
                   type="submit"
                   disabled={submittingBatch}
-                  className="bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold gap-2 px-6 shadow-xs"
+                  style={{ backgroundColor: primaryColor }}
+                  className="text-white rounded-xl text-xs font-bold gap-2 px-6 shadow-xs hover:opacity-90 transition-opacity cursor-pointer"
                 >
                   {submittingBatch ? (
                     <>
@@ -1957,31 +1962,6 @@ export default function Penalties() {
 
         {/* ----------------- TAB 2: ADD PENALTY ----------------- */}
         <TabsContent value="add_penalty" className="space-y-5 mt-5" dir="rtl">
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4" dir="rtl">
-            <div className="bg-rose-50/60 border border-rose-100 rounded-2xl p-4 flex items-center justify-between">
-              <div>
-                <p className="text-rose-800 text-xs font-bold mb-0.5">إجمالي العقوبات المسجلة</p>
-                <p className="text-2xl font-black text-rose-900">{uniquePenaltyOrders.totalCount}</p>
-              </div>
-              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center">
-                <ShieldAlert size={20} />
-              </div>
-            </div>
-
-            <div className="bg-amber-50/60 border border-amber-100 rounded-2xl p-4 flex items-center justify-between">
-              <div>
-                <p className="text-amber-800 text-xs font-bold mb-0.5">عقوبات نافذة حالياً</p>
-                <p className="text-2xl font-black text-amber-900">
-                  {uniquePenaltyOrders.activeCount}
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
-                <AlertTriangle size={20} />
-              </div>
-            </div>
-          </div>
-
           {/* Form for Adding / Editing Penalty */}
           {showPenaltyForm && (
             <form onSubmit={handlePenaltySubmit} dir="rtl" className="bg-white rounded-2xl p-6 shadow-sm border border-rose-200/80 space-y-5 text-right">
@@ -2103,7 +2083,11 @@ export default function Penalties() {
 
               {/* Submit Buttons */}
               <div className="flex items-center justify-start gap-2 pt-3 border-t border-slate-100 mt-4" dir="rtl">
-                <Button type="submit" className="bg-rose-700 hover:bg-rose-800 text-white rounded-xl text-xs font-bold gap-1 px-6 shadow-xs">
+                <Button
+                  type="submit"
+                  style={{ backgroundColor: primaryColor }}
+                  className="text-white rounded-xl text-xs font-bold gap-1 px-6 shadow-xs hover:opacity-90 transition-opacity cursor-pointer"
+                >
                   {editingPenalty ? 'تحديث العقوبة' : 'تسجيل العقوبة الإدارية'}
                 </Button>
                 <Button variant="outline" type="button" className="rounded-xl text-xs font-bold" onClick={resetPenaltyForm}>
@@ -2120,13 +2104,10 @@ export default function Penalties() {
           <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4 text-right">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
               <div>
-                <h3 className="font-bold text-[#1B3A6B] text-sm flex items-center gap-2">
-                  <User size={18} className="text-[#1B3A6B]" />
+                <h3 className="font-bold text-sm flex items-center gap-2" style={{ color: primaryColor }}>
+                  <User size={18} style={{ color: primaryColor }} />
                   الاستعلام المباشر عن سجل الموظف
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  ابحث باسم الموظف أو رقم الشركة لاستعراض سجل كتب الشكر والعقوبات الإدارية الخاصة به
-                </p>
               </div>
               {selectedEmployeeForQuery && (
                 <Button
@@ -2189,7 +2170,10 @@ export default function Penalties() {
                 <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-xs text-right space-y-5">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-2xl bg-[#1B3A6B]/10 text-[#1B3A6B] font-bold flex items-center justify-center text-lg">
+                      <div 
+                        className="w-12 h-12 rounded-2xl font-bold flex items-center justify-center text-lg shrink-0"
+                        style={{ backgroundColor: `${primaryColor}15`, color: primaryColor }}
+                      >
                         <User size={24} />
                       </div>
                       <div>
@@ -2270,9 +2254,10 @@ export default function Penalties() {
                   <button
                     type="button"
                     onClick={() => setQueriedEmpSubTab('appreciations')}
+                    style={queriedEmpSubTab === 'appreciations' ? { backgroundColor: primaryColor, color: '#fff' } : {}}
                     className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
                       queriedEmpSubTab === 'appreciations'
-                        ? 'bg-emerald-700 text-white shadow-xs'
+                        ? 'text-white shadow-xs'
                         : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                     }`}
                   >
@@ -2283,9 +2268,10 @@ export default function Penalties() {
                   <button
                     type="button"
                     onClick={() => setQueriedEmpSubTab('penalties')}
+                    style={queriedEmpSubTab === 'penalties' ? { backgroundColor: primaryColor, color: '#fff' } : {}}
                     className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
                       queriedEmpSubTab === 'penalties'
-                        ? 'bg-rose-700 text-white shadow-xs'
+                        ? 'text-white shadow-xs'
                         : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                     }`}
                   >
@@ -2487,9 +2473,6 @@ export default function Penalties() {
                 <FileText size={18} className="text-amber-600" />
                 الاستعلام المباشر عن الكتب الرسمية والأوامر الإدارية
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                ابحث برقم الكتاب أو الجهة واختاره من القائمة المنسدلة لرؤية كافة الموظفين المشمولين به
-              </p>
             </div>
 
             <div className="flex flex-col sm:flex-row items-center gap-3">
@@ -2687,7 +2670,7 @@ export default function Penalties() {
                           return (
                             <tr key={rec.id} className="hover:bg-slate-50">
                               <td className="px-4 py-3 text-slate-400 font-mono">{idx + 1}</td>
-                              <td className="px-4 py-3 font-bold text-[#1B3A6B]">
+                              <td className="px-4 py-3 font-bold" style={{ color: primaryColor }}>
                                 {emp ? (emp.full_name || emp.fullName) : '—'}
                               </td>
                               <td className="px-4 py-3 font-mono font-bold text-slate-700">
@@ -2781,7 +2764,8 @@ export default function Penalties() {
             <Button
               type="button"
               onClick={() => setShowOrgPickerModal(false)}
-              className="bg-[#1B3A6B] hover:bg-[#152e55] text-white rounded-xl text-xs font-bold px-5"
+              style={{ backgroundColor: primaryColor }}
+              className="text-white rounded-xl text-xs font-bold px-5 hover:opacity-90 transition-opacity"
             >
               تم الحفظ
             </Button>
@@ -2838,7 +2822,8 @@ export default function Penalties() {
             <Button
               type="button"
               onClick={() => setShowWorkLocationModal(false)}
-              className="bg-[#1B3A6B] hover:bg-[#152e55] text-white rounded-xl text-xs font-bold px-5"
+              style={{ backgroundColor: primaryColor }}
+              className="text-white rounded-xl text-xs font-bold px-5 hover:opacity-90 transition-opacity"
             >
               تم الحفظ
             </Button>
@@ -2940,7 +2925,8 @@ export default function Penalties() {
             <Button
               type="button"
               onClick={() => setShowJobTitleModal(false)}
-              className="bg-[#1B3A6B] hover:bg-[#152e55] text-white rounded-xl text-xs font-bold px-5"
+              style={{ backgroundColor: primaryColor }}
+              className="text-white rounded-xl text-xs font-bold px-5 hover:opacity-90 transition-opacity"
             >
               تم الحفظ
             </Button>

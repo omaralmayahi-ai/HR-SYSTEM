@@ -422,15 +422,15 @@ export default function FinancialRulesSettings() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2.5">
                           {emp.photo ? (
-                            <img src={emp.photo} alt={emp.name || emp.fullName} className="w-8 h-8 rounded-full object-cover border border-slate-200" referrerPolicy="no-referrer" />
+                            <img src={emp.photo} alt={emp.full_name || emp.fullName || emp.name} className="w-8 h-8 rounded-full object-cover border border-slate-200" referrerPolicy="no-referrer" />
                           ) : (
                             <div className="w-8 h-8 rounded-full bg-[#1B3A6B]/10 text-[#1B3A6B] flex items-center justify-center font-bold text-xs">
-                              {(emp.name || emp.fullName || '?').charAt(0)}
+                              {(emp.full_name || emp.fullName || emp.name || '?').charAt(0)}
                             </div>
                           )}
                           <div>
-                            <span className="font-bold text-slate-800 block">{emp.name || emp.fullName}</span>
-                            <span className="text-[10px] text-slate-400 block">رقم التقاعد: {emp.retirement_number || emp.retirementNumber || 'غير مدرج'}</span>
+                            <span className="font-bold text-slate-800 block">{emp.full_name || emp.fullName || emp.name || '—'}</span>
+                            <span className="text-[10px] text-slate-400 block">رقم الشركة: {emp.company_number || emp.companyNumber || emp.civil_service_number || emp.employee_number || emp.id || 'غير مدرج'}</span>
                           </div>
                         </div>
                       </td>
@@ -509,7 +509,7 @@ export default function FinancialRulesSettings() {
             <div className="bg-[#1B3A6B] text-white p-5 flex justify-between items-center">
               <div>
                 <h3 className="text-sm font-bold">تمديد الخدمة وتأجيل الإحالة للتقاعد</h3>
-                <p className="text-[11px] text-white/80 mt-1">تأجيل تاريخ التقاعد للموظف: {selectedEmployee.name || selectedEmployee.fullName}</p>
+                <p className="text-[11px] text-white/80 mt-1">تأجيل تاريخ التقاعد للموظف: {selectedEmployee.full_name || selectedEmployee.fullName || selectedEmployee.name}</p>
               </div>
               <button
                 type="button"

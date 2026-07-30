@@ -41,7 +41,7 @@ export default function Sidebar({ role, isCollapsed, setIsCollapsed }) {
   return (
     <aside 
       className={cn(
-        "min-h-screen bg-[#1B3A6B] flex flex-col shadow-xl transition-all duration-300 ease-in-out relative shrink-0 z-20",
+        "min-h-screen bg-[#1B3A6B] flex flex-col shadow-xl transition-all duration-300 ease-in-out relative shrink-0 z-50",
         isCollapsed ? "w-20" : "w-64"
       )} 
       dir="rtl"
@@ -50,10 +50,10 @@ export default function Sidebar({ role, isCollapsed, setIsCollapsed }) {
       <button
         type="button"
         onClick={() => setIsCollapsed(!isCollapsed)}
-        className="absolute top-6 -left-3 w-6 h-6 rounded-full bg-[#C8960C] hover:bg-[#b0830a] text-white flex items-center justify-center border border-white shadow-md transition-transform duration-200 hover:scale-110 z-50 cursor-pointer"
+        className="absolute top-5 -left-4 w-8 h-8 rounded-full bg-[#C8960C] hover:bg-[#b0830a] text-white flex items-center justify-center border-2 border-white shadow-lg transition-all duration-200 hover:scale-110 z-50 cursor-pointer"
         title={isCollapsed ? "توسيع القائمة الجانبية" : "طي القائمة الجانبية"}
       >
-        {isCollapsed ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
+        {isCollapsed ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
       </button>
 
       {/* Logo */}

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useAuth } from '@/lib/AuthContext';
 import { EVALUATION_GRADE_SCALE } from '@/lib/evaluationEngine';
 import {
   User, Search, Calendar, Printer, Eye, Clock,
@@ -288,21 +289,20 @@ export default function EmployeeHistoryTab({
       }));
   }, [empHistoryEvals]);
 
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
+
   return (
     <div className="space-y-6 font-sans" dir="rtl">
       {/* Header */}
-      <div className="bg-[#1B3A6B] text-white rounded-2xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div 
+        className="rounded-2xl p-6 text-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors"
+        style={{ background: `linear-gradient(to left, ${primaryColor}, ${primaryColor}e6, ${primaryColor}cc)` }}
+      >
         <div className="space-y-1">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/10 text-white rounded-full text-xs font-medium">
-            <User size={14} />
-            السجل التقييمي الشامل والمخطط البياني للموظف
-          </div>
           <h2 className="text-xl font-bold tracking-tight">
             البحث والاستعلام عن تقييمات الموظف حسب السنوات
           </h2>
-          <p className="text-xs text-slate-200 max-w-2xl leading-relaxed">
-            تصفح السجل التقييمي للموظفين وفق الهيكل التنظيمي، التنقل بين سنوات التقييم المسجلة، معاينة وطباعة الاستمارات الرسمية، ومتابعة منحنى تطور الأداء عبر المخطط البياني.
-          </p>
         </div>
       </div>
 

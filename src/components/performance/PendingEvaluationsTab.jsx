@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
+import { useAuth } from '@/lib/AuthContext';
 import { apiClient } from '@/api/apiClient';
 import {
   Clock, Search, Edit3, Printer, CheckSquare, Square,
@@ -22,6 +23,8 @@ export default function PendingEvaluationsTab({
   onRefreshData
 }) {
   const { toast } = useToast();
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedOrgFilter, setSelectedOrgFilter] = useState('all');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('all');
@@ -232,18 +235,14 @@ export default function PendingEvaluationsTab({
   return (
     <div className="space-y-6 font-sans" dir="rtl">
       {/* Header Banner */}
-      <div className="bg-[#1B3A6B] text-white rounded-2xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div 
+        className="rounded-2xl p-6 text-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors"
+        style={{ background: `linear-gradient(to left, ${primaryColor}, ${primaryColor}e6, ${primaryColor}cc)` }}
+      >
         <div className="space-y-1">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/10 text-white rounded-full text-xs font-medium">
-            <Clock size={14} />
-            الاستمارات المطلقة بانتظار التعبئة والتنفيذ
-          </div>
           <h2 className="text-xl font-bold tracking-tight">
             إدارة التقييمات الجارية والموقوفة لسنة ({year})
           </h2>
-          <p className="text-xs text-slate-200 max-w-2xl leading-relaxed">
-            تحكم كامل بالتقييمات المطلقة: تعبئة الدرجات، إيقاف التقييم مؤقتاً، إعادة التنشيط، طباعة الاستمارات المخصصة أو حذف الإطلاق لإعادة التخصيص.
-          </p>
         </div>
 
         <div className="flex items-center gap-3">
