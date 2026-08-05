@@ -350,22 +350,6 @@ async function startServer() {
   app.get('/api/employees', requireAuth, async (req, res) => {
     try {
       const allEmployees = await db.select().from(schema.employees).orderBy(desc(schema.employees.createdAt));
-
-      // Auto-repair any employees whose full_name was set to 'غير محدد' by mistake
-      for (const emp of allEmployees) {
-        if ((!emp.fullName || emp.fullName === 'غير محدد') && (emp.firstName || emp.fatherName)) {
-          const nameParts = [emp.firstName, emp.fatherName, emp.grandfatherName, emp.greatGrandfatherName].filter(Boolean);
-          if (nameParts.length > 0) {
-            const repairedFullName = nameParts.join(' ');
-            emp.fullName = repairedFullName;
-            await db.update(schema.employees)
-              .set({ fullName: repairedFullName })
-              .where(eq(schema.employees.id, emp.id))
-              .catch(e => console.error('Error auto-repairing employee name:', e));
-          }
-        }
-      }
-
       res.json(allEmployees.map(enhanceEmployeeRecord));
     } catch (error: any) {
       console.error('Error fetching employees:', error);
@@ -2226,11 +2210,8 @@ async function startServer() {
   app.get('/api/penalty-types', requireAuth, async (req, res) => {
     try {
       let records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
-      
-      // Auto upgrade if database contains old erroneous records or is empty
-      const isOldData = records.length === 0 || records.some(r => r.name.includes('(يوم)') || r.name.includes('(أيام)') || r.name === 'إنذار خطي') || !records.some(r => r.name === 'العزل');
 
-      if (isOldData || req.query.reset === 'true') {
+      if (records.length === 0 || req.query.reset === 'true') {
         await db.delete(schema.penaltyTypes);
         for (const item of LEGAL_ARTICLE_8_PENALTIES) {
           await db.insert(schema.penaltyTypes).values(item).catch(() => {});
@@ -2472,32 +2453,9 @@ async function startServer() {
   app.get('/api/evaluation-forms', requireAuth, async (req, res) => {
     try {
       let records = await db.select().from(schema.evaluationForms).orderBy(asc(schema.evaluationForms.id));
-      const hasCanonicalForms = records.some(r => r.title.includes('FORM_1') || r.title.includes('FORM_2') || r.title.includes('FORM_3'));
-      
-      if (records.length === 0 || !hasCanonicalForms) {
+      if (records.length === 0) {
         for (const form of CANONICAL_SEED_FORMS) {
-          const exists = records.find(r => r.title === form.title);
-          if (!exists) {
-            await db.insert(schema.evaluationForms).values(form).catch(() => {});
-          }
-        }
-        records = await db.select().from(schema.evaluationForms).orderBy(asc(schema.evaluationForms.id));
-      } else {
-        // Migration update for existing canonical forms if they contain obsolete default responsibilities
-        for (const form of CANONICAL_SEED_FORMS) {
-          const existing = records.find(r => r.title === form.title);
-          if (existing) {
-            const respStr = existing.applicableResponsibilities || '';
-            if (existing.title.includes('FORM_1') && respStr.includes('مسؤول وحدة')) {
-              await db.update(schema.evaluationForms).set({
-                applicableResponsibilities: form.applicableResponsibilities
-              }).where(eq(schema.evaluationForms.id, existing.id)).catch(() => {});
-            } else if (existing.title.includes('FORM_2') && !respStr.includes('مسؤول وحدة')) {
-              await db.update(schema.evaluationForms).set({
-                applicableResponsibilities: form.applicableResponsibilities
-              }).where(eq(schema.evaluationForms.id, existing.id)).catch(() => {});
-            }
-          }
+          await db.insert(schema.evaluationForms).values(form).catch(() => {});
         }
         records = await db.select().from(schema.evaluationForms).orderBy(asc(schema.evaluationForms.id));
       }
