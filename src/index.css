@@ -41,15 +41,37 @@
 
 /* Print Styles */
 @media print {
-  .no-print, nav, aside, header, button {
-    display: none !important;
+  @page {
+    size: A4 portrait;
+    margin: 8mm;
   }
-  #report-output {
-    box-shadow: none !important;
-    border: none !important;
-  }
+
   body {
     background: white !important;
+    color: black !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .print\:hidden, nav, aside, header, footer, button, .no-print {
+    display: none !important;
+  }
+
+  /* Unset fixed modal wrapper when printing */
+  .fixed.inset-0 {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  .bg-white.rounded-3xl {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
   }
 }
 
