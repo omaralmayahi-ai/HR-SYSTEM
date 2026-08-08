@@ -11,7 +11,7 @@ import { Edit, Plus, Trash2, Calendar, FileText, GraduationCap, DollarSign, Cloc
 import { formatCurrency, calculateSalary, getGradeLabel, getStepLabel, getActiveFinancialRates, checkEmployeeMatchesRule } from '@/lib/salaryTable';
 import { useToast } from '@/components/ui/use-toast';
 import EmployeeQuickAccessQR from '@/components/employee/EmployeeQuickAccessQR';
-import { fetchEducationDegreesSorted, fetchPenaltyTypesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
+import { fetchEducationDegreesSorted, fetchPenaltyTypesSorted, subscribeToSettingsUpdates, notifySettingsChanged } from '@/lib/settingsUtils';
 
 function InfoRow({ label, value }) {
   if (!value && value !== 0) return null;
@@ -209,6 +209,7 @@ export default function EmployeeDetail() {
   const [documents, setDocuments] = useState([]);
   const [educationDegrees, setEducationDegrees] = useState([]);
   const [serviceRecords, setServiceRecords] = useState([]);
+  const [allowanceDeductionPresets, setAllowanceDeductionPresets] = useState([]);
   
   const [loading, setLoading] = useState(true);
   const [showQRModal, setShowQRModal] = useState(false);
@@ -258,7 +259,8 @@ export default function EmployeeDetail() {
       apiClient.entities.Retirement.filter({ employee_id: id }),
       apiClient.entities.Document.filter({ employee_id: id }),
       apiClient.entities.ServiceRecord.filter({ employee_id: id }),
-    ]).then(([emp, lv, pen, appr, ev, tr, qual, job, prom, sal, tc, trans, ret, doc, sRecs]) => {
+      apiClient.entities.AllowanceDeduction.list()
+    ]).then(([emp, lv, pen, appr, ev, tr, qual, job, prom, sal, tc, trans, ret, doc, sRecs, allPresets]) => {
       setEmployee(emp);
       setLeaves(lv || []);
       setPenalties(pen || []);
@@ -274,6 +276,10 @@ export default function EmployeeDetail() {
       setRetirements(ret || []);
       setDocuments(doc || []);
       setServiceRecords(sRecs || []);
+      setAllowanceDeductionPresets(allPresets || []);
+      if (allPresets) {
+        localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(allPresets));
+      }
       setLoading(false);
     }).catch(err => {
       console.error(err);
@@ -492,18 +498,20 @@ export default function EmployeeDetail() {
   const financialRates = getActiveFinancialRates();
 
   const classifiedCustomItems = (() => {
-    let presets = [];
-    try {
-      const saved = localStorage.getItem('ALLOWANCES_DEDUCTIONS_PRESETS');
-      if (saved) presets = JSON.parse(saved);
-    } catch (e) {}
+    let presets = allowanceDeductionPresets.length > 0 ? allowanceDeductionPresets : [];
+    if (presets.length === 0) {
+      try {
+        const saved = localStorage.getItem('ALLOWANCES_DEDUCTIONS_PRESETS');
+        if (saved) presets = JSON.parse(saved);
+      } catch (e) {}
+    }
 
     const items = [];
     const processedPresetNames = new Set();
 
     // 1. Process global presets from ALLOWANCES_DEDUCTIONS_PRESETS
     presets.forEach(p => {
-      if (p.status && p.status !== 'فعال' && p.status !== 'active') return;
+      const isStopped = p.status && p.status !== 'فعال' && p.status !== 'active';
 
       const isSpouse = (p.name.includes('زوجية') || p.name.includes('الزوجية'));
       const isChild = (p.name.includes('أطفال') || p.name.includes('الاطفال') || p.name.includes('أولاد') || p.name.includes('الاولاد') || p.name.includes('طفل') || p.name.includes('ولد'));
@@ -563,7 +571,7 @@ export default function EmployeeDetail() {
         }
       }
 
-      if (!isEligible) return; // Employee is NOT included in this allowance/deduction!
+      if (!isEligible) return; // Employee is NOT included in criteria/direct list
 
       // Check if employee has a DB record in salaryAllowances for this preset
       const dbMatch = salaryAllowances.find(sa => sa.allowance_type === p.name || sa.allowanceType === p.name);
@@ -572,10 +580,12 @@ export default function EmployeeDetail() {
       const val = dbMatch?.amount > 0 ? dbMatch.amount : (dbMatch?.percentage > 0 ? dbMatch.percentage : (p.value || 0));
 
       let resolvedAmount = 0;
-      if (calcType === 'percentage') {
-        resolvedAmount = Math.round(salaryCalc.base_salary * (val / 100));
-      } else {
-        resolvedAmount = val;
+      if (!isStopped) {
+        if (calcType === 'percentage') {
+          resolvedAmount = Math.round(salaryCalc.base_salary * (val / 100));
+        } else {
+          resolvedAmount = val;
+        }
       }
 
       processedPresetNames.add(p.name);
@@ -587,6 +597,7 @@ export default function EmployeeDetail() {
         allowance_type: p.name,
         type: p.type || 'allowance',
         isTemp,
+        isStopped,
         timingLabel,
         order_number: dbMatch?.order_number || dbMatch?.orderNumber || '—',
         resolvedAmount
@@ -600,7 +611,11 @@ export default function EmployeeDetail() {
       // Check if employee is eligible/not blocked for this individual DB record
       if (!checkEmployeeMatchesRule(employee, sa.id)) return;
 
-      const value = sa.amount > 0 ? sa.amount : Math.round(salaryCalc.base_salary * ((sa.percentage || 0) / 100));
+      const isStopped = sa.status === 'متوقف مؤقتاً' || sa.status === 'متوقف' || sa.status === 'موقوف';
+      let value = 0;
+      if (!isStopped) {
+        value = sa.amount > 0 ? sa.amount : Math.round(salaryCalc.base_salary * ((sa.percentage || 0) / 100));
+      }
 
       items.push({
         ...sa,
@@ -608,6 +623,7 @@ export default function EmployeeDetail() {
         presetId: null,
         type: sa.type || 'allowance',
         isTemp: false,
+        isStopped,
         timingLabel: 'دائم',
         resolvedAmount: value
       });
@@ -889,7 +905,22 @@ export default function EmployeeDetail() {
       const payload = { ...modalForm, employee_id: parseInt(id) };
       
       if (activeModal === 'allowance') {
-        const tempId = Date.now();
+        let createdPreset = null;
+        try {
+          createdPreset = await apiClient.entities.AllowanceDeduction.create({
+            name: modalForm.name,
+            type: modalForm.type, // 'allowance' or 'deduction'
+            calcType: modalForm.calcType, // 'percentage' or 'flat'
+            calc_type: modalForm.calcType,
+            value: parseInt(modalForm.value) || 0,
+            status: 'فعال'
+          });
+        } catch (eErr) {
+          console.warn('Could not create AllowanceDeduction entity:', eErr);
+        }
+
+        const presetId = createdPreset?.id || Date.now();
+
         // 1. Save preset to ALLOWANCES_DEDUCTIONS_PRESETS in localStorage
         let presets = [];
         try {
@@ -898,7 +929,7 @@ export default function EmployeeDetail() {
         } catch (errPreset) {}
 
         const newPreset = {
-          id: tempId,
+          id: presetId,
           name: modalForm.name,
           type: modalForm.type, // 'allowance' or 'deduction'
           calcType: modalForm.calcType, // 'percentage' or 'flat'
@@ -906,10 +937,13 @@ export default function EmployeeDetail() {
           value: parseInt(modalForm.value) || 0,
           status: 'فعال'
         };
-        presets.push(newPreset);
+        const existingIdx = presets.findIndex(p => p.id === presetId);
+        if (existingIdx >= 0) presets[existingIdx] = newPreset;
+        else presets.push(newPreset);
+
         localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(presets));
 
-        // 2. Save metadata to TEMPORARY_META_${tempId} in localStorage
+        // 2. Save metadata to TEMPORARY_META_${presetId} in localStorage
         const tempMeta = {
           isTemporary: true,
           timingType: modalForm.timingType,
@@ -922,7 +956,7 @@ export default function EmployeeDetail() {
           beneficiaryType: 'direct',
           directEmployeeIds: [parseInt(id)]
         };
-        localStorage.setItem(`TEMPORARY_META_${tempId}`, JSON.stringify(tempMeta));
+        localStorage.setItem(`TEMPORARY_META_${presetId}`, JSON.stringify(tempMeta));
 
         // 3. Save to database table salary_allowances for database list persistence
         const dbPayload = {
@@ -934,6 +968,8 @@ export default function EmployeeDetail() {
           status: 'مستمر'
         };
         await apiClient.entities.SalaryAllowance.create(dbPayload);
+
+        notifySettingsChanged('allowances_deductions');
 
         toast({ title: 'تم إضافة المخصص/الاستقطاع المؤقت', description: 'تم حفظ المخصص المؤقت للموظف بنجاح وجاري تطبيقه في احتساب الراتب' });
         setActiveModal(null);
@@ -1942,22 +1978,32 @@ export default function EmployeeDetail() {
                     {classifiedCustomItems
                       .filter(sa => sa.type === 'allowance')
                       .map(sa => (
-                        <tr key={sa.id} className="hover:bg-slate-50/30 bg-emerald-50/10">
+                        <tr key={sa.id} className={`hover:bg-slate-50/30 ${sa.isStopped ? 'bg-amber-50/20 opacity-75' : 'bg-emerald-50/10'}`}>
                           <td className="px-4 py-3 font-semibold text-slate-800 text-xs flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            <span className={`w-1.5 h-1.5 rounded-full ${sa.isStopped ? 'bg-amber-500' : 'bg-emerald-500'}`} />
                             {sa.allowance_type}
                           </td>
                           <td className="px-4 py-3">
                             <span className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${
-                              sa.isTemp ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'
+                              sa.isStopped ? 'bg-slate-100 text-slate-600 border border-slate-200' : (sa.isTemp ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800')
                             }`}>
-                              {sa.isTemp ? 'مؤقت' : 'دائم'}
+                              {sa.isStopped ? 'متوقف مؤقتاً' : (sa.isTemp ? 'مؤقت' : 'دائم')}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-slate-500 text-xs">
-                            {sa.isTemp ? sa.timingLabel : 'مدرج كبند مخصص دائم للموظف'} &bull; الأمر: {sa.order_number || '—'}
+                            {sa.isStopped ? (
+                              <span className="text-amber-700 font-medium">موقوف مؤقتاً في إعدادات النظام &bull; غير مضاف للراتب</span>
+                            ) : (
+                              <>{sa.isTemp ? sa.timingLabel : 'مدرج كبند مخصص دائم للموظف'} &bull; الأمر: {sa.order_number || '—'}</>
+                            )}
                           </td>
-                          <td className="px-4 py-3 text-left font-mono font-bold text-emerald-700 text-xs">{formatCurrency(sa.resolvedAmount)}</td>
+                          <td className="px-4 py-3 text-left font-mono font-bold text-xs">
+                            {sa.isStopped ? (
+                              <span className="text-slate-400 line-through">٠ د.ع (موقوف)</span>
+                            ) : (
+                              <span className="text-emerald-700">{formatCurrency(sa.resolvedAmount)}</span>
+                            )}
+                          </td>
                           <td className="px-4 py-3 text-center">
                             <Button size="icon" variant="ghost" className="text-red-500 h-7 w-7" onClick={() => deleteRecord('SalaryAllowance', sa.dbId || sa.id, sa.presetId)}>
                               <Trash2 size={13} />
@@ -2059,22 +2105,32 @@ export default function EmployeeDetail() {
                     {classifiedCustomItems
                       .filter(sa => sa.type === 'deduction')
                       .map(sa => (
-                        <tr key={sa.id} className="hover:bg-slate-50/30 bg-red-50/5">
+                        <tr key={sa.id} className={`hover:bg-slate-50/30 ${sa.isStopped ? 'bg-amber-50/20 opacity-75' : 'bg-red-50/5'}`}>
                           <td className="px-4 py-3 font-semibold text-slate-800 text-xs flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                            <span className={`w-1.5 h-1.5 rounded-full ${sa.isStopped ? 'bg-amber-500' : 'bg-red-500'}`} />
                             {sa.allowance_type}
                           </td>
                           <td className="px-4 py-3">
                             <span className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${
-                              sa.isTemp ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'
+                              sa.isStopped ? 'bg-slate-100 text-slate-600 border border-slate-200' : (sa.isTemp ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800')
                             }`}>
-                              {sa.isTemp ? 'مؤقت' : 'دائم'}
+                              {sa.isStopped ? 'متوقف مؤقتاً' : (sa.isTemp ? 'مؤقت' : 'دائم')}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-slate-500 text-xs">
-                            {sa.isTemp ? sa.timingLabel : 'مدرج كاستقطاع مخصص دائم للموظف'} &bull; الأمر: {sa.order_number || '—'}
+                            {sa.isStopped ? (
+                              <span className="text-amber-700 font-medium">موقوف مؤقتاً في إعدادات النظام &bull; غير مخصوم من الراتب</span>
+                            ) : (
+                              <>{sa.isTemp ? sa.timingLabel : 'مدرج كاستقطاع مخصص دائم للموظف'} &bull; الأمر: {sa.order_number || '—'}</>
+                            )}
                           </td>
-                          <td className="px-4 py-3 text-left font-mono font-bold text-red-700 text-xs">{formatCurrency(sa.resolvedAmount)}</td>
+                          <td className="px-4 py-3 text-left font-mono font-bold text-xs">
+                            {sa.isStopped ? (
+                              <span className="text-slate-400 line-through">٠ د.ع (موقوف)</span>
+                            ) : (
+                              <span className="text-red-700">{formatCurrency(sa.resolvedAmount)}</span>
+                            )}
+                          </td>
                           <td className="px-4 py-3 text-center">
                             <Button size="icon" variant="ghost" className="text-red-500 h-7 w-7" onClick={() => deleteRecord('SalaryAllowance', sa.dbId || sa.id, sa.presetId)}>
                               <Trash2 size={13} />

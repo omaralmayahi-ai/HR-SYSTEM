@@ -1,6 +1,6 @@
 import { useState, useEffect, Fragment } from 'react';
 import { apiClient } from '@/api/apiClient';
-import { fetchEducationDegreesSorted, fetchResponsibilityAllowancesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
+import { fetchEducationDegreesSorted, fetchResponsibilityAllowancesSorted, subscribeToSettingsUpdates, notifySettingsChanged } from '@/lib/settingsUtils';
 import { useToast } from '@/components/ui/use-toast';
 import { doesEmployeeMatchCriteria } from '@/lib/salaryTable';
 import { 
@@ -622,6 +622,7 @@ export default function FixedCustomAllowancesSettings() {
       setRecords(sortedData);
       setUnfilteredRecords(data || []);
       localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(data || []));
+      notifySettingsChanged('allowances_deductions', data || []);
     } catch (error) {
       toast({
         title: 'خطأ في جلب البيانات',

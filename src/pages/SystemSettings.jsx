@@ -14,6 +14,7 @@ import ShiftSystemsSettings from '@/components/ShiftSystemsSettings';
 import EmployeeImportSettings from '@/components/EmployeeImportSettings';
 import PenaltyTypesSettings from '@/components/PenaltyTypesSettings';
 import EvaluationFormsSettings from '@/components/EvaluationFormsSettings';
+import GoverningCoursesSettings from '@/components/GoverningCoursesSettings';
 
 const DEFAULT_TABS = [
   {
@@ -22,6 +23,13 @@ const DEFAULT_TABS = [
     icon: SettingsIcon,
     color: 'bg-violet-100 text-violet-700',
     activeColor: 'bg-violet-50 text-violet-700 shadow-sm border-violet-150',
+  },
+  {
+    id: 'governingCourses',
+    label: 'الدورات التدريبية الحاكمة للموظفين',
+    icon: GraduationCap,
+    color: 'bg-amber-100 text-amber-800',
+    activeColor: 'bg-amber-50 text-amber-800 shadow-sm border-amber-200',
   },
   {
     id: 'shifts',
@@ -353,6 +361,18 @@ export default function SystemSettings() {
                 transition={{ duration: 0.2 }}
               >
                 <EvaluationFormsSettings />
+              </motion.div>
+            )}
+
+            {activeTab === 'governingCourses' && (
+              <motion.div
+                key="governingCourses"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.2 }}
+              >
+                <GoverningCoursesSettings />
               </motion.div>
             )}
 

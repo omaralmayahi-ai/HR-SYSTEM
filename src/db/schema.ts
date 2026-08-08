@@ -799,6 +799,48 @@ export const evaluationForms = pgTable('evaluation_forms', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
+// 32. Governing Training Courses table (الدورات التدريبية الحاكمة للموظفين حسب الدرجة الوظيفية للترفيع)
+export const governingCourses = pgTable('governing_courses', {
+  id: serial('id').primaryKey(),
+  grade: integer('grade').notNull(), // الدرجة الوظيفية (مثلاً: 1 - 10)
+  courseName: text('course_name').notNull(), // اسم الدورة الحاكمة
+  courseType: text('course_type').default('تخصصية'), // نوع/مجال الدورة (حاكمة تخصصية، إدارية، مالية، حاسوب، سلامة، قيادية)
+  durationDays: integer('duration_days').default(5), // مدة الدورة بالأيام
+  durationHours: integer('duration_hours').default(20), // عدد الساعات التدريبية
+  isRequiredForPromotion: boolean('is_required_for_promotion').default(true), // هل الدورة حاكمة وجوبية للترفيع؟
+  minPassingScore: integer('min_passing_score').default(60), // أدنى درجة للنجاح والاجتياز
+  description: text('description'), // وصف وملاحظات وتفاصيل الدورة
+  status: text('status').default('فعال'), // فعال / غير فعال
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 33. Governing Course Exemption Rules table
+export const governingCourseExemptionRules = pgTable('governing_course_exemption_rules', {
+  id: serial('id').primaryKey(),
+  configKey: text('config_key').notNull().unique().default('default_exemption_rules'),
+  rules: text('rules'), // JSON stringified rules array
+  qualificationsExemptions: text('qualifications_exemptions'), // JSON stringified array
+  gradeTitleExemptions: text('grade_title_exemptions'), // JSON stringified array
+  autoApplyRules: boolean('auto_apply_rules').default(true),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// 34. Governing Course Employee Assignments table
+export const governingCourseEmployeeAssignments = pgTable('governing_course_employee_assignments', {
+  id: serial('id').primaryKey(),
+  employeeId: text('employee_id').notNull().unique(),
+  status: text('status').default('مشمول'),
+  exemptionReason: text('exemption_reason'),
+  exemptionOrderNumber: text('exemption_order_number'),
+  exemptionOrderDate: text('exemption_order_date'),
+  assignedCourses: text('assigned_courses'), // JSON stringified array
+  courseProgress: text('course_progress'), // JSON stringified object
+  notes: text('notes'),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+
+
 
 
 
