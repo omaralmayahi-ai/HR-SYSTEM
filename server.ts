@@ -269,6 +269,7 @@ async function startServer() {
 
       if (!level && !spec && !univ && !gradYear && !eduOrder) return;
 
+      // Only update existing explicit qualifications if present, NEVER auto-insert new qualification records
       const activeQuals = await db.select()
         .from(schema.qualifications)
         .where(and(
@@ -291,16 +292,6 @@ async function startServer() {
             .set(updateData)
             .where(eq(schema.qualifications.id, topQual.id));
         }
-      } else if (level) {
-        await db.insert(schema.qualifications).values({
-          employeeId,
-          level,
-          specialization: spec || null,
-          university: univ || null,
-          graduationYear: gradYear || new Date().getFullYear(),
-          equationNumber: eduOrder || null,
-          isActive: true,
-        });
       }
     } catch (err) {
       console.error('Error syncing qualification from employee:', err);
@@ -438,22 +429,6 @@ async function startServer() {
           // Perform fresh insertion
           const [inserted] = await db.insert(schema.employees).values(cleanData).returning();
           insertedCount++;
-
-          // If education level provided, create qualification entry
-          if (inserted && inserted.educationLevel && inserted.educationLevel !== 'بدون') {
-            try {
-              await db.insert(schema.qualifications).values({
-                employeeId: inserted.id,
-                level: inserted.educationLevel,
-                specialization: inserted.specialization || 'عام',
-                university: 'مستوردة من الملف',
-                graduationYear: new Date().getFullYear(),
-                isActive: true,
-              });
-            } catch (qErr) {
-              console.error('Error auto-creating qualification on bulk import:', qErr);
-            }
-          }
 
           if (inserted) {
             processedEmployees.push(enhanceEmployeeRecord(inserted));
@@ -3539,6 +3514,529 @@ async function startServer() {
       console.error('Error deleting service record:', error);
       res.status(500).json({ error: error.message });
     }
+  });
+
+
+  // --- Governing Training Courses API (الدورات التدريبية الحاكمة للموظفين) ---
+  const DEFAULT_GOVERNING_COURSES = [
+    // الدرجة 2 (للترفيع إلى الدرجة 1)
+    { grade: 2, courseName: 'دورة اختصاص متقدمة (حتمية ترفيع 2←1)', courseType: 'تخصصية', durationDays: 10, durationHours: 40, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة اختصاص متقدمة مدتها أسبوعان (10 أيام تدريبية) حتمية للترفيع للدرجة الأولى' },
+    { grade: 2, courseName: 'دورة إدارية متقدمة / إدارة وقيادة', courseType: 'قيادية وإشرافية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة إدارية متقدمة أو إدارة وقيادة (أسبوع على الأقل) حتمية للترفيع للدرجة الأولى' },
+    { grade: 2, courseName: 'دورة تفاوض (أو كتاب رسمي مؤيد للجان/اجتماعات خارجية)', courseType: 'إدارية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة تفاوض حتمية — يمكن تعويضها بلجان أو اجتماعات مع شركات أجنبية بكتاب رسمي مؤيد' },
+
+    // الدرجة 3 (للترفيع إلى الدرجة 2)
+    { grade: 3, courseName: 'دورة اختصاص (حتمية ترفيع 3←2)', courseType: 'تخصصية', durationDays: 10, durationHours: 40, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة اختصاص لمدة أسبوعين (10 أيام)' },
+    { grade: 3, courseName: 'دورة إدارية متقدمة / حاسبة / لغة إنكليزية (مجموع شهر)', courseType: 'إدارية', durationDays: 30, durationHours: 120, isRequiredForPromotion: true, minPassingScore: 60, description: '(إدارية متقدمة أو حاسبة أو لغة إنكليزية) بمجموع شهر تدريبي. بديل كامل: للعنوان الإداري (مدير/مدير أقدم) دورة واحدة ≥ شهر تغني عن كل الحتميات' },
+
+    // الدرجة 4 (للترفيع إلى الدرجة 3)
+    { grade: 4, courseName: 'دورة اختصاص (حتمية ترفيع 4←3)', courseType: 'تخصصية', durationDays: 10, durationHours: 40, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة اختصاص لمدة أسبوعين (10 أيام)' },
+    { grade: 4, courseName: 'دورة إدارية متقدمة / حاسبة / لغة إنكليزية (مجموع شهر)', courseType: 'إدارية', durationDays: 30, durationHours: 120, isRequiredForPromotion: true, minPassingScore: 60, description: '(إدارية متقدمة أو حاسبة أو لغة إنكليزية) بمجموع شهر تدريبي. بديل كامل: للعنوان الإداري (مدير/مدير أقدم) دورة واحدة ≥ شهر تغني عن كل الحتميات' },
+
+    // الدرجة 5 (للترفيع إلى الدرجة 4)
+    { grade: 5, courseName: 'دورة اختصاص (حتمية ترفيع 5←4)', courseType: 'تخصصية', durationDays: 10, durationHours: 40, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة اختصاص لمدة أسبوعين (10 أيام)' },
+    { grade: 5, courseName: 'دورة إدارية أو حاسبة', courseType: 'إدارية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة إدارية أو حاسبة لمدة أسبوع' },
+    { grade: 5, courseName: 'دورة السلامة والصحة المهنية والبيئة (H.S.E)', courseType: 'سلامة وبيئة (HSE)', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة السلامة والصحة المهنية والبيئة (H.S.E)' },
+
+    // الدرجة 6 (للترفيع إلى الدرجة 5)
+    { grade: 6, courseName: 'دورة اختصاص (حتمية ترفيع 6←5)', courseType: 'تخصصية', durationDays: 10, durationHours: 40, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة اختصاص لمدة أسبوعين (10 أيام)' },
+    { grade: 6, courseName: 'دورة إدارية أو حاسبة', courseType: 'إدارية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة إدارية أو حاسبة لمدة أسبوع' },
+    { grade: 6, courseName: 'دورة السلامة والصحة المهنية والبيئة (H.S.E)', courseType: 'سلامة وبيئة (HSE)', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة السلامة والصحة المهنية والبيئة (H.S.E)' },
+
+    // الدرجة 7 (للترفيع إلى الدرجة 6)
+    { grade: 7, courseName: 'دورة اختصاص (حتمية ترفيع 7←6)', courseType: 'تخصصية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة اختصاص لمدة أسبوع' },
+    { grade: 7, courseName: 'دورة إدارية', courseType: 'إدارية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة إدارية لمدة أسبوع' },
+    { grade: 7, courseName: 'دورة السلامة والصحة المهنية والبيئة (H.S.E)', courseType: 'سلامة وبيئة (HSE)', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة H.S.E لمدة أسبوع' },
+    { grade: 7, courseName: 'دورة حاسبة', courseType: 'حاسوب', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة حاسبة لمدة أسبوع' },
+
+    // الدرجة 8 (للترفيع إلى الدرجة 7)
+    { grade: 8, courseName: 'دورة اختصاص (حتمية ترفيع 8←7)', courseType: 'تخصصية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة اختصاص لمدة أسبوع' },
+    { grade: 8, courseName: 'دورة إدارية', courseType: 'إدارية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة إدارية لمدة أسبوع' },
+    { grade: 8, courseName: 'دورة السلامة والصحة المهنية والبيئة (H.S.E)', courseType: 'سلامة وبيئة (HSE)', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة H.S.E لمدة أسبوع' },
+    { grade: 8, courseName: 'دورة حاسبة', courseType: 'حاسوب', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة حاسبة لمدة أسبوع' },
+
+    // الدرجة 9 (للترفيع إلى الثامنة)
+    { grade: 9, courseName: 'دورة تأهيل الوظيفة العامة والمهارات الأساسية', courseType: 'إدارية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة تأهيل الموظف المبتدئ والأنظمة الوظيفية' },
+
+    // الدرجة 10 (للترفيع إلى التاسعة)
+    { grade: 10, courseName: 'أساسيات الوظيفة العامة والأنظمة الإدارية', courseType: 'إدارية', durationDays: 5, durationHours: 20, isRequiredForPromotion: true, minPassingScore: 60, description: 'دورة أساسيات الوظيفة والخدمة المدنية' },
+  ];
+
+  let inMemoryGoverningCourses = DEFAULT_GOVERNING_COURSES.map((item, idx) => ({
+    id: idx + 1,
+    grade: item.grade,
+    courseName: item.courseName,
+    course_name: item.courseName,
+    courseType: item.courseType,
+    course_type: item.courseType,
+    durationDays: item.durationDays,
+    duration_days: item.durationDays,
+    durationHours: item.durationHours,
+    duration_hours: item.durationHours,
+    isRequiredForPromotion: item.isRequiredForPromotion,
+    is_required_for_promotion: item.isRequiredForPromotion,
+    minPassingScore: item.minPassingScore,
+    min_passing_score: item.minPassingScore,
+    description: item.description,
+    status: 'فعال',
+    createdAt: new Date().toISOString()
+  }));
+
+  async function ensureGoverningCoursesTable() {
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS governing_courses (
+          id SERIAL PRIMARY KEY,
+          grade INTEGER NOT NULL,
+          course_name TEXT NOT NULL,
+          course_type TEXT DEFAULT 'تخصصية',
+          duration_days INTEGER DEFAULT 5,
+          duration_hours INTEGER DEFAULT 20,
+          is_required_for_promotion BOOLEAN DEFAULT TRUE,
+          min_passing_score INTEGER DEFAULT 60,
+          description TEXT,
+          status TEXT DEFAULT 'فعال',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `).catch(() => {});
+      const cols = [
+        `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS "courseName" TEXT`,
+        `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS "courseType" TEXT`,
+        `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS "durationDays" INTEGER`,
+        `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS "durationHours" INTEGER`,
+        `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS "isRequiredForPromotion" BOOLEAN`,
+        `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS "minPassingScore" INTEGER`,
+        `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
+      ];
+      for (const col of cols) {
+        await pool.query(col).catch(() => {});
+      }
+    } catch (e) {
+      // Ignore DB permission or creation errors silently
+    }
+  }
+
+  app.get('/api/governing-courses', requireAuth, async (req, res) => {
+    const gradeQuery = req.query.grade ? parseInt(req.query.grade as string) : undefined;
+    try {
+      await ensureGoverningCoursesTable();
+      let query = db.select().from(schema.governingCourses);
+      if (gradeQuery && !isNaN(gradeQuery)) {
+        query = db.select().from(schema.governingCourses).where(eq(schema.governingCourses.grade, gradeQuery)) as any;
+      }
+      let results = await query.orderBy(asc(schema.governingCourses.grade), asc(schema.governingCourses.id));
+
+      if (results.length === 0 && (!gradeQuery || isNaN(gradeQuery))) {
+        await db.insert(schema.governingCourses).values(DEFAULT_GOVERNING_COURSES as any).catch(() => {});
+        results = await db.select().from(schema.governingCourses).orderBy(asc(schema.governingCourses.grade), asc(schema.governingCourses.id)).catch(() => []);
+      }
+
+      if (results.length > 0) {
+        const mapped = results.map(r => ({
+          id: r.id,
+          grade: r.grade,
+          courseName: r.courseName || (r as any).course_name,
+          course_name: r.courseName || (r as any).course_name,
+          courseType: r.courseType || (r as any).course_type || 'تخصصية',
+          course_type: r.courseType || (r as any).course_type || 'تخصصية',
+          durationDays: r.durationDays !== undefined && r.durationDays !== null ? r.durationDays : ((r as any).duration_days || 5),
+          duration_days: r.durationDays !== undefined && r.durationDays !== null ? r.durationDays : ((r as any).duration_days || 5),
+          durationHours: r.durationHours !== undefined && r.durationHours !== null ? r.durationHours : ((r as any).duration_hours || 20),
+          duration_hours: r.durationHours !== undefined && r.durationHours !== null ? r.durationHours : ((r as any).duration_hours || 20),
+          isRequiredForPromotion: r.isRequiredForPromotion !== undefined && r.isRequiredForPromotion !== null ? r.isRequiredForPromotion : ((r as any).is_required_for_promotion ?? true),
+          is_required_for_promotion: r.isRequiredForPromotion !== undefined && r.isRequiredForPromotion !== null ? r.isRequiredForPromotion : ((r as any).is_required_for_promotion ?? true),
+          minPassingScore: r.minPassingScore !== undefined && r.minPassingScore !== null ? r.minPassingScore : ((r as any).min_passing_score || 60),
+          min_passing_score: r.minPassingScore !== undefined && r.minPassingScore !== null ? r.minPassingScore : ((r as any).min_passing_score || 60),
+          description: r.description,
+          status: r.status || 'فعال',
+          createdAt: r.createdAt
+        }));
+
+        return res.json(mapped);
+      }
+    } catch (error: any) {
+      // Quiet fallback to in-memory store if DB query fails or table does not exist
+    }
+
+    // Graceful fallback to memory store
+    let filteredMemory = inMemoryGoverningCourses;
+    if (gradeQuery && !isNaN(gradeQuery)) {
+      filteredMemory = inMemoryGoverningCourses.filter(c => c.grade === gradeQuery);
+    }
+    return res.json(filteredMemory);
+  });
+
+  app.post('/api/governing-courses', requireAuth, async (req, res) => {
+    const data = req.body;
+    const grade = parseInt(data.grade);
+    if (isNaN(grade)) return res.status(400).json({ error: 'الدرجة الوظيفية مطلوبة بشكل صحيح' });
+    if (!data.courseName && !data.course_name) return res.status(400).json({ error: 'اسم الدورة الحاكمة مطلوب' });
+
+    const courseName = data.courseName || data.course_name;
+    const courseType = data.courseType || data.course_type || 'تخصصية';
+    const durationDays = parseInt(data.durationDays || data.duration_days || '5');
+    const durationHours = parseInt(data.durationHours || data.duration_hours || '20');
+    const isRequiredForPromotion = data.isRequiredForPromotion !== undefined ? Boolean(data.isRequiredForPromotion) : (data.is_required_for_promotion !== undefined ? Boolean(data.is_required_for_promotion) : true);
+    const minPassingScore = parseInt(data.minPassingScore || data.min_passing_score || '60');
+    const description = data.description || '';
+    const status = data.status || 'فعال';
+
+    try {
+      await ensureGoverningCoursesTable();
+      const values = {
+        grade,
+        courseName,
+        courseType,
+        durationDays,
+        durationHours,
+        isRequiredForPromotion,
+        minPassingScore,
+        description,
+        status
+      };
+
+      const [inserted] = await db.insert(schema.governingCourses).values(values as any).returning();
+      if (inserted) {
+        return res.json(inserted);
+      }
+    } catch (error: any) {
+      // Quiet fallback
+    }
+
+    const newMemoryItem = {
+      id: Date.now(),
+      grade,
+      courseName,
+      course_name: courseName,
+      courseType,
+      course_type: courseType,
+      durationDays,
+      duration_days: durationDays,
+      durationHours,
+      duration_hours: durationHours,
+      isRequiredForPromotion,
+      is_required_for_promotion: isRequiredForPromotion,
+      minPassingScore,
+      min_passing_score: minPassingScore,
+      description,
+      status,
+      createdAt: new Date().toISOString()
+    };
+    inMemoryGoverningCourses.push(newMemoryItem);
+    return res.json(newMemoryItem);
+  });
+
+  app.put('/api/governing-courses/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    const data = req.body;
+
+    const updateValues: any = {};
+    if (data.grade !== undefined) updateValues.grade = parseInt(data.grade);
+    if (data.courseName !== undefined || data.course_name !== undefined) updateValues.courseName = data.courseName || data.course_name;
+    if (data.courseType !== undefined || data.course_type !== undefined) updateValues.courseType = data.courseType || data.course_type;
+    if (data.durationDays !== undefined || data.duration_days !== undefined) updateValues.durationDays = parseInt(data.durationDays || data.duration_days);
+    if (data.durationHours !== undefined || data.duration_hours !== undefined) updateValues.durationHours = parseInt(data.durationHours || data.duration_hours);
+    if (data.isRequiredForPromotion !== undefined) updateValues.isRequiredForPromotion = Boolean(data.isRequiredForPromotion);
+    if (data.is_required_for_promotion !== undefined) updateValues.isRequiredForPromotion = Boolean(data.is_required_for_promotion);
+    if (data.minPassingScore !== undefined || data.min_passing_score !== undefined) updateValues.minPassingScore = parseInt(data.minPassingScore || data.min_passing_score);
+    if (data.description !== undefined) updateValues.description = data.description;
+    if (data.status !== undefined) updateValues.status = data.status;
+
+    try {
+      await ensureGoverningCoursesTable();
+      const [updated] = await db.update(schema.governingCourses)
+        .set(updateValues)
+        .where(eq(schema.governingCourses.id, id))
+        .returning();
+
+      if (updated) {
+        return res.json(updated);
+      }
+    } catch (error: any) {
+      // Quiet fallback
+    }
+
+    const idx = inMemoryGoverningCourses.findIndex(c => c.id === id);
+    if (idx !== -1) {
+      inMemoryGoverningCourses[idx] = {
+        ...inMemoryGoverningCourses[idx],
+        ...updateValues,
+        course_name: updateValues.courseName || inMemoryGoverningCourses[idx].courseName,
+        course_type: updateValues.courseType || inMemoryGoverningCourses[idx].courseType,
+        duration_days: updateValues.durationDays !== undefined ? updateValues.durationDays : inMemoryGoverningCourses[idx].durationDays,
+        duration_hours: updateValues.durationHours !== undefined ? updateValues.durationHours : inMemoryGoverningCourses[idx].durationHours,
+        is_required_for_promotion: updateValues.isRequiredForPromotion !== undefined ? updateValues.isRequiredForPromotion : inMemoryGoverningCourses[idx].isRequiredForPromotion,
+        min_passing_score: updateValues.minPassingScore !== undefined ? updateValues.minPassingScore : inMemoryGoverningCourses[idx].minPassingScore,
+      };
+      return res.json(inMemoryGoverningCourses[idx]);
+    }
+    return res.status(404).json({ error: 'Governing course not found' });
+  });
+
+  app.delete('/api/governing-courses/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+
+    try {
+      await ensureGoverningCoursesTable();
+      await db.delete(schema.governingCourses).where(eq(schema.governingCourses.id, id));
+    } catch (error: any) {
+      // Quiet fallback
+    }
+
+    inMemoryGoverningCourses = inMemoryGoverningCourses.filter(c => c.id !== id);
+    return res.json({ success: true });
+  });
+
+  app.post('/api/governing-courses/reset-defaults', requireAuth, async (req, res) => {
+    try {
+      await ensureGoverningCoursesTable();
+      await db.delete(schema.governingCourses).catch(() => {});
+      await db.insert(schema.governingCourses).values(DEFAULT_GOVERNING_COURSES as any).catch(() => {});
+      const results = await db.select().from(schema.governingCourses).orderBy(asc(schema.governingCourses.grade), asc(schema.governingCourses.id));
+      if (results.length > 0) {
+        return res.json(results);
+      }
+    } catch (error: any) {
+      // Quiet fallback
+    }
+
+    inMemoryGoverningCourses = DEFAULT_GOVERNING_COURSES.map((item, idx) => ({
+      id: idx + 1,
+      grade: item.grade,
+      courseName: item.courseName,
+      course_name: item.courseName,
+      courseType: item.courseType,
+      course_type: item.courseType,
+      durationDays: item.durationDays,
+      duration_days: item.durationDays,
+      durationHours: item.durationHours,
+      duration_hours: item.durationHours,
+      isRequiredForPromotion: item.isRequiredForPromotion,
+      is_required_for_promotion: item.isRequiredForPromotion,
+      minPassingScore: item.minPassingScore,
+      min_passing_score: item.minPassingScore,
+      description: item.description,
+      status: 'فعال',
+      createdAt: new Date().toISOString()
+    }));
+
+    return res.json(inMemoryGoverningCourses);
+  });
+
+  // --- Governing Course Exemption Rules & Employee Assignments ---
+  let inMemoryExemptionRules = {
+    rules: [
+      {
+        id: 'rule_higher_degrees',
+        title: 'إعفاء حملة الشهادات العليا (دكتوراه، ماجستير، دبلوم عالي معادل)',
+        qualifications: ['دكتوراه', 'ماجستير', 'دبلوم عالي'],
+        grades: ['الكل'],
+        exemptionType: 'كامل',
+        isExempt: true,
+        legalBasis: 'إعفاء تام من جميع الدورات الحاكمة المخصصة للترقية استناداً لضوابط واحتساب الشهادات العليا',
+        category: 'qualification',
+      },
+      {
+        id: 'rule_middle_school_and_below',
+        title: 'إعفاء مؤهلات المتوسطة فما دون (متوسطة، ابتدائية، يقرأ ويكتب، بدون مؤهل)',
+        qualifications: ['متوسطة فما دون', 'متوسطة', 'ابتدائية', 'بدون مؤهل'],
+        grades: ['الكل'],
+        exemptionType: 'كامل',
+        isExempt: true,
+        legalBasis: 'إعفاء حاملي شهادات المتوسطة فما دون من الالتزام بالدورات الحاكمة لأغراض الترقية والترفيع الوظيفي',
+        category: 'qualification',
+      },
+      {
+        id: 'rule_special_grades_and_leadership',
+        title: 'استثناء الدرجات الخاصة والعليا والعناوين الإدارية القيادية',
+        qualifications: ['الكل'],
+        grades: ['1', 'الخاصة_أ', 'الخاصة_ب', 'المناصب_القيادية'],
+        exemptionType: 'دورة_بديلة',
+        isExempt: true,
+        legalBasis: 'دورة واحدة في التطوير القيادي والمؤسسي أو إدارة مكتبية تغني عن الحتميات المتعددة المقررة للدرجة',
+        category: 'grade',
+      },
+      {
+        id: 'rule_service_25_years',
+        title: 'استثناء ذوي الخدمة الوظيفية الطويلة (25 سنة فما فوق)',
+        qualifications: ['الكل'],
+        grades: ['الكل'],
+        exemptionType: 'استثناء_خدمة',
+        isExempt: true,
+        legalBasis: 'إعفاء من دورات H.S.E والحاسوب والتركيز على الدورات التخصصية أو القيادية حسب طبيعة العمل',
+        category: 'general',
+      },
+      {
+        id: 'rule_bachelor_and_diploma',
+        title: 'شمول حاملي البكالوريوس والدبلوم والإعدادية بالدورات الحاكمة',
+        qualifications: ['بكالوريوس', 'دبلوم', 'إعدادية'],
+        grades: ['الكل'],
+        exemptionType: 'لا_يوجد_إعفاء',
+        isExempt: false,
+        legalBasis: 'مشمول بكافة الحتميات المقررة حسب جدول الدرجة الوظيفية لأغراض الترفيع',
+        category: 'qualification',
+      },
+    ],
+    qualificationsExemptions: [
+      { id: 'phd', name: 'الدكتوراه', isExempt: true, exemptionType: 'كامل', notes: 'إعفاء تام من جميع الدورات الحاكمة المخصصة للترفيع' },
+      { id: 'master', name: 'الماجستير', isExempt: true, exemptionType: 'جزئي', notes: 'إعفاء من دورات الاختصاص وتخفيض 50% من الساعات الإدارية' },
+      { id: 'higher_diploma', name: 'الدبلوم العالي', isExempt: true, exemptionType: 'كامل', notes: 'معادل للماجستير - إعفاء من حتميات الترفيع' },
+      { id: 'bachelor', name: 'البكالوريوس', isExempt: false, exemptionType: 'لا يوجد إعفاء', notes: 'مشمول بكافة الحتميات المقررة للدرجة الوظيفية' },
+      { id: 'diploma', name: 'الدبلوم', isExempt: false, exemptionType: 'لا يوجد إعفاء', notes: 'مشمول بكافة الحتميات المقررة للدرجة الوظيفية' },
+      { id: 'middle_school_below', name: 'المتوسطة فما دون', isExempt: true, exemptionType: 'كامل', notes: 'إعفاء تام من الدورات الحاكمة لأغراض الترقية' },
+    ],
+    gradeTitleExemptions: [
+      { id: 'special_grades', name: 'الدرجات الخاصة (العليا أ و ب) والعناوين القيادية', isExempt: true, exemptionType: 'كامل', notes: 'إعفاء تام أو دورة قيادية واحدة بديلة' },
+      { id: 'grade_1', name: 'الدرجة الأولى / كبار الموظفين', isExempt: true, exemptionType: 'دورة_بديلة', notes: 'دورة واحدة في التطوير القيادي والمؤسسي تغني عن الحتميات المتعددة' },
+      { id: 'manager_title', name: 'العنوان الإداري (مدير / مدير أقدم / رئيس مهندسين)', isExempt: true, exemptionType: 'بديل_كامل', notes: 'دورة واحدة لمدة شهر تغني عن كامل الدورات الحاكمة المحددة للدرجة' },
+      { id: 'service_25_years', name: 'الخدمة الوظيفية 25 سنة فما فوق', isExempt: true, exemptionType: 'استثناء_خدمة', notes: 'إعفاء من دورات H.S.E والحاسوب والتركيز على دورات القيادة فقط' },
+    ],
+    autoApplyRules: true,
+  };
+
+  let inMemoryEmployeeAssignments: Record<string, any> = {};
+
+  app.get('/api/governing-courses/exemption-rules', requireAuth, async (req, res) => {
+    try {
+      const records = await db.select().from(schema.governingCourseExemptionRules)
+        .where(eq(schema.governingCourseExemptionRules.configKey, 'default_exemption_rules'));
+      if (records && records.length > 0) {
+        const row = records[0];
+        const parsed = {
+          rules: row.rules ? JSON.parse(row.rules) : inMemoryExemptionRules.rules,
+          qualificationsExemptions: row.qualificationsExemptions ? JSON.parse(row.qualificationsExemptions) : inMemoryExemptionRules.qualificationsExemptions,
+          gradeTitleExemptions: row.gradeTitleExemptions ? JSON.parse(row.gradeTitleExemptions) : inMemoryExemptionRules.gradeTitleExemptions,
+          autoApplyRules: row.autoApplyRules ?? true,
+        };
+        inMemoryExemptionRules = parsed;
+        return res.json(parsed);
+      }
+    } catch (err) {
+      console.error('Error reading exemption rules from database:', err);
+    }
+    return res.json(inMemoryExemptionRules);
+  });
+
+  app.post('/api/governing-courses/exemption-rules', requireAuth, async (req, res) => {
+    const data = req.body;
+    inMemoryExemptionRules = { ...inMemoryExemptionRules, ...data };
+
+    try {
+      const rulesJson = JSON.stringify(inMemoryExemptionRules.rules || []);
+      const qualsJson = JSON.stringify(inMemoryExemptionRules.qualificationsExemptions || []);
+      const gradeJson = JSON.stringify(inMemoryExemptionRules.gradeTitleExemptions || []);
+      const autoApply = inMemoryExemptionRules.autoApplyRules !== false;
+
+      const existing = await db.select().from(schema.governingCourseExemptionRules)
+        .where(eq(schema.governingCourseExemptionRules.configKey, 'default_exemption_rules'));
+
+      if (existing && existing.length > 0) {
+        await db.update(schema.governingCourseExemptionRules)
+          .set({
+            rules: rulesJson,
+            qualificationsExemptions: qualsJson,
+            gradeTitleExemptions: gradeJson,
+            autoApplyRules: autoApply,
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.governingCourseExemptionRules.configKey, 'default_exemption_rules'));
+      } else {
+        await db.insert(schema.governingCourseExemptionRules).values({
+          configKey: 'default_exemption_rules',
+          rules: rulesJson,
+          qualificationsExemptions: qualsJson,
+          gradeTitleExemptions: gradeJson,
+          autoApplyRules: autoApply,
+        });
+      }
+    } catch (err) {
+      console.error('Error persisting exemption rules to database:', err);
+    }
+
+    return res.json(inMemoryExemptionRules);
+  });
+
+  app.get('/api/governing-courses/employee-assignments', requireAuth, async (req, res) => {
+    try {
+      const records = await db.select().from(schema.governingCourseEmployeeAssignments);
+      if (records && records.length > 0) {
+        const resultMap: Record<string, any> = {};
+        for (const row of records) {
+          resultMap[row.employeeId] = {
+            employeeId: row.employeeId,
+            status: row.status || 'مشمول',
+            exemptionReason: row.exemptionReason || '',
+            exemptionOrderNumber: row.exemptionOrderNumber || '',
+            exemptionOrderDate: row.exemptionOrderDate || '',
+            assignedCourses: row.assignedCourses ? JSON.parse(row.assignedCourses) : [],
+            courseProgress: row.courseProgress ? JSON.parse(row.courseProgress) : {},
+            notes: row.notes || '',
+            updatedAt: row.updatedAt ? row.updatedAt.toISOString() : new Date().toISOString()
+          };
+        }
+        inMemoryEmployeeAssignments = resultMap;
+        return res.json(resultMap);
+      }
+    } catch (err) {
+      console.error('Error reading employee assignments from database:', err);
+    }
+    return res.json(inMemoryEmployeeAssignments);
+  });
+
+  app.post('/api/governing-courses/employee-assignments', requireAuth, async (req, res) => {
+    const { employeeId, status, exemptionReason, exemptionOrderNumber, exemptionOrderDate, assignedCourses, courseProgress, notes } = req.body;
+    if (!employeeId) return res.status(400).json({ error: 'Employee ID is required' });
+
+    const empIdStr = String(employeeId);
+    const assignmentObj = {
+      employeeId: empIdStr,
+      status: status || 'مشمول',
+      exemptionReason: exemptionReason || '',
+      exemptionOrderNumber: exemptionOrderNumber || '',
+      exemptionOrderDate: exemptionOrderDate || '',
+      assignedCourses: assignedCourses || [],
+      courseProgress: courseProgress || {},
+      notes: notes || '',
+      updatedAt: new Date().toISOString()
+    };
+
+    inMemoryEmployeeAssignments[empIdStr] = assignmentObj;
+
+    try {
+      const existing = await db.select().from(schema.governingCourseEmployeeAssignments)
+        .where(eq(schema.governingCourseEmployeeAssignments.employeeId, empIdStr));
+
+      if (existing && existing.length > 0) {
+        await db.update(schema.governingCourseEmployeeAssignments)
+          .set({
+            status: assignmentObj.status,
+            exemptionReason: assignmentObj.exemptionReason,
+            exemptionOrderNumber: assignmentObj.exemptionOrderNumber,
+            exemptionOrderDate: assignmentObj.exemptionOrderDate,
+            assignedCourses: JSON.stringify(assignmentObj.assignedCourses),
+            courseProgress: JSON.stringify(assignmentObj.courseProgress),
+            notes: assignmentObj.notes,
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.governingCourseEmployeeAssignments.employeeId, empIdStr));
+      } else {
+        await db.insert(schema.governingCourseEmployeeAssignments).values({
+          employeeId: empIdStr,
+          status: assignmentObj.status,
+          exemptionReason: assignmentObj.exemptionReason,
+          exemptionOrderNumber: assignmentObj.exemptionOrderNumber,
+          exemptionOrderDate: assignmentObj.exemptionOrderDate,
+          assignedCourses: JSON.stringify(assignmentObj.assignedCourses),
+          courseProgress: JSON.stringify(assignmentObj.courseProgress),
+          notes: assignmentObj.notes,
+        });
+      }
+    } catch (err) {
+      console.error('Error persisting employee assignment to database:', err);
+    }
+
+    return res.json(assignmentObj);
   });
 
 

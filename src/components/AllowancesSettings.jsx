@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
+import { notifySettingsChanged } from '@/lib/settingsUtils';
 import { Plus, Trash2, Edit2, Check, X, RefreshCw, Play, Pause, TrendingUp, TrendingDown, Coins, GripVertical } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
 
@@ -122,6 +123,7 @@ export default function AllowancesSettings() {
       
       // Update local storage for immediate consumption in salary calculations
       localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(sortedData));
+      notifySettingsChanged('allowances_deductions', sortedData);
     } catch (error) {
       toast({
         title: 'خطأ في جلب البيانات',

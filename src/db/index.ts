@@ -135,6 +135,66 @@ export async function ensureSchema() {
       await safeQuery(q);
     }
     await safeQuery(`ALTER TABLE training_enrollments ALTER COLUMN employee_id DROP NOT NULL`);
+
+    // 5. Ensure governing_courses table exists
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS governing_courses (
+        id SERIAL PRIMARY KEY,
+        grade INTEGER NOT NULL,
+        course_name TEXT NOT NULL,
+        course_type TEXT DEFAULT 'تخصصية',
+        duration_days INTEGER DEFAULT 5,
+        duration_hours INTEGER DEFAULT 20,
+        is_required_for_promotion BOOLEAN DEFAULT TRUE,
+        min_passing_score INTEGER DEFAULT 60,
+        description TEXT,
+        status TEXT DEFAULT 'فعال',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Ensure camelCase alias columns exist for compatibility if needed
+    const govCols = [
+      `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS courseName TEXT`,
+      `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS courseType TEXT`,
+      `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS durationDays INTEGER`,
+      `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS durationHours INTEGER`,
+      `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS isRequiredForPromotion BOOLEAN`,
+      `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS minPassingScore INTEGER`,
+      `ALTER TABLE governing_courses ADD COLUMN IF NOT EXISTS createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
+    ];
+    for (const q of govCols) {
+      await safeQuery(q);
+    }
+
+    // 6. Governing Course Exemption Rules Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS governing_course_exemption_rules (
+        id SERIAL PRIMARY KEY,
+        config_key TEXT UNIQUE DEFAULT 'default_exemption_rules',
+        rules TEXT,
+        qualifications_exemptions TEXT,
+        grade_title_exemptions TEXT,
+        auto_apply_rules BOOLEAN DEFAULT TRUE,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 7. Governing Course Employee Assignments Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS governing_course_employee_assignments (
+        id SERIAL PRIMARY KEY,
+        employee_id TEXT UNIQUE NOT NULL,
+        status TEXT DEFAULT 'مشمول',
+        exemption_reason TEXT,
+        exemption_order_number TEXT,
+        exemption_order_date TEXT,
+        assigned_courses TEXT,
+        course_progress TEXT,
+        notes TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
   } catch (err) {
     console.error('Migration execution notice:', err);
   }

@@ -14,12 +14,30 @@ export async function request(path, options = {}) {
     headers
   });
   
-  if (!response.ok) {
-    const errData = await response.json().catch(() => ({}));
-    throw new Error(errData.error || `HTTP error! status: ${response.status}`);
+  const text = await response.text();
+  let data = null;
+
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
   }
-  
-  return response.json();
+
+  if (!response.ok) {
+    const errorMsg = data?.error || data?.message || `HTTP error! status: ${response.status}`;
+    throw new Error(errorMsg);
+  }
+
+  if (data === null) {
+    if (text && text.trim().startsWith('<')) {
+      throw new Error(`Server returned HTML response for ${path}`);
+    }
+    return text;
+  }
+
+  return data;
 }
 
 // Generic CRUD entity client creator
@@ -170,7 +188,8 @@ export const apiClient = {
     ShiftSystem: createEntityClient('shift-systems'),
     ServiceRecord: createEntityClient('service-records'),
     PenaltyType: createEntityClient('penalty-types'),
-    EvaluationForm: createEntityClient('evaluation-forms')
+    EvaluationForm: createEntityClient('evaluation-forms'),
+    GoverningCourse: createEntityClient('governing-courses')
   },
   settings: {
     get: async () => request('/api/settings'),

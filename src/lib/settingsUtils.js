@@ -54,7 +54,7 @@ export async function fetchEducationDegreesSorted() {
     }
     return sortedData;
   } catch (err) {
-    console.error('Error fetching education degrees:', err);
+    console.warn('Could not fetch education degrees from API:', err?.message || err);
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('EDUCATION_DEGREES_PRESETS');
       if (saved) {
@@ -79,7 +79,7 @@ export async function fetchResponsibilityAllowancesSorted() {
     }
     return sortedData;
   } catch (err) {
-    console.error('Error fetching responsibility allowances:', err);
+    console.warn('Could not fetch responsibility allowances from API:', err?.message || err);
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('RESPONSIBILITY_ALLOWANCES_PRESETS');
       if (saved) {
@@ -104,7 +104,7 @@ export async function fetchPenaltyTypesSorted() {
     }
     return sortedData;
   } catch (err) {
-    console.error('Error fetching penalty types:', err);
+    console.warn('Could not fetch penalty types from API:', err?.message || err);
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('PENALTY_TYPES_PRESETS');
       if (saved) {
@@ -129,9 +129,34 @@ export async function fetchEvaluationFormsSorted() {
     }
     return sortedData;
   } catch (err) {
-    console.error('Error fetching evaluation forms:', err);
+    console.warn('Could not fetch evaluation forms from API:', err?.message || err);
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('EVALUATION_FORMS_PRESETS');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {}
+      }
+    }
+    return [];
+  }
+}
+
+/**
+ * Fetch Governing Courses sorted according to user preference.
+ */
+export async function fetchGoverningCoursesSorted() {
+  try {
+    const data = await apiClient.entities.GoverningCourse.list();
+    const sortedData = applySavedOrder(data || [], 'GOVERNING_COURSES_ORDER');
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('GOVERNING_COURSES_PRESETS', JSON.stringify(sortedData));
+    }
+    return sortedData;
+  } catch (err) {
+    console.warn('Could not fetch governing courses from API:', err?.message || err);
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('GOVERNING_COURSES_PRESETS');
       if (saved) {
         try {
           return JSON.parse(saved);
