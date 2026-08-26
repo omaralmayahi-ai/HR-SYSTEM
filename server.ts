@@ -12,6 +12,7 @@ import { seedAdminUser } from './src/db/users.ts';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { SALARY_TABLE } from './src/lib/salaryTable.js';
+import { encryptData, decryptData } from './src/lib/cryptoStorage.ts';
 
 const currentFilename = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' && import.meta.url ? fileURLToPath(import.meta.url) : '');
 const currentDirname = typeof __dirname !== 'undefined' ? __dirname : (currentFilename ? path.dirname(currentFilename) : process.cwd());
@@ -5819,7 +5820,9 @@ async function startServer() {
         leaveAccrualLogs,
         genericMemoryStores
       };
-      fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2), 'utf-8');
+      const jsonStr = JSON.stringify(state, null, 2);
+      const encryptedPayload = encryptData(jsonStr);
+      fs.writeFileSync(DATA_FILE, encryptedPayload, { encoding: 'utf-8', mode: 0o600 });
     } catch (e) {
       console.warn('Could not save local DB state:', e);
     }
@@ -5829,7 +5832,17 @@ async function startServer() {
     try {
       if (fs.existsSync(DATA_FILE)) {
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-        const state = JSON.parse(raw);
+        const decryptedStr = decryptData(raw);
+        const state = JSON.parse(decryptedStr);
+
+        // If file was legacy plain text, re-save immediately as encrypted
+        try {
+          const parsedRaw = JSON.parse(raw);
+          if (parsedRaw && !parsedRaw.version) {
+            console.log('[SECURITY] Upgrading legacy plain-text local_storage.json to AES-256-GCM encryption...');
+            saveLocalDb();
+          }
+        } catch (e) {}
         if (Array.isArray(state.inMemoryEmployees) && state.inMemoryEmployees.length > 0) inMemoryEmployees = state.inMemoryEmployees;
         if (state.genericMemoryStores && typeof state.genericMemoryStores === 'object') {
           for (const [k, v] of Object.entries(state.genericMemoryStores)) {
