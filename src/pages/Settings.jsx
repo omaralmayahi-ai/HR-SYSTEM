@@ -13,16 +13,24 @@ const PRESET_THEMES = [
   { name: 'أزرق ملكي', primary: '#1B3A6B', secondary: '#C8960C' },
   { name: 'أخضر زمردي', primary: '#065F46', secondary: '#10B981' },
   { name: 'أحمر داكن', primary: '#881337', secondary: '#E11D48' },
-  { name: 'بنفسجي غامق', primary: '#581C87', secondary: '#8B5CF6' },
-  { name: 'رمادي احترافي', primary: '#374151', secondary: '#6B7280' },
-  { name: 'برتقالي دافئ', primary: '#7C2D12', secondary: '#F97316' },
+  { name: 'بنفسجي فاخر', primary: '#4C1D95', secondary: '#8B5CF6' },
+  { name: 'كحلي بترولي', primary: '#0F3A4A', secondary: '#D97706' },
+  { name: 'رمادي احترافي', primary: '#1E293B', secondary: '#3B82F6' },
+  { name: 'عنابي دافئ', primary: '#7C2D12', secondary: '#F97316' },
+  { name: 'زيتي رسمي', primary: '#14532D', secondary: '#CA8A04' },
 ];
 
 const FONTS = [
-  { value: 'Cairo', name: 'خط القاهرة (Cairo) - خط ممتد ومتين للقوائم والروابط' },
+  { value: 'Cairo', name: 'خط القاهرة (Cairo) - خط متزن واحترافي لجميع الواجهات' },
   { value: 'Tajawal', name: 'خط تجول (Tajawal) - خط عصري وأنيق' },
-  { value: 'Amiri', name: 'خط أميري (Amiri) - خط كلاسيكي فاخر' },
-  { value: 'Inter', name: 'خط إنتر (Inter) - بسيط وعملي' },
+  { value: 'Almarai', name: 'خط المراعي (Almarai) - خط نظيف مريح للقراءة' },
+  { value: 'Readex Pro', name: 'خط ريديكس برو (Readex Pro) - خط رقمي حديث ومميز' },
+  { value: 'Alexandria', name: 'خط الإسكندرية (Alexandria) - خط هندسي فاخر' },
+  { value: 'Amiri', name: 'خط أميري (Amiri) - خط رسمي كلاسيكي' },
+  { value: 'IBM Plex Sans Arabic', name: 'خط آي بي إم (IBM Plex Arabic) - خط تقني عالي الدقة' },
+  { value: 'Rubik', name: 'خط روبيك (Rubik) - خط ناعم ومريح' },
+  { value: 'Noto Sans Arabic', name: 'خط نوتو سانز (Noto Sans Arabic) - خط شامل وواضح' },
+  { value: 'Inter', name: 'خط إنتر (Inter) - بسيط وعالمي' },
 ];
 
 export default function Settings() {
@@ -153,6 +161,48 @@ export default function Settings() {
     setActiveTheme(theme.name);
     setPrimaryColor(theme.primary);
     setSecondaryColor(theme.secondary);
+    if (setAppPublicSettings) {
+      setAppPublicSettings(prev => ({
+        ...prev,
+        primaryColor: theme.primary,
+        secondaryColor: theme.secondary,
+        activeTheme: theme.name
+      }));
+    }
+  };
+
+  const handlePrimaryColorChange = (color) => {
+    setPrimaryColor(color);
+    setActiveTheme('مخصص');
+    if (setAppPublicSettings) {
+      setAppPublicSettings(prev => ({
+        ...prev,
+        primaryColor: color,
+        activeTheme: 'مخصص'
+      }));
+    }
+  };
+
+  const handleSecondaryColorChange = (color) => {
+    setSecondaryColor(color);
+    setActiveTheme('مخصص');
+    if (setAppPublicSettings) {
+      setAppPublicSettings(prev => ({
+        ...prev,
+        secondaryColor: color,
+        activeTheme: 'مخصص'
+      }));
+    }
+  };
+
+  const handleFontChange = (newFont) => {
+    setFontFamily(newFont);
+    if (setAppPublicSettings) {
+      setAppPublicSettings(prev => ({
+        ...prev,
+        fontFamily: newFont
+      }));
+    }
   };
 
   // Day Toggle
@@ -606,19 +656,13 @@ export default function Settings() {
                           <input
                             type="color"
                             value={primaryColor}
-                            onChange={(e) => {
-                              setPrimaryColor(e.target.value);
-                              setActiveTheme('مخصص');
-                            }}
+                            onChange={(e) => handlePrimaryColorChange(e.target.value)}
                             className="w-10 h-10 p-0.5 border border-slate-200 rounded-xl cursor-pointer"
                           />
                           <input
                             type="text"
                             value={primaryColor}
-                            onChange={(e) => {
-                              setPrimaryColor(e.target.value);
-                              setActiveTheme('مخصص');
-                            }}
+                            onChange={(e) => handlePrimaryColorChange(e.target.value)}
                             className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 text-sm font-mono focus:bg-white text-slate-700 uppercase"
                           />
                         </div>
@@ -630,19 +674,13 @@ export default function Settings() {
                           <input
                             type="color"
                             value={secondaryColor}
-                            onChange={(e) => {
-                              setSecondaryColor(e.target.value);
-                              setActiveTheme('مخصص');
-                            }}
+                            onChange={(e) => handleSecondaryColorChange(e.target.value)}
                             className="w-10 h-10 p-0.5 border border-slate-200 rounded-xl cursor-pointer"
                           />
                           <input
                             type="text"
                             value={secondaryColor}
-                            onChange={(e) => {
-                              setSecondaryColor(e.target.value);
-                              setActiveTheme('مخصص');
-                            }}
+                            onChange={(e) => handleSecondaryColorChange(e.target.value)}
                             className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 text-sm font-mono focus:bg-white text-slate-700 uppercase"
                           />
                         </div>
@@ -654,7 +692,7 @@ export default function Settings() {
                       <label className="text-sm font-semibold text-slate-700 block">الخط المستخدم في واجهات التطبيق</label>
                       <select
                         value={fontFamily}
-                        onChange={(e) => setFontFamily(e.target.value)}
+                        onChange={(e) => handleFontChange(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:bg-white focus:ring-2 focus:ring-[#1B3A6B]/20 transition-all text-slate-800 font-medium"
                       >
                         {FONTS.map(f => (
