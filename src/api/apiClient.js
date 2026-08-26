@@ -32,8 +32,10 @@ export async function request(path, options = {}) {
         window.location.href = '/login';
       }
     }
-    const errorMsg = data?.error || data?.message || `HTTP error! status: ${response.status}`;
-    throw new Error(errorMsg);
+    const errorMsg = data?.error ? (data.details ? `${data.error} - [${data.details}]` : data.error) : (data?.message || `HTTP error! status: ${response.status}`);
+    const err = new Error(errorMsg);
+    if (data?.details) err.details = data.details;
+    throw err;
   }
 
   if (data === null) {
