@@ -23,6 +23,7 @@ import {
 import apiClient, { request } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { notifySettingsChanged } from '@/lib/settingsUtils';
+import { useAuth } from '@/lib/AuthContext';
 
 const RESPONSIBILITY_OPTIONS = [
   'مدير عام',
@@ -57,6 +58,9 @@ const CATEGORY_OPTIONS = [
 ];
 
 export default function EvaluationFormsSettings() {
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
+  const secondaryColor = appPublicSettings?.secondaryColor || '#C8960C';
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [forms, setForms] = useState([]);
@@ -510,18 +514,24 @@ export default function EvaluationFormsSettings() {
   return (
     <div className="space-y-6" dir="rtl">
       {/* Top Banner & Action */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-6 rounded-2xl text-white shadow-md relative overflow-hidden">
-        <div className="absolute -left-10 -bottom-10 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+      <div 
+        className="p-6 rounded-2xl text-white shadow-md relative overflow-hidden transition-all duration-300 border border-white/10"
+        style={{ background: `linear-gradient(135deg, ${primaryColor} 0%, #0d1f3c 100%)` }}
+      >
+        <div 
+          className="absolute -left-10 -bottom-10 w-48 h-48 rounded-full blur-3xl pointer-events-none" 
+          style={{ backgroundColor: `${secondaryColor}25` }}
+        />
         <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="space-y-1.5">
-            <div className="flex items-center gap-2 text-indigo-300 font-bold text-xs">
+            <div className="flex items-center gap-2 font-bold text-xs" style={{ color: secondaryColor }}>
               <Award size={16} />
               <span>نظام تقييم الأداء والكفاءة السنوي</span>
             </div>
             <h2 className="text-xl font-black tracking-tight text-white">
               إدارة وتخصيص استمارات تقييم الأداء حسب الفئات الوظيفية
             </h2>
-            <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+            <p className="text-xs text-slate-200 max-w-2xl leading-relaxed">
               قم بإنشاء وتخصيص نماذج تقييم الأداء وتحديد المحاور والمعايير الفرعية والدرجات المستهدفة لكل فئة وظيفية (قيادية، هندسية، إدارية، صحية، أو خدمة مساندة).
             </p>
           </div>
@@ -537,7 +547,12 @@ export default function EvaluationFormsSettings() {
             </button>
             <button
               onClick={handleOpenCreate}
-              className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 transition-all"
+              style={{
+                backgroundColor: secondaryColor,
+                color: '#0f172a',
+                boxShadow: `0 4px 14px ${secondaryColor}40`
+              }}
+              className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-black text-xs transition-all hover:brightness-110 active:scale-95"
             >
               <Plus size={16} />
               <span>إنشاء استمارة تقييم جديدة</span>

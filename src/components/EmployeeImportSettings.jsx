@@ -8,8 +8,12 @@ import {
   Database, Check, ShieldAlert, RefreshCw as ReplaceIcon, ArrowRightLeft
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/lib/AuthContext';
 
 export default function EmployeeImportSettings() {
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
+  const secondaryColor = appPublicSettings?.secondaryColor || '#C8960C';
   const { toast } = useToast();
   
   const [existingEmployees, setExistingEmployees] = useState([]);
@@ -686,15 +690,22 @@ export default function EmployeeImportSettings() {
     <div className="space-y-6" dir="rtl">
       
       {/* Top Banner & Header */}
-      <div className="bg-gradient-to-r from-[#1B3A6B] to-[#254B85] text-white rounded-2xl p-6 shadow-md border border-slate-700/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="space-y-1.5">
+      <div 
+        className="text-white rounded-2xl p-6 shadow-md border border-white/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative overflow-hidden transition-all duration-300"
+        style={{ background: `linear-gradient(135deg, ${primaryColor} 0%, #0d1f3c 100%)` }}
+      >
+        <div 
+          className="absolute -left-10 -bottom-10 w-48 h-48 rounded-full blur-3xl pointer-events-none" 
+          style={{ backgroundColor: `${secondaryColor}25` }}
+        />
+        <div className="space-y-1.5 relative z-10">
           <div className="flex items-center gap-2">
             <div className="p-2 bg-white/10 rounded-xl">
-              <FileSpreadsheet className="text-emerald-400" size={24} />
+              <FileSpreadsheet style={{ color: secondaryColor }} size={24} />
             </div>
-            <h2 className="text-lg font-black tracking-wide">إدارة واستيراد بيانات الموظفين (Excel Import)</h2>
+            <h2 className="text-lg font-black tracking-wide text-white">إدارة واستيراد بيانات الموظفين (Excel Import)</h2>
           </div>
-          <p className="text-xs text-blue-100 max-w-2xl leading-relaxed">
+          <p className="text-xs text-slate-200 max-w-2xl leading-relaxed">
             استيراد ومطابقة بيانات الموظفين الشاملة (66 حقل مغطية لقيد الموظف بالكامل) مع نموذج القوائم المنسدلة، ومطابقة التكرار المباشر برقم الشركة مع خيارات الاستبدال والتحديث الذكي.
           </p>
         </div>
@@ -702,7 +713,12 @@ export default function EmployeeImportSettings() {
         <Button
           type="button"
           onClick={handleDownloadTemplate}
-          className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl px-5 py-3 gap-2 shadow-sm shrink-0 border border-emerald-400/30"
+          style={{
+            backgroundColor: secondaryColor,
+            color: '#0f172a',
+            boxShadow: `0 4px 14px ${secondaryColor}40`
+          }}
+          className="font-black text-xs rounded-xl px-5 py-3 gap-2 shrink-0 border border-white/20 hover:brightness-110 active:scale-95 transition-all relative z-10"
         >
           <Download size={16} />
           تنزيل نموذج Excel المطور الشامل (66 حقل - قيد كامل)
@@ -714,13 +730,19 @@ export default function EmployeeImportSettings() {
         
         {/* File Dropzone */}
         <div className="md:col-span-8 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
-          <h3 className="text-sm font-bold text-[#1B3A6B] flex items-center gap-2">
-            <Upload size={18} className="text-blue-600" />
+          <h3 className="text-sm font-bold flex items-center gap-2" style={{ color: primaryColor }}>
+            <Upload size={18} style={{ color: primaryColor }} />
             خطوة 1: رفع ملف Excel وقراءته
           </h3>
 
           <div className="border-2 border-dashed border-slate-300 hover:border-blue-500 transition-colors rounded-2xl p-8 text-center bg-slate-50/50 flex flex-col items-center justify-center gap-3">
-            <div className="w-14 h-14 bg-blue-100/80 text-blue-700 rounded-2xl flex items-center justify-center">
+            <div 
+              className="w-14 h-14 rounded-2xl flex items-center justify-center"
+              style={{
+                backgroundColor: `${primaryColor}15`,
+                color: primaryColor
+              }}
+            >
               <FileSpreadsheet size={28} />
             </div>
             
@@ -732,7 +754,14 @@ export default function EmployeeImportSettings() {
             </div>
 
             <div className="flex items-center gap-3 mt-2">
-              <label className="cursor-pointer bg-[#1B3A6B] hover:bg-[#152d54] text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-sm transition-all inline-flex items-center gap-2">
+              <label 
+                style={{
+                  backgroundColor: primaryColor,
+                  color: '#ffffff',
+                  boxShadow: `0 4px 12px ${primaryColor}30`
+                }}
+                className="cursor-pointer text-xs font-bold px-5 py-2.5 rounded-xl transition-all inline-flex items-center gap-2 hover:brightness-110 active:scale-95"
+              >
                 <Upload size={14} />
                 اختر ملف من الجهاز
                 <input 

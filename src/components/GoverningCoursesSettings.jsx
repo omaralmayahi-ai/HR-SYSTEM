@@ -24,6 +24,7 @@ import {
   Save
 } from 'lucide-react';
 import { notifySettingsChanged, applySavedOrder, fetchEducationDegreesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
+import { useAuth } from '@/lib/AuthContext';
 
 const JOB_GRADES_LIST = [
   { value: 10, label: 'الدرجة العاشرة (للترفيع للتاسعة)', shortLabel: 'الدرجة 10' },
@@ -127,6 +128,9 @@ const COURSE_TYPES = [
 ];
 
 export default function GoverningCoursesSettings() {
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
+  const secondaryColor = appPublicSettings?.secondaryColor || '#C8960C';
   const [activeTab, setActiveTab] = useState('catalog'); // 'catalog' | 'rules' | 'inclusions' | 'assignments'
   const [records, setRecords] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -1069,16 +1073,29 @@ export default function GoverningCoursesSettings() {
   return (
     <div className="space-y-6">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-amber-900 via-amber-800 to-amber-950 text-white rounded-3xl p-6 shadow-xl relative overflow-hidden">
-        <div className="absolute -left-10 -bottom-10 w-48 h-48 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+      <div 
+        className="text-white rounded-3xl p-6 shadow-xl relative overflow-hidden transition-all duration-300 border border-white/10"
+        style={{ background: `linear-gradient(135deg, ${primaryColor} 0%, #0d1f3c 100%)` }}
+      >
+        <div 
+          className="absolute -left-10 -bottom-10 w-48 h-48 rounded-full blur-3xl pointer-events-none" 
+          style={{ backgroundColor: `${secondaryColor}25` }}
+        />
         <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/20 border border-amber-400/30 text-amber-200 text-xs font-bold mb-2">
+            <div 
+              className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold mb-2 border shadow-xs"
+              style={{
+                backgroundColor: `${secondaryColor}25`,
+                borderColor: `${secondaryColor}40`,
+                color: '#ffffff'
+              }}
+            >
               <GraduationCap className="w-3.5 h-3.5" />
               نظام الموارد البشرية والتدريب والتطوير
             </div>
             <h2 className="text-2xl font-black text-white">إدارة الدورات التدريبية الحاكمة والمشمولين والإعفاءات</h2>
-            <p className="text-amber-100/80 text-xs mt-1 max-w-2xl leading-relaxed">
+            <p className="text-slate-200 text-xs mt-1 max-w-2xl leading-relaxed">
               تحديد محددات وحتميات الدورات الحاكمة للترفيع، وضوابط الإعفاء حسب الشهادات الأكاديمية والدرجات والعناوين الوظيفية، وإدارة شمول الموظفين وتعيين الدورات المطلوبة لكل موظف.
             </p>
           </div>
@@ -1087,7 +1104,7 @@ export default function GoverningCoursesSettings() {
             <button
               onClick={handleResetDefaults}
               disabled={loading}
-              className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-700/60 hover:bg-amber-700/90 text-amber-100 text-xs font-semibold rounded-xl transition-all border border-amber-500/30"
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-xl transition-all border border-white/20 backdrop-blur-sm"
               title="استعادة الدورات الحاكمة القياسية المعتمدة"
             >
               <RotateCcw className="w-4 h-4" />
@@ -1098,7 +1115,12 @@ export default function GoverningCoursesSettings() {
                 setActiveTab('catalog');
                 setAdding(true);
               }}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg transition-all"
+              style={{
+                backgroundColor: secondaryColor,
+                color: '#0f172a',
+                boxShadow: `0 4px 14px ${secondaryColor}40`
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2.5 font-black text-xs rounded-xl transition-all hover:brightness-110 active:scale-95"
             >
               <Plus className="w-4 h-4" />
               إضافة دورة حاكمة جديدة
@@ -1107,13 +1129,23 @@ export default function GoverningCoursesSettings() {
         </div>
 
         {/* Sub-Tabs Navigation */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-6 pt-4 border-t border-amber-700/40">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-6 pt-4 border-t border-white/15">
           <button
             onClick={() => setActiveTab('catalog')}
+            style={activeTab === 'catalog' ? {
+              backgroundColor: secondaryColor,
+              color: '#0f172a',
+              borderColor: secondaryColor,
+              boxShadow: `0 4px 12px ${secondaryColor}40`
+            } : {
+              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              borderColor: 'rgba(255, 255, 255, 0.15)',
+              color: '#ffffff'
+            }}
             className={`p-3 rounded-2xl border text-right transition-all flex items-center gap-2.5 ${
               activeTab === 'catalog'
-                ? 'bg-amber-500 text-slate-950 font-bold border-amber-300 shadow-md'
-                : 'bg-amber-950/40 border-amber-700/30 text-amber-100 hover:bg-amber-900/50'
+                ? 'font-black shadow-md'
+                : 'hover:bg-white/15'
             }`}
           >
             <BookOpen className="w-4 h-4 shrink-0" />
@@ -1125,10 +1157,20 @@ export default function GoverningCoursesSettings() {
 
           <button
             onClick={() => setActiveTab('rules')}
+            style={activeTab === 'rules' ? {
+              backgroundColor: secondaryColor,
+              color: '#0f172a',
+              borderColor: secondaryColor,
+              boxShadow: `0 4px 12px ${secondaryColor}40`
+            } : {
+              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              borderColor: 'rgba(255, 255, 255, 0.15)',
+              color: '#ffffff'
+            }}
             className={`p-3 rounded-2xl border text-right transition-all flex items-center gap-2.5 ${
               activeTab === 'rules'
-                ? 'bg-amber-500 text-slate-950 font-bold border-amber-300 shadow-md'
-                : 'bg-amber-950/40 border-amber-700/30 text-amber-100 hover:bg-amber-900/50'
+                ? 'font-black shadow-md'
+                : 'hover:bg-white/15'
             }`}
           >
             <ShieldCheck className="w-4 h-4 shrink-0" />
@@ -1140,10 +1182,20 @@ export default function GoverningCoursesSettings() {
 
           <button
             onClick={() => setActiveTab('inclusions')}
+            style={activeTab === 'inclusions' ? {
+              backgroundColor: secondaryColor,
+              color: '#0f172a',
+              borderColor: secondaryColor,
+              boxShadow: `0 4px 12px ${secondaryColor}40`
+            } : {
+              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              borderColor: 'rgba(255, 255, 255, 0.15)',
+              color: '#ffffff'
+            }}
             className={`p-3 rounded-2xl border text-right transition-all flex items-center gap-2.5 ${
               activeTab === 'inclusions'
-                ? 'bg-amber-500 text-slate-950 font-bold border-amber-300 shadow-md'
-                : 'bg-amber-950/40 border-amber-700/30 text-amber-100 hover:bg-amber-900/50'
+                ? 'font-black shadow-md'
+                : 'hover:bg-white/15'
             }`}
           >
             <UserCheck className="w-4 h-4 shrink-0" />
@@ -1155,10 +1207,20 @@ export default function GoverningCoursesSettings() {
 
           <button
             onClick={() => setActiveTab('assignments')}
+            style={activeTab === 'assignments' ? {
+              backgroundColor: secondaryColor,
+              color: '#0f172a',
+              borderColor: secondaryColor,
+              boxShadow: `0 4px 12px ${secondaryColor}40`
+            } : {
+              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              borderColor: 'rgba(255, 255, 255, 0.15)',
+              color: '#ffffff'
+            }}
             className={`p-3 rounded-2xl border text-right transition-all flex items-center gap-2.5 ${
               activeTab === 'assignments'
-                ? 'bg-amber-500 text-slate-950 font-bold border-amber-300 shadow-md'
-                : 'bg-amber-950/40 border-amber-700/30 text-amber-100 hover:bg-amber-900/50'
+                ? 'font-black shadow-md'
+                : 'hover:bg-white/15'
             }`}
           >
             <Award className="w-4 h-4 shrink-0" />

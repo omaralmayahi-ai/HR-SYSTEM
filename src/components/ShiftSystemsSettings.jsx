@@ -3,8 +3,12 @@ import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { Plus, Trash2, Edit2, Check, X, RefreshCw, Clock, Calendar, AlertCircle, Info, Sparkles } from 'lucide-react';
 import { notifySettingsChanged } from '@/lib/settingsUtils';
+import { useAuth } from '@/lib/AuthContext';
 
 export default function ShiftSystemsSettings() {
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
+  const secondaryColor = appPublicSettings?.secondaryColor || '#C8960C';
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
@@ -194,14 +198,21 @@ export default function ShiftSystemsSettings() {
   return (
     <div className="space-y-6">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-blue-900 via-[#1B3A6B] to-slate-900 text-white p-6 rounded-2xl shadow-md border border-blue-800/40 relative overflow-hidden">
+      <div 
+        className="text-white p-6 rounded-2xl shadow-md border border-white/10 relative overflow-hidden transition-all duration-300"
+        style={{ background: `linear-gradient(135deg, ${primaryColor} 0%, #0d1f3c 100%)` }}
+      >
+        <div 
+          className="absolute -left-10 -bottom-10 w-48 h-48 rounded-full blur-3xl pointer-events-none" 
+          style={{ backgroundColor: `${secondaryColor}25` }}
+        />
         <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <Clock className="w-5 h-5 text-blue-300" />
-              <h3 className="text-lg font-black">إدارة أنظمة عمل المناوبة</h3>
+              <Clock className="w-5 h-5" style={{ color: secondaryColor }} />
+              <h3 className="text-lg font-black text-white">إدارة أنظمة عمل المناوبة</h3>
             </div>
-            <p className="text-xs text-blue-200/90 leading-relaxed max-w-2xl">
+            <p className="text-xs text-slate-200 leading-relaxed max-w-2xl">
               تحديد وتوصيف أنظمة المناوبة المعتمدة وضبط اسم المناوبة، عدد أيام العمل والاستراحة، طبيعة وساعات العمل اليومية، وتفاصيل نمط الحضور والتبديل بالنوبة.
             </p>
           </div>
@@ -210,16 +221,21 @@ export default function ShiftSystemsSettings() {
               <button
                 type="button"
                 onClick={handleSeedTemplates}
-                className="bg-blue-500/30 hover:bg-blue-500/40 text-blue-100 border border-blue-400/30 rounded-xl px-4 py-2 text-xs font-bold transition-all flex items-center gap-1.5 backdrop-blur-sm"
+                className="bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-xl px-4 py-2 text-xs font-bold transition-all flex items-center gap-1.5 backdrop-blur-sm"
               >
-                <Sparkles size={14} className="text-amber-300" />
+                <Sparkles size={14} style={{ color: secondaryColor }} />
                 إدراج الأنماط الشائعة
               </button>
             )}
             <button
               type="button"
               onClick={handleStartAdd}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl px-4 py-2 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm"
+              style={{
+                backgroundColor: secondaryColor,
+                color: '#0f172a',
+                boxShadow: `0 4px 14px ${secondaryColor}40`
+              }}
+              className="font-black text-xs rounded-xl px-4 py-2 transition-all hover:brightness-110 active:scale-95 flex items-center gap-1.5"
             >
               <Plus size={15} />
               إضافة نظام مناوبة جديد

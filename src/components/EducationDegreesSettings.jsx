@@ -3,8 +3,12 @@ import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { Plus, Trash2, Edit2, Check, X, RefreshCw, GraduationCap, GripVertical, Award, Download } from 'lucide-react';
 import { notifySettingsChanged } from '@/lib/settingsUtils';
+import { useAuth } from '@/lib/AuthContext';
 
 export default function EducationDegreesSettings() {
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
+  const secondaryColor = appPublicSettings?.secondaryColor || '#C8960C';
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
@@ -329,16 +333,32 @@ export default function EducationDegreesSettings() {
       </div>
 
       {/* Higher Degree Allowances Dedicated Management Card */}
-      <div className="bg-gradient-to-r from-violet-900/5 via-purple-900/5 to-indigo-900/5 border border-violet-200 rounded-2xl p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-violet-200/60 pb-3">
+      <div 
+        className="border rounded-2xl p-5 space-y-4 transition-all"
+        style={{
+          backgroundColor: `${primaryColor}06`,
+          borderColor: `${primaryColor}25`
+        }}
+      >
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-200/60 pb-3">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-violet-600 text-white rounded-xl shadow-xs">
+            <div 
+              className="p-2 text-white rounded-xl shadow-xs"
+              style={{ backgroundColor: primaryColor }}
+            >
               <Award size={20} />
             </div>
             <div>
               <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
                 تثبيت وتعديل مخصصات الشهادة العليا
-                <span className="bg-violet-100 text-violet-800 text-[10px] px-2 py-0.5 rounded-full font-bold border border-violet-200">
+                <span 
+                  className="text-[10px] px-2 py-0.5 rounded-full font-bold border"
+                  style={{
+                    backgroundColor: `${secondaryColor}20`,
+                    borderColor: `${secondaryColor}40`,
+                    color: secondaryColor
+                  }}
+                >
                   مخصصات علمية إضافية
                 </span>
               </h3>
