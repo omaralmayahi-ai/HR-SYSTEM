@@ -3315,7 +3315,15 @@ async function startServer() {
 
   app.put('/api/shift-systems/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, work_days, rest_days, allowance_amount, description } = req.body;
+    const { name, work_days, rest_days, allowance_amount, description, status } = req.body;
+
+    if (status === 'معطل' || status === 'غير فعال') {
+      const refCheck = checkReferentialUsage('shift_systems', id, true, buildRefContext());
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+      }
+    }
+
     try {
       const [updated] = await db.update(schema.shiftSystems)
         .set({
@@ -3349,6 +3357,12 @@ async function startServer() {
 
   app.delete('/api/shift-systems/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
+
+    const refCheck = checkReferentialUsage('shift_systems', id, false, buildRefContext());
+    if (!refCheck.canProceed) {
+      return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+    }
+
     try {
       await db.delete(schema.shiftSystems).where(eq(schema.shiftSystems.id, id));
     } catch (error: any) {
@@ -4087,7 +4101,15 @@ async function startServer() {
         allowance_flat_amount,
         overtime_factor,
         notes,
+        status
       } = req.body;
+
+      if (status === 'معطل' || status === 'غير فعال') {
+        const refCheck = checkReferentialUsage('shift_systems', id, true, buildRefContext());
+        if (!refCheck.canProceed) {
+          return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+        }
+      }
 
       try {
         const [updated] = await db.update(schema.shiftSystems)
@@ -4122,6 +4144,12 @@ async function startServer() {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+
+      const refCheck = checkReferentialUsage('shift_systems', id, false, buildRefContext());
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+      }
+
       try {
         await db.delete(schema.shiftSystems).where(eq(schema.shiftSystems.id, id));
       } catch (err) {
