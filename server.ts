@@ -5574,6 +5574,13 @@ async function startServer() {
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
 
+    if (data.status === 'غير فعال' || data.status === 'معطل') {
+      const refCheck = checkReferentialUsage('governing_courses', id, true, buildRefContext());
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+      }
+    }
+
     const updateValues: any = {};
     if (data.grade !== undefined) updateValues.grade = parseInt(data.grade);
     if (data.courseName !== undefined || data.course_name !== undefined) updateValues.courseName = data.courseName || data.course_name;
@@ -5620,6 +5627,11 @@ async function startServer() {
   app.delete('/api/governing-courses/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+
+    const refCheck = checkReferentialUsage('governing_courses', id, false, buildRefContext());
+    if (!refCheck.canProceed) {
+      return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+    }
 
     try {
       await ensureGoverningCoursesTable();
