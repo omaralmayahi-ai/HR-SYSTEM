@@ -3733,6 +3733,14 @@ async function startServer() {
       if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
       const data = mapKeys(req.body, snakeToCamel);
       const { name, delayMonths, description, salaryDeductionDays, status } = data;
+
+      if (status === 'غير فعال' || status === 'معطل') {
+        const refCheck = checkReferentialUsage('penalty_types', id, true, buildRefContext());
+        if (!refCheck.canProceed) {
+          return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+        }
+      }
+
       const [updated] = await db.update(schema.penaltyTypes)
         .set({
           name: name !== undefined ? name : undefined,
@@ -3755,6 +3763,12 @@ async function startServer() {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
+
+      const refCheck = checkReferentialUsage('penalty_types', id, false, buildRefContext());
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+      }
+
       await db.delete(schema.penaltyTypes).where(eq(schema.penaltyTypes.id, id));
       res.json({ success: true });
     } catch (error: any) {
