@@ -5,10 +5,12 @@ import { useToast } from '@/components/ui/use-toast';
 import { 
   Download, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, XCircle, 
   RefreshCw, ShieldCheck, Users,
-  Database, Check, ShieldAlert, RefreshCw as ReplaceIcon, ArrowRightLeft
+  Database, Check, ShieldAlert, RefreshCw as ReplaceIcon, ArrowRightLeft,
+  FileCheck2, Ban
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/AuthContext';
+import { validateEmployeeImportRow } from '@/lib/referentialIntegrity';
 
 export default function EmployeeImportSettings() {
   const { appPublicSettings } = useAuth();
@@ -18,6 +20,9 @@ export default function EmployeeImportSettings() {
   
   const [existingEmployees, setExistingEmployees] = useState([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
+  const [lookupJobTitles, setLookupJobTitles] = useState([]);
+  const [lookupEducationDegrees, setLookupEducationDegrees] = useState([]);
+  const [lookupShiftSystems, setLookupShiftSystems] = useState([]);
   
   // File processing state
   const [file, setFile] = useState(null);
@@ -34,8 +39,9 @@ export default function EmployeeImportSettings() {
   const [migrating, setMigrating] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [migrationSuccess, setMigrationSuccess] = useState(false);
+  const [migrationReport, setMigrationReport] = useState(null);
 
-  // Fetch current database employees on mount for duplicate checks
+  // Fetch current database employees and lookup data on mount
   useEffect(() => {
     fetchEmployees();
   }, []);
@@ -43,13 +49,21 @@ export default function EmployeeImportSettings() {
   const fetchEmployees = async () => {
     setLoadingEmployees(true);
     try {
-      const data = await apiClient.entities.Employee.list();
-      setExistingEmployees(data || []);
+      const [emps, jts, eds, sss] = await Promise.all([
+        apiClient.entities.Employee.list().catch(() => []),
+        apiClient.entities.JobTitle.list().catch(() => []),
+        apiClient.entities.EducationDegree.list().catch(() => []),
+        apiClient.entities.ShiftSystem.list().catch(() => [])
+      ]);
+      setExistingEmployees(emps || []);
+      setLookupJobTitles(jts || []);
+      setLookupEducationDegrees(eds || []);
+      setLookupShiftSystems(sss || []);
     } catch (err) {
-      console.error('Error fetching employees for import inspection:', err);
+      console.error('Error fetching data for import inspection:', err);
       toast({
         title: 'تنبيه',
-        description: 'تعذر جلب بيانات الموظفين الحاليين للتحقق من التكرار',
+        description: 'تعذر جلب بيانات النظام للتحقق من التكرار والإعدادات الحاكمة',
         variant: 'destructive',
       });
     } finally {
@@ -402,7 +416,33 @@ export default function EmployeeImportSettings() {
             errors.push('المرحلة الوظيفية مفقودة');
           }
 
-          // 2. Duplication Checks
+          // 2. Authoritative Settings Validation (مطابقة الجداول الحاكمة)
+          const settingsCheck = validateEmployeeImportRow(
+            {
+              firstName: firstName || fullName,
+              fullName,
+              companyNumber,
+              jobTitle,
+              educationLevel,
+              shiftSystemName,
+              workShiftType,
+              grade,
+              step
+            },
+            {
+              jobTitles: lookupJobTitles,
+              educationDegrees: lookupEducationDegrees,
+              shiftSystems: lookupShiftSystems
+            }
+          );
+
+          if (!settingsCheck.isValid) {
+            settingsCheck.errors.forEach(err => {
+              if (!errors.includes(err)) errors.push(err);
+            });
+          }
+
+          // 3. Duplication Checks
           let isFileDuplicate = false;
           let isDbDuplicate = false;
           let matchedDbEmployee = null;
@@ -666,10 +706,27 @@ export default function EmployeeImportSettings() {
 
       const result = await res.json();
 
-      toast({
-        title: 'تم الترحيل والمطابقة بنجاح 🚀',
-        description: `تمت إضافة ${result.insertedCount || 0} جديد، واستبدال وتحديث ${result.updatedCount || 0} موظفاً بنجاح في قاعدة البيانات.`,
+      setMigrationReport({
+        totalCount: result.totalCount || selectedRowsList.length,
+        acceptedCount: result.acceptedCount || 0,
+        rejectedCount: result.rejectedCount || 0,
+        insertedCount: result.insertedCount || 0,
+        updatedCount: result.updatedCount || 0,
+        rejectedRows: result.rejectedRows || []
       });
+
+      if (result.rejectedCount > 0) {
+        toast({
+          title: 'اكتمل الترحيل مع رفض بعض الصفوف ⚠️',
+          description: `تم قبول ${result.acceptedCount} صفاً بنجاح، ورفض ${result.rejectedCount} صفاً لعدم مطابقة الإعدادات الحاكمة.`,
+          variant: 'warning'
+        });
+      } else {
+        toast({
+          title: 'تم الترحيل والمطابقة بنجاح 🚀',
+          description: `تمت إضافة ${result.insertedCount || 0} جديد، واستبدال وتحديث ${result.updatedCount || 0} موظفاً بنجاح في قاعدة البيانات.`,
+        });
+      }
 
       setMigrationSuccess(true);
       fetchEmployees();
@@ -689,6 +746,75 @@ export default function EmployeeImportSettings() {
   return (
     <div className="space-y-6" dir="rtl">
       
+      {/* Migration Results Report (If migration completed) */}
+      {migrationReport && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-md p-6 space-y-4">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div className="flex items-center gap-3">
+              <div className={`p-3 rounded-2xl ${migrationReport.rejectedCount > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                {migrationReport.rejectedCount > 0 ? <AlertTriangle size={24} /> : <FileCheck2 size={24} />}
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-[#1B3A6B]">
+                  تقرير نتائج الاستيراد والمطابقة مع الجداول الحاكمة
+                </h3>
+                <p className="text-xs text-slate-500">
+                  إجمالي الصفوف: <strong>{migrationReport.totalCount}</strong> | المقبولة: <strong className="text-emerald-700">{migrationReport.acceptedCount}</strong> (إضافة: {migrationReport.insertedCount}، تحديث: {migrationReport.updatedCount}) | المرفوضة: <strong className="text-red-700">{migrationReport.rejectedCount}</strong>
+                </p>
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMigrationReport(null)}
+              className="text-xs font-bold rounded-xl"
+            >
+              إغلاق التقرير
+            </Button>
+          </div>
+
+          {migrationReport.rejectedCount > 0 ? (
+            <div className="space-y-3">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-800 font-semibold flex items-center gap-2">
+                <Ban size={16} className="shrink-0 text-red-600" />
+                تم رفض الصفوف التالية ولم يتم إدخالها لقاعدة البيانات نظراً لعدم مطابقتها للجداول الحاكمة (العناوين الوظيفية، الشهادات، المناوبات، أو سلم الرواتب):
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-red-200">
+                <table className="w-full text-xs text-right border-collapse">
+                  <thead className="bg-red-100/70 text-red-900 font-bold border-b border-red-200">
+                    <tr>
+                      <th className="px-4 py-2.5 w-16 text-center">رقم الصف</th>
+                      <th className="px-4 py-2.5">رقم الشركة الموحد</th>
+                      <th className="px-4 py-2.5">اسم الموظف</th>
+                      <th className="px-4 py-2.5">سبب الرفض الدقيق</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-red-100 bg-white">
+                    {migrationReport.rejectedRows.map((rej, rejIdx) => (
+                      <tr key={rejIdx} className="hover:bg-red-50/50">
+                        <td className="px-4 py-2.5 text-center font-mono font-bold text-red-800">{rej.rowNumber}</td>
+                        <td className="px-4 py-2.5 font-mono text-slate-700">{rej.companyNumber || '-'}</td>
+                        <td className="px-4 py-2.5 font-bold text-slate-900">{rej.name}</td>
+                        <td className="px-4 py-2.5 text-red-700 font-semibold leading-relaxed">
+                          {rej.reason}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-xs text-emerald-900 font-bold flex items-center gap-2">
+              <CheckCircle2 size={18} className="text-emerald-700 shrink-0" />
+              تم قبول واعتماد جميع الصفوف بنجاح ومطابقتها بالكامل مع الجداول الحاكمة وسلم الرواتب.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Top Banner & Header */}
       <div 
         className="text-white rounded-2xl p-6 shadow-md border border-white/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative overflow-hidden transition-all duration-300"

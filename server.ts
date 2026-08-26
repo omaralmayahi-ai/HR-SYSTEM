@@ -1086,12 +1086,22 @@ async function startServer() {
         return res.status(400).json({ error: 'لم يتم تزويد قائمة موظفين صالحة للترحيل' });
       }
 
+      const lookupData = {
+        jobTitles: inMemoryJobTitles,
+        educationDegrees: inMemoryEducationDegrees,
+        shiftSystems: inMemoryShiftSystems,
+        salaryScaleMap: SALARY_TABLE
+      };
+
       let insertedCount = 0;
       let updatedCount = 0;
       let skippedCount = 0;
+      const rejectedRows: any[] = [];
       const processedEmployees: any[] = [];
 
-      for (const empItem of employees) {
+      for (let idx = 0; idx < employees.length; idx++) {
+        const empItem = employees[idx];
+        const rowNum = empItem.excelRowNumber || empItem.rowNumber || (idx + 2);
         const action = empItem.action || (empItem.overwrite ? 'update' : 'insert');
         if (action === 'skip') {
           skippedCount++;
@@ -1103,17 +1113,25 @@ async function startServer() {
         delete mappedData.id;
         delete mappedData.createdAt;
 
+        // Perform strict validation against authoritative settings tables
+        const valResult = validateEmployeeImportRow(mappedData, lookupData);
+        if (!valResult.isValid) {
+          rejectedRows.push({
+            rowNumber: rowNum,
+            name: mappedData.fullName || mappedData.firstName || empData.full_name || empData.first_name || 'موظف',
+            companyNumber: mappedData.companyNumber || empData.company_number || '',
+            reason: valResult.errors.join(' | '),
+            errors: valResult.errors
+          });
+          continue; // Skip this row and do NOT reject the whole file!
+        }
+
         processEmployeeNameData(mappedData, true);
         processEmployeeEducationData(mappedData);
 
         if (!mappedData.status) mappedData.status = 'مستمر بالخدمة';
         if (!mappedData.serviceType) mappedData.serviceType = 'ملاك دائم';
         if (!mappedData.gender) mappedData.gender = 'ذكر';
-
-        if (mappedData.jobTitle || empData.job_title) {
-          const empGrade = mappedData.grade || empData.grade || 7;
-          ensureJobTitleExists(mappedData.jobTitle || empData.job_title, empGrade, 'أخرى');
-        }
 
         const cleanData = sanitizeEmployeeData(mappedData);
         let handled = false;
@@ -1171,10 +1189,13 @@ async function startServer() {
       saveLocalDb();
       res.json({
         success: true,
-        count: processedEmployees.length,
+        totalCount: employees.length,
+        acceptedCount: processedEmployees.length,
+        rejectedCount: rejectedRows.length,
         insertedCount,
         updatedCount,
         skippedCount,
+        rejectedRows,
         employees: processedEmployees
       });
     } catch (error: any) {
