@@ -13,6 +13,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { SALARY_TABLE } from './src/lib/salaryTable.js';
 import { encryptData, decryptData } from './src/lib/cryptoStorage.ts';
+import { checkReferentialUsage, validateEmployeeImportRow } from './src/lib/referentialIntegrity.ts';
+
 
 const currentFilename = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' && import.meta.url ? fileURLToPath(import.meta.url) : '');
 const currentDirname = typeof __dirname !== 'undefined' ? __dirname : (currentFilename ? path.dirname(currentFilename) : process.cwd());
@@ -2676,6 +2678,35 @@ async function startServer() {
 
   let inMemoryServiceRecords: any[] = [];
 
+  function buildRefContext() {
+    return {
+      employees: inMemoryEmployees,
+      jobAssignments: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['job-assignments']) || (typeof inMemoryJobAssignments !== 'undefined' ? inMemoryJobAssignments : []),
+      qualifications: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['qualifications']) || (typeof inMemoryQualifications !== 'undefined' ? inMemoryQualifications : []),
+      penalties: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['penalties']) || (typeof inMemoryPenalties !== 'undefined' ? inMemoryPenalties : []),
+      performanceEvaluations: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['performance']) || (typeof inMemoryPerformanceEvaluations !== 'undefined' ? inMemoryPerformanceEvaluations : []),
+      governingCourseAssignments: (typeof inMemoryEmployeeAssignments !== 'undefined' && inMemoryEmployeeAssignments) ? Object.values(inMemoryEmployeeAssignments) : [],
+      entities: {
+        'job_titles': inMemoryJobTitles,
+        'job-titles': inMemoryJobTitles,
+        'shift_systems': inMemoryShiftSystems,
+        'shift-systems': inMemoryShiftSystems,
+        'allowances_deductions': inMemoryAllowancesDeductions,
+        'allowances-deductions': inMemoryAllowancesDeductions,
+        'education_degrees': inMemoryEducationDegrees,
+        'education-degrees': inMemoryEducationDegrees,
+        'responsibility_allowances': inMemoryResponsibilityAllowances,
+        'responsibility-allowances': inMemoryResponsibilityAllowances,
+        'penalty_types': inMemoryPenaltyTypes,
+        'penalty-types': inMemoryPenaltyTypes,
+        'evaluation_forms': (typeof inMemoryEvaluationForms !== 'undefined' ? inMemoryEvaluationForms : CANONICAL_SEED_FORMS),
+        'evaluation-forms': (typeof inMemoryEvaluationForms !== 'undefined' ? inMemoryEvaluationForms : CANONICAL_SEED_FORMS),
+        'governing_courses': (typeof inMemoryGoverningCourses !== 'undefined' ? inMemoryGoverningCourses : []),
+        'governing-courses': (typeof inMemoryGoverningCourses !== 'undefined' ? inMemoryGoverningCourses : []),
+      }
+    };
+  }
+
   // --- Job Titles API (العناوين الوظيفية والمهنية) ---
   app.get('/api/job-titles', requireAuth, async (req, res) => {
     try {
@@ -2739,6 +2770,15 @@ async function startServer() {
   app.put('/api/job-titles/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
     const { name, category, min_grade, status, notes } = req.body;
+
+    // Referential guard: check if deactivating an in-use job title
+    if (status === 'معطل' || status === 'غير فعال') {
+      const refCheck = checkReferentialUsage('job_titles', id, true, buildRefContext());
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+      }
+    }
+
     try {
       const [updated] = await db.update(schema.jobTitles)
         .set({
@@ -2779,6 +2819,13 @@ async function startServer() {
 
   app.delete('/api/job-titles/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
+
+    // Referential guard: check if deleting an in-use job title
+    const refCheck = checkReferentialUsage('job_titles', id, false, buildRefContext());
+    if (!refCheck.canProceed) {
+      return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+    }
+
     try {
       await db.delete(schema.jobTitles).where(eq(schema.jobTitles.id, id));
     } catch (error: any) {
