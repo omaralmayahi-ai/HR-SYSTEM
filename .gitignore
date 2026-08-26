@@ -1,3 +1,14 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+firebase-applet-config.json
+*.pem
+*.key
+
+# Local database storage
+data/
+
 # Logs
 logs
 *.log
@@ -7,6 +18,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Build and dependencies
 node_modules
 dist
 dist-ssr
