@@ -2989,6 +2989,14 @@ async function startServer() {
   app.put('/api/allowances-deductions/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
     const { name, type, calcType, value, status } = req.body;
+
+    if (status === 'موقوف' || status === 'غير فعال' || status === 'معطل') {
+      const refCheck = checkReferentialUsage('allowances_deductions', id, true, buildRefContext());
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+      }
+    }
+
     try {
       const [updated] = await db.update(schema.allowancesDeductions)
         .set({
@@ -3022,6 +3030,12 @@ async function startServer() {
 
   app.delete('/api/allowances-deductions/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
+
+    const refCheck = checkReferentialUsage('allowances_deductions', id, false, buildRefContext());
+    if (!refCheck.canProceed) {
+      return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+    }
+
     try {
       await db.delete(schema.allowancesDeductions).where(eq(schema.allowancesDeductions.id, id));
     } catch (error: any) {
