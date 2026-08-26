@@ -3263,7 +3263,15 @@ async function startServer() {
 
   app.put('/api/responsibility-allowances/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, allowance_rate } = req.body;
+    const { name, allowance_rate, status } = req.body;
+
+    if (status === 'معطل' || status === 'غير فعال') {
+      const refCheck = checkReferentialUsage('responsibility_allowances', id, true, buildRefContext());
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+      }
+    }
+
     try {
       const [updated] = await db.update(schema.responsibilityAllowances)
         .set({
@@ -3291,6 +3299,12 @@ async function startServer() {
 
   app.delete('/api/responsibility-allowances/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
+
+    const refCheck = checkReferentialUsage('responsibility_allowances', id, false, buildRefContext());
+    if (!refCheck.canProceed) {
+      return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+    }
+
     try {
       await db.delete(schema.responsibilityAllowances).where(eq(schema.responsibilityAllowances.id, id));
     } catch (error: any) {
