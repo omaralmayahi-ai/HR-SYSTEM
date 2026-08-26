@@ -557,7 +557,7 @@ export default function FixedCustomDeductionsSettings() {
     setLoading(true);
     try {
       // Get all allowances/deductions and filter only custom deductions
-      let data: any[] = [];
+      let data = [];
       try {
         data = await apiClient.entities.AllowanceDeduction.list();
       } catch (fetchErr) {

@@ -586,7 +586,7 @@ export default function FixedCustomAllowancesSettings() {
     try {
       // Get all allowances and filter only custom ones
       // Custom ones are allowances from the database that aren't marital/child
-      let data: any[] = [];
+      let data = [];
       try {
         data = await apiClient.entities.AllowanceDeduction.list();
       } catch (fetchErr) {
