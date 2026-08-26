@@ -4043,6 +4043,13 @@ async function startServer() {
         enableEmployeeOpinion
       } = data;
 
+      if (status === 'غير فعال' || status === 'معطل') {
+        const refCheck = checkReferentialUsage('evaluation_forms', id, true, buildRefContext());
+        if (!refCheck.canProceed) {
+          return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+        }
+      }
+
       const [updated] = await db.update(schema.evaluationForms)
         .set({
           title: title !== undefined ? title : undefined,
@@ -4073,6 +4080,12 @@ async function startServer() {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
+
+      const refCheck = checkReferentialUsage('evaluation_forms', id, false, buildRefContext());
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+      }
+
       await db.delete(schema.evaluationForms).where(eq(schema.evaluationForms.id, id));
       res.json({ success: true });
     } catch (error: any) {
