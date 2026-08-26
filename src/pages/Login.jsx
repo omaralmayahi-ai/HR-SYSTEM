@@ -4,7 +4,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LogIn, User, Lock, Loader2, ShieldCheck } from "lucide-react";
+import { LogIn, User, Lock, Loader2, ShieldCheck, Info } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 
 export default function Login() {
   const { appPublicSettings } = useAuth();
@@ -12,6 +13,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showForgotDialog, setShowForgotDialog] = useState(false);
 
   // Dynamic branding parameters
   const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
@@ -36,7 +38,7 @@ export default function Login() {
 
   return (
     <div className="min-h-screen w-full relative flex items-center justify-center bg-slate-50 overflow-hidden px-4 py-12" dir="rtl">
-      {/* Decorative background shapes matching the image design */}
+      {/* Decorative background shapes */}
       <div 
         className="absolute -top-24 -right-24 w-96 h-96 rounded-full opacity-10 pointer-events-none" 
         style={{ backgroundColor: primaryColor }}
@@ -49,7 +51,7 @@ export default function Login() {
       <div className="w-full max-w-[460px] relative z-10">
         <div className="bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-100">
           
-          {/* Card Header matching the top half in the photo */}
+          {/* Card Header */}
           <div 
             className="p-8 text-center text-white relative transition-all duration-300" 
             style={{ backgroundColor: primaryColor }}
@@ -77,7 +79,7 @@ export default function Login() {
             </p>
           </div>
 
-          {/* Form Block (bottom half) */}
+          {/* Form Block */}
           <div className="p-8 bg-white text-right">
             {error && (
               <div className="mb-6 p-3.5 rounded-xl bg-red-50 border border-red-100 text-red-700 text-xs font-semibold text-right flex items-center gap-2">
@@ -114,9 +116,13 @@ export default function Login() {
                   <Label htmlFor="password" className="text-xs font-bold text-slate-700 block">
                     كلمة المرور
                   </Label>
-                  <span className="text-[10px] text-slate-400 hover:underline cursor-pointer">
+                  <button 
+                    type="button"
+                    onClick={() => setShowForgotDialog(true)}
+                    className="text-[11px] text-slate-400 hover:text-[#1B3A6B] hover:underline cursor-pointer transition-colors"
+                  >
                     نسيت كلمة المرور؟
-                  </span>
+                  </button>
                 </div>
                 <div className="relative">
                   <Lock className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" aria-hidden="true" />
@@ -163,6 +169,37 @@ export default function Login() {
           </div>
         </div>
       </div>
+
+      {/* Forgot Password Modal */}
+      <Dialog open={showForgotDialog} onOpenChange={setShowForgotDialog}>
+        <DialogContent className="max-w-md text-right rounded-2xl" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold text-[#1B3A6B]">
+              <Info className="w-5 h-5 text-blue-600" />
+              استعادة أو تعيين كلمة المرور
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-600 mt-2 leading-relaxed">
+              لأسباب تتعلق بأمن وسرية البيانات الحكومية وسجلات الموارد البشرية، تتم إدارة وإعادة تعيين كلمات المرور حصراً من خلال **مدير النظام الرئيسي (Super Admin)** أو قسم تكنولوجيا المعلومات والشبكات في المؤسسة.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-700 space-y-2 mt-2">
+            <p className="font-semibold text-slate-800">تعليمات للمسؤولين والمستخدمين:</p>
+            <ul className="list-disc list-inside space-y-1 text-slate-600 pr-1">
+              <li>تواصل مع مسؤول الموارد البشرية أو مدير النظام لإعادة ضبط كلمة المرور الخاصة بحسابك.</li>
+              <li>يمكن للمدير تعديل كلمة المرور وتحديد الصلاحيات من خلال شاشة <strong>إدارة المستخدمين</strong>.</li>
+            </ul>
+          </div>
+          <DialogFooter className="mt-4 flex justify-end">
+            <Button 
+              onClick={() => setShowForgotDialog(false)}
+              className="bg-[#1B3A6B] text-white hover:bg-[#1B3A6B]/90 rounded-xl px-5 text-xs font-bold"
+            >
+              حسناً، فهمت
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
+

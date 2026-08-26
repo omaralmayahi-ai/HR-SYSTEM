@@ -136,8 +136,8 @@ export const SPOUSE_ALLOWANCE = 75000;
 // علاوة الأولاد (لكل ولد، بحد أقصى 4)
 export const CHILD_ALLOWANCE = 30000;
 
-// نسبة الاستقطاع التقاعدي
-export const RETIREMENT_RATE = 0.05;
+// نسبة الاستقطاع التقاعدي (10% وفق قانون التقاعد الموحد رقم 9 لسنة 2014)
+export const RETIREMENT_RATE = 0.10;
 
 // Helper to check if an employee matches custom allowance/deduction criteria
 export function doesEmployeeMatchCriteria(employee, rule) {

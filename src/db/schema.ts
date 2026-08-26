@@ -90,6 +90,9 @@ export const employees = pgTable('employees', {
   retirementExtensionYears: integer('retirement_extension_years').default(0), // سنوات التمديد
   retirementExtensionMonths: integer('retirement_extension_months').default(0), // أشهر التمديد
   retirementExtensionNote: text('retirement_extension_note'), // ملاحظة / سبب التأجيل
+  spouseNames: text('spouse_names'), // أسماء الزوجات
+  spousesData: text('spouses_data'), // بيانات الزوجات المفصلة (JSON)
+  childrenDetails: text('children_details'), // بيانات وتفاصيل الأطفال (الاسم، تاريخ الميلاد، الجنس) (JSON)
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -473,17 +476,25 @@ export const jobAssignments = pgTable('job_assignments', {
   employeeId: integer('employee_id')
     .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
-  grade: text('grade').notNull(), // خاصة / الأولى ... العاشرة
-  step: integer('step').notNull(), // 1 - 11
-  jobTitle: text('job_title').notNull(), // العنوان الوظيفي
+  grade: text('grade'), // خاصة / الأولى ... العاشرة
+  step: integer('step'), // 1 - 11
+  jobTitle: text('job_title'), // العنوان الوظيفي
   division: text('division'), // الهيئة
   department: text('department'), // القسم
   section: text('section'), // الشعبة
-  confirmationDate: text('confirmation_date').notNull(), // تاريخ التثبيت
-  assignmentType: text('assignment_type').notNull(), // تعيين / نقل / إعادة تعيين
-  orderNumber: text('order_number'), // رقم أمر التعيين
-  orderDate: text('order_date'), // تاريخ أمر التعيين
-  responsibility: text('responsibility').notNull(), // بلا مسؤولية / مسؤول وجبة / مسؤول وحدة / مسؤول شعبة / مدير قسم / مدير قسم مركزي / مدير هيئة / معاون مدير عام / مدير عام
+  confirmationDate: text('confirmation_date'), // تاريخ التثبيت
+  assignmentType: text('assignment_type'), // تكليف / إعفاء / تدوير / تعيين / نقل
+  actionType: text('action_type'), // تكليف / إعفاء / تدوير
+  orderNumber: text('order_number'), // رقم الأمر الإداري
+  orderDate: text('order_date'), // تاريخ الأمر الإداري
+  assignmentOrder: text('assignment_order'), // رقم أمر التكليف
+  assignmentDate: text('assignment_date'), // تاريخ التكليف
+  responsibility: text('responsibility'), // المسؤولية
+  primaryResponsibility: text('primary_responsibility'), // المسؤولية الأساسية
+  actingResponsibility: text('acting_responsibility'), // المسؤولية بالوكالة
+  deputyLevel: text('deputy_level'), // درجة الوكيل (وكيل أول / وكيل ثاني / لا يوجد)
+  serviceType: text('service_type'), // دائم / مؤقت / عقد / إعارة
+  notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -839,9 +850,14 @@ export const governingCourseEmployeeAssignments = pgTable('governing_course_empl
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-
-
-
-
-
-
+// 35. Job Titles table (دليل العناوين الوظيفية والمهنية)
+export const jobTitles = pgTable('job_titles', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull(),
+  category: text('category').default('عام'), // هندسي، إداري، مالي، قانوني، حاسبات وتقنية، فني، طبي وصحي، خدمات، أخرى
+  minGrade: integer('min_grade').default(7), // الدرجة الوظيفية المقترحة
+  status: text('status').default('فعال'), // فعال / معطل
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});

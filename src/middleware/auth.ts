@@ -1,5 +1,8 @@
 // src/middleware/auth.ts
 import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+export const JWT_SECRET = process.env.JWT_SECRET || 'hr-system-iraq-secure-jwt-secret-key-2026';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -23,15 +26,26 @@ export const requireAuth = async (
 
   const token = authHeader.split('Bearer ')[1];
   try {
-    const jsonStr = Buffer.from(token, 'base64').toString('utf8');
-    const userData = JSON.parse(jsonStr);
-    if (!userData || !userData.username) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid token structure' });
+    // 1. Verify with JWT
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    if (decoded && decoded.username) {
+      req.user = decoded;
+      return next();
     }
-    req.user = userData;
-    next();
-  } catch (error) {
-    console.error('Error verifying custom token:', error);
-    return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+  } catch (jwtErr) {
+    // 2. Backward compatibility fallback for legacy base64 tokens during transition
+    try {
+      const jsonStr = Buffer.from(token, 'base64').toString('utf8');
+      const userData = JSON.parse(jsonStr);
+      if (userData && userData.username) {
+        req.user = userData;
+        return next();
+      }
+    } catch {
+      // ignore
+    }
   }
+
+  return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
 };
+

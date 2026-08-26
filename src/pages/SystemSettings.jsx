@@ -15,6 +15,7 @@ import EmployeeImportSettings from '@/components/EmployeeImportSettings';
 import PenaltyTypesSettings from '@/components/PenaltyTypesSettings';
 import EvaluationFormsSettings from '@/components/EvaluationFormsSettings';
 import GoverningCoursesSettings from '@/components/GoverningCoursesSettings';
+import JobTitlesSettings from '@/components/JobTitlesSettings';
 
 const DEFAULT_TABS = [
   {
@@ -23,6 +24,13 @@ const DEFAULT_TABS = [
     icon: SettingsIcon,
     color: 'bg-violet-100 text-violet-700',
     activeColor: 'bg-violet-50 text-violet-700 shadow-sm border-violet-150',
+  },
+  {
+    id: 'jobTitles',
+    label: 'دليل العناوين الوظيفية والمهنية',
+    icon: Briefcase,
+    color: 'bg-blue-100 text-blue-800',
+    activeColor: 'bg-blue-50 text-blue-800 shadow-sm border-blue-200 font-bold',
   },
   {
     id: 'governingCourses',
@@ -253,6 +261,18 @@ export default function SystemSettings() {
                 transition={{ duration: 0.2 }}
               >
                 <SalaryScaleSettings />
+              </motion.div>
+            )}
+
+            {activeTab === 'jobTitles' && (
+              <motion.div
+                key="jobTitles"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.2 }}
+              >
+                <JobTitlesSettings />
               </motion.div>
             )}
 

@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Edit, Plus, Trash2, Calendar, FileText, GraduationCap, DollarSign, Clock, Briefcase, Heart, MapPin, ClipboardList, CheckCircle2, XCircle, Power, ShieldCheck, QrCode, Award, ShieldAlert } from 'lucide-react';
+import { Edit, Plus, Trash2, Calendar, FileText, GraduationCap, DollarSign, Clock, Briefcase, Heart, MapPin, ClipboardList, CheckCircle2, XCircle, Power, ShieldCheck, QrCode, Award, ShieldAlert, User, Baby } from 'lucide-react';
 import { formatCurrency, calculateSalary, getGradeLabel, getStepLabel, getActiveFinancialRates, checkEmployeeMatchesRule } from '@/lib/salaryTable';
 import { useToast } from '@/components/ui/use-toast';
 import EmployeeQuickAccessQR from '@/components/employee/EmployeeQuickAccessQR';
@@ -151,6 +151,36 @@ function calculateTotalCumulativeService(startDateStr, addedYears = 0, addedMont
   return parts.join(' و ');
 }
 
+// Function to calculate exact child age from birth date string
+function calculateChildAge(birthDateStr) {
+  if (!birthDateStr) return null;
+  const b = new Date(birthDateStr);
+  if (isNaN(b.getTime())) return null;
+  const now = new Date();
+  let years = now.getFullYear() - b.getFullYear();
+  let months = now.getMonth() - b.getMonth();
+  let days = now.getDate() - b.getDate();
+  if (days < 0) {
+    months--;
+  }
+  if (months < 0) {
+    years--;
+    months += 12;
+  }
+  if (years < 0) return null;
+  if (years === 0) {
+    if (months <= 0) return 'أقل من شهر';
+    if (months === 1) return 'شهر واحد';
+    if (months === 2) return 'شهرين';
+    if (months >= 3 && months <= 10) return `${months} أشهر`;
+    return `${months} شهر`;
+  }
+  if (years === 1) return 'سنة واحدة';
+  if (years === 2) return 'سنتان';
+  if (years >= 3 && years <= 10) return `${years} سنوات`;
+  return `${years} سنة`;
+}
+
 function formatDurationParts(y = 0, m = 0, d = 0) {
   let extraM = m;
   let extraY = y;
@@ -185,6 +215,30 @@ function formatDurationParts(y = 0, m = 0, d = 0) {
   if (parts.length === 0) return '0 يوم';
   return parts.join(' و ');
 }
+
+const defaultResponsibilities = [
+  'بلا مسؤولية',
+  'مسؤول وجبة',
+  'مسؤول وحدة',
+  'مسؤول شعبة',
+  'مدير قسم',
+  'مدير قسم مركزي',
+  'مدير هيئة',
+  'معاون مدير عام',
+  'مدير عام'
+];
+
+const defaultActingResponsibilities = [
+  'بلا وكالة',
+  'مسؤول وجبة',
+  'مسؤول وحدة',
+  'مسؤول شعبة',
+  'مدير قسم',
+  'مدير قسم مركزي',
+  'مدير هيئة',
+  'معاون مدير عام',
+  'مدير عام'
+];
 
 export default function EmployeeDetail() {
   const { id } = useParams();
@@ -242,50 +296,55 @@ export default function EmployeeDetail() {
   const [deleteDialog, setDeleteDialog] = useState({ open: false, clientName: '', recordId: null, presetId: null });
   const [deleting, setDeleting] = useState(false);
 
-  const fetchData = () => {
-    Promise.all([
-      apiClient.entities.Employee.get(id),
-      apiClient.entities.LeaveRequest.filter({ employee_id: id }),
-      apiClient.entities.Penalty.filter({ employee_id: id }),
-      apiClient.entities.Appreciation.filter({ employee_id: id }),
-      apiClient.entities.AnnualEvaluation.filter({ employee_id: id }),
-      apiClient.entities.TrainingEnrollment.filter({ employee_id: id }),
-      apiClient.entities.Qualification.filter({ employee_id: id }),
-      apiClient.entities.JobAssignment.filter({ employee_id: id }),
-      apiClient.entities.PromotionIncrement.filter({ employee_id: id }),
-      apiClient.entities.SalaryAllowance.filter({ employee_id: id }),
-      apiClient.entities.TrainingCourse.filter({ employee_id: id }),
-      apiClient.entities.Transfer.filter({ employee_id: id }),
-      apiClient.entities.Retirement.filter({ employee_id: id }),
-      apiClient.entities.Document.filter({ employee_id: id }),
-      apiClient.entities.ServiceRecord.filter({ employee_id: id }),
-      apiClient.entities.AllowanceDeduction.list()
-    ]).then(([emp, lv, pen, appr, ev, tr, qual, job, prom, sal, tc, trans, ret, doc, sRecs, allPresets]) => {
-      setEmployee(emp);
-      setLeaves(lv || []);
-      setPenalties(pen || []);
-      setAppreciations(appr || []);
-      setEvaluations(ev || []);
-      setTrainings(tr || []);
-      setQualifications(qual || []);
-      setJobAssignments(job || []);
-      setPromotions(prom || []);
-      setSalaryAllowances(sal || []);
-      setTrainingCourses(tc || []);
-      setTransfers(trans || []);
-      setRetirements(ret || []);
-      setDocuments(doc || []);
-      setServiceRecords(sRecs || []);
-      setAllowanceDeductionPresets(allPresets || []);
-      if (allPresets) {
-        localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(allPresets));
+  const fetchData = async () => {
+    try {
+      const [
+        empRes, lvRes, penRes, apprRes, evRes, trRes, qualRes, jobRes, promRes, salRes, tcRes, transRes, retRes, docRes, sRecsRes, presetsRes
+      ] = await Promise.allSettled([
+        apiClient.entities.Employee.get(id),
+        apiClient.entities.LeaveRequest.filter({ employee_id: id }),
+        apiClient.entities.Penalty.filter({ employee_id: id }),
+        apiClient.entities.Appreciation.filter({ employee_id: id }),
+        apiClient.entities.AnnualEvaluation.filter({ employee_id: id }),
+        apiClient.entities.TrainingEnrollment.filter({ employee_id: id }),
+        apiClient.entities.Qualification.filter({ employee_id: id }),
+        apiClient.entities.JobAssignment.filter({ employee_id: id }),
+        apiClient.entities.PromotionIncrement.filter({ employee_id: id }),
+        apiClient.entities.SalaryAllowance.filter({ employee_id: id }),
+        apiClient.entities.TrainingCourse.filter({ employee_id: id }),
+        apiClient.entities.Transfer.filter({ employee_id: id }),
+        apiClient.entities.Retirement.filter({ employee_id: id }),
+        apiClient.entities.Document.filter({ employee_id: id }),
+        apiClient.entities.ServiceRecord.filter({ employee_id: id }),
+        apiClient.entities.AllowanceDeduction.list()
+      ]);
+
+      if (empRes.status === 'fulfilled' && empRes.value) setEmployee(empRes.value);
+      if (lvRes.status === 'fulfilled') setLeaves(lvRes.value || []);
+      if (penRes.status === 'fulfilled') setPenalties(penRes.value || []);
+      if (apprRes.status === 'fulfilled') setAppreciations(apprRes.value || []);
+      if (evRes.status === 'fulfilled') setEvaluations(evRes.value || []);
+      if (trRes.status === 'fulfilled') setTrainings(trRes.value || []);
+      if (qualRes.status === 'fulfilled') setQualifications(qualRes.value || []);
+      if (jobRes.status === 'fulfilled') setJobAssignments(jobRes.value || []);
+      if (promRes.status === 'fulfilled') setPromotions(promRes.value || []);
+      if (salRes.status === 'fulfilled') setSalaryAllowances(salRes.value || []);
+      if (tcRes.status === 'fulfilled') setTrainingCourses(tcRes.value || []);
+      if (transRes.status === 'fulfilled') setTransfers(transRes.value || []);
+      if (retRes.status === 'fulfilled') setRetirements(retRes.value || []);
+      if (docRes.status === 'fulfilled') setDocuments(docRes.value || []);
+      if (sRecsRes.status === 'fulfilled') setServiceRecords(sRecsRes.value || []);
+      if (presetsRes.status === 'fulfilled') {
+        setAllowanceDeductionPresets(presetsRes.value || []);
+        if (presetsRes.value) {
+          localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(presetsRes.value));
+        }
       }
+    } catch (err) {
+      console.error('Error fetching employee data:', err);
+    } finally {
       setLoading(false);
-    }).catch(err => {
-      console.error(err);
-      toast({ title: 'خطأ', description: 'فشل تحميل بيانات الموظف', variant: 'destructive' });
-      setLoading(false);
-    });
+    }
   };
 
   const [penaltyTypesList, setPenaltyTypesList] = useState([]);
@@ -723,14 +782,122 @@ export default function EmployeeDetail() {
   // Workplace representation
   const workplace = employee.section || employee.department || 'غير محدد';
 
+  // Active qualification representation
+  const activeQualification = qualifications.find(q => (q.is_active !== false && q.isActive !== false) && (q.education_level === employee.education_level || q.level === employee.education_level))
+    || qualifications.find(q => q.is_active !== false && q.isActive !== false) 
+    || qualifications[0] 
+    || null;
+
+  // Qualification Order Display
+  const qualificationOrderDisplay = (() => {
+    const raw = activeQualification?.evaluation_order || 
+                activeQualification?.evaluationOrder || 
+                activeQualification?.equation_number || 
+                activeQualification?.equationNumber || 
+                activeQualification?.education_order || 
+                activeQualification?.educationOrder || 
+                employee.education_order || 
+                employee.evaluation_order || 
+                employee.educationOrder || 
+                employee.evaluationOrder || 
+                employee.equation_number || 
+                employee.equationNumber;
+
+    if (!raw || raw === 'لا يوجد' || raw === 'غير متوفر' || raw === '—') {
+      const empOrd = employee.education_order || 
+                     employee.evaluation_order || 
+                     employee.educationOrder || 
+                     employee.evaluationOrder || 
+                     employee.equation_number || 
+                     employee.equationNumber;
+      if (empOrd && empOrd !== 'لا يوجد' && empOrd !== 'غير متوفر' && empOrd !== '—') {
+        return empOrd;
+      }
+      return raw || '—';
+    }
+    return raw;
+  })();
+
+  // Age calculation helper
+  const employeeAge = (() => {
+    if (!employee?.birth_date) return null;
+    const b = new Date(employee.birth_date);
+    if (isNaN(b.getTime())) return null;
+    const now = new Date();
+    let age = now.getFullYear() - b.getFullYear();
+    const m = now.getMonth() - b.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < b.getDate())) {
+      age--;
+    }
+    return age > 0 ? age : null;
+  })();
+
+  // Spouses & Children parsers
+  const parsedSpouses = (() => {
+    if (!employee) return [];
+    if (employee.spouses_data || employee.spousesData) {
+      try {
+        const parsed = typeof (employee.spouses_data || employee.spousesData) === 'string'
+          ? JSON.parse(employee.spouses_data || employee.spousesData)
+          : (employee.spouses_data || employee.spousesData);
+        if (Array.isArray(parsed)) {
+          return parsed.map(s => typeof s === 'string' ? s : s.name).filter(Boolean);
+        }
+      } catch (e) {}
+    }
+    if (employee.spouse_names || employee.spouseNames) {
+      return String(employee.spouse_names || employee.spouseNames).split('،').map(s => s.trim()).filter(Boolean);
+    }
+    return [];
+  })();
+
+  const parsedChildren = (() => {
+    if (!employee) return [];
+    if (employee.children_details || employee.childrenDetails) {
+      try {
+        const parsed = typeof (employee.children_details || employee.childrenDetails) === 'string'
+          ? JSON.parse(employee.children_details || employee.childrenDetails)
+          : (employee.children_details || employee.childrenDetails);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(c => c && (c.name || c.birth_date));
+        }
+      } catch (e) {}
+    }
+    return [];
+  })();
+
   const openAddModal = (type) => {
     setEditingRecordId(null);
     setActiveModal(type);
     let defaultValues = {};
     if (type === 'qualification') {
-      defaultValues = { education_level: 'بكالوريوس', specialization: '', institution: '', graduation_year: new Date().getFullYear(), evaluation_order: '', notes: '' };
+      defaultValues = { 
+        education_level: 'بكالوريوس', 
+        specialization: '', 
+        institution: '', 
+        graduation_year: new Date().getFullYear(), 
+        evaluation_order: '',
+        equation_number: '',
+        education_order: '',
+        notes: '' 
+      };
     } else if (type === 'assignment') {
-      defaultValues = { assignment_date: '', assignment_order: '', job_title: '', department: '', section: '', service_type: 'دائم' };
+      defaultValues = { 
+        order_number: '', 
+        assignment_order: '', 
+        order_date: new Date().toISOString().split('T')[0], 
+        assignment_date: new Date().toISOString().split('T')[0], 
+        action_type: 'تكليف', 
+        assignment_type: 'تكليف',
+        primary_responsibility: employee?.primary_responsibility || 'بلا مسؤولية', 
+        acting_responsibility: employee?.acting_responsibility || 'بلا وكالة', 
+        deputy_level: employee?.deputy_level || 'لا يوجد', 
+        job_title: employee?.job_title || '', 
+        department: employee?.department || '', 
+        section: employee?.section || '', 
+        service_type: employee?.service_type || 'دائم',
+        notes: ''
+      };
     } else if (type === 'promotion') {
       defaultValues = { promotion_date: '', promotion_order: '', grade: 1, step: 1, notes: '' };
     } else if (type === 'allowance') {
@@ -798,22 +965,33 @@ export default function EmployeeDetail() {
 
     let editValues = {};
     if (type === 'qualification') {
+      const orderVal = record.evaluation_order || record.evaluationOrder || record.equation_number || record.equationNumber || record.education_order || record.educationOrder || '';
       editValues = {
-        education_level: record.education_level || record.educationLevel || 'بكالوريوس',
+        education_level: record.education_level || record.educationLevel || record.level || 'بكالوريوس',
         specialization: record.specialization || '',
         institution: record.institution || record.university || '',
         graduation_year: record.graduation_year || record.graduationYear || new Date().getFullYear(),
-        evaluation_order: record.evaluation_order || record.evaluationOrder || '',
+        evaluation_order: orderVal,
+        equation_number: orderVal,
+        education_order: orderVal,
         notes: record.notes || ''
       };
     } else if (type === 'assignment') {
       editValues = {
-        job_title: record.job_title || record.jobTitle || '',
-        assignment_date: record.assignment_date || record.assignmentDate || '',
-        department: record.department || '',
-        section: record.section || '',
-        assignment_order: record.assignment_order || record.assignmentOrder || '',
-        service_type: record.service_type || record.serviceType || 'دائم'
+        order_number: record.order_number || record.orderNumber || record.assignment_order || record.assignmentOrder || '',
+        assignment_order: record.assignment_order || record.assignmentOrder || record.order_number || record.orderNumber || '',
+        order_date: record.order_date || record.orderDate || record.assignment_date || record.assignmentDate || new Date().toISOString().split('T')[0],
+        assignment_date: record.assignment_date || record.assignmentDate || record.order_date || record.orderDate || new Date().toISOString().split('T')[0],
+        action_type: record.action_type || record.actionType || record.assignment_type || record.assignmentType || 'تكليف',
+        assignment_type: record.assignment_type || record.assignmentType || record.action_type || record.actionType || 'تكليف',
+        primary_responsibility: record.primary_responsibility || record.primaryResponsibility || record.responsibility || employee?.primary_responsibility || 'بلا مسؤولية',
+        acting_responsibility: record.acting_responsibility || record.actingResponsibility || employee?.acting_responsibility || 'بلا وكالة',
+        deputy_level: record.deputy_level || record.deputyLevel || employee?.deputy_level || 'لا يوجد',
+        job_title: record.job_title || record.jobTitle || employee?.job_title || '',
+        department: record.department || employee?.department || '',
+        section: record.section || employee?.section || '',
+        service_type: record.service_type || record.serviceType || employee?.service_type || 'دائم',
+        notes: record.notes || ''
       };
     } else if (type === 'promotion') {
       editValues = {
@@ -980,8 +1158,62 @@ export default function EmployeeDetail() {
 
       // Map entity names to match API client definitions
       let clientName = '';
-      if (activeModal === 'qualification') clientName = 'Qualification';
-      else if (activeModal === 'assignment') clientName = 'JobAssignment';
+      if (activeModal === 'qualification') {
+        clientName = 'Qualification';
+        const ord = modalForm.evaluation_order || modalForm.equation_number || modalForm.education_order || '';
+        payload.level = modalForm.education_level;
+        payload.education_level = modalForm.education_level;
+        payload.specialization = modalForm.specialization;
+        payload.university = modalForm.institution;
+        payload.institution = modalForm.institution;
+        payload.graduationYear = parseInt(modalForm.graduation_year) || 0;
+        payload.graduation_year = parseInt(modalForm.graduation_year) || 0;
+        payload.equationNumber = ord;
+        payload.equation_number = ord;
+        payload.evaluationOrder = ord;
+        payload.evaluation_order = ord;
+        payload.educationOrder = ord;
+        payload.education_order = ord;
+      }
+      else if (activeModal === 'assignment') {
+        clientName = 'JobAssignment';
+        const orderNum = modalForm.order_number || modalForm.assignment_order || '';
+        const orderDt = modalForm.order_date || modalForm.assignment_date || new Date().toISOString().split('T')[0];
+        const actionType = modalForm.action_type || 'تكليف';
+
+        payload.order_number = orderNum;
+        payload.assignment_order = orderNum;
+        payload.order_date = orderDt;
+        payload.assignment_date = orderDt;
+        payload.action_type = actionType;
+        payload.assignment_type = actionType;
+        payload.primary_responsibility = modalForm.primary_responsibility || 'بلا مسؤولية';
+        payload.acting_responsibility = modalForm.acting_responsibility || 'بلا وكالة';
+        payload.deputy_level = modalForm.deputy_level || 'لا يوجد';
+        payload.responsibility = modalForm.primary_responsibility || 'بلا مسؤولية';
+        payload.job_title = modalForm.job_title || employee?.job_title || 'غير محدد';
+        payload.department = modalForm.department || employee?.department || 'غير محدد';
+        payload.section = modalForm.section || employee?.section || 'غير محدد';
+        payload.service_type = modalForm.service_type || employee?.service_type || 'دائم';
+
+        // Update central employee record to reflect changes immediately
+        const empUpdate = {
+          primary_responsibility: modalForm.primary_responsibility || 'بلا مسؤولية',
+          acting_responsibility: modalForm.acting_responsibility || 'بلا وكالة',
+          deputy_level: modalForm.deputy_level || 'لا يوجد',
+          job_responsibility: modalForm.primary_responsibility || 'بلا مسؤولية',
+        };
+        if (modalForm.job_title) empUpdate.job_title = modalForm.job_title;
+        if (modalForm.department) empUpdate.department = modalForm.department;
+        if (modalForm.section) empUpdate.section = modalForm.section;
+        if (modalForm.service_type) empUpdate.service_type = modalForm.service_type;
+
+        try {
+          await apiClient.entities.Employee.update(employee.id, empUpdate);
+        } catch (eErr) {
+          console.warn('Could not update employee central fields:', eErr);
+        }
+      }
       else if (activeModal === 'promotion') clientName = 'PromotionIncrement';
       else if (activeModal === 'evaluation') clientName = 'AnnualEvaluation';
       else if (activeModal === 'training_course') clientName = 'TrainingCourse';
@@ -997,12 +1229,83 @@ export default function EmployeeDetail() {
         return;
       }
 
+      let createdOrUpdated = null;
       if (editingRecordId) {
-        await apiClient.entities[clientName].update(editingRecordId, payload);
+        createdOrUpdated = await apiClient.entities[clientName].update(editingRecordId, payload);
         toast({ title: 'تم تحديث السجل بنجاح', description: 'تم حفظ التعديلات على السجل في قاعدة البيانات بنجاح' });
       } else {
-        await apiClient.entities[clientName].create(payload);
+        createdOrUpdated = await apiClient.entities[clientName].create(payload);
         toast({ title: 'تم حفظ السجل', description: 'تمت إضافة السجل إلى قاعدة البيانات بنجاح' });
+      }
+
+      // Optimistic local state update for instant UI feedback
+      const finalItem = createdOrUpdated || { ...payload, id: editingRecordId || Date.now() };
+      if (activeModal === 'assignment') {
+        if (editingRecordId) {
+          setJobAssignments(prev => prev.map(ja => (String(ja.id) === String(editingRecordId) ? { ...ja, ...finalItem } : ja)));
+        } else {
+          setJobAssignments(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'qualification') {
+        if (editingRecordId) {
+          setQualifications(prev => prev.map(q => (String(q.id) === String(editingRecordId) ? { ...q, ...finalItem } : q)));
+        } else {
+          setQualifications(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'promotion') {
+        if (editingRecordId) {
+          setPromotions(prev => prev.map(p => (String(p.id) === String(editingRecordId) ? { ...p, ...finalItem } : p)));
+        } else {
+          setPromotions(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'evaluation') {
+        if (editingRecordId) {
+          setEvaluations(prev => prev.map(ev => (String(ev.id) === String(editingRecordId) ? { ...ev, ...finalItem } : ev)));
+        } else {
+          setEvaluations(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'training_course') {
+        if (editingRecordId) {
+          setTrainingCourses(prev => prev.map(tc => (String(tc.id) === String(editingRecordId) ? { ...tc, ...finalItem } : tc)));
+        } else {
+          setTrainingCourses(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'transfer') {
+        if (editingRecordId) {
+          setTransfers(prev => prev.map(tr => (String(tr.id) === String(editingRecordId) ? { ...tr, ...finalItem } : tr)));
+        } else {
+          setTransfers(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'retirement') {
+        if (editingRecordId) {
+          setRetirements(prev => prev.map(r => (String(r.id) === String(editingRecordId) ? { ...r, ...finalItem } : r)));
+        } else {
+          setRetirements(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'document') {
+        if (editingRecordId) {
+          setDocuments(prev => prev.map(d => (String(d.id) === String(editingRecordId) ? { ...d, ...finalItem } : d)));
+        } else {
+          setDocuments(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'service_record') {
+        if (editingRecordId) {
+          setServiceRecords(prev => prev.map(s => (String(s.id) === String(editingRecordId) ? { ...s, ...finalItem } : s)));
+        } else {
+          setServiceRecords(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'appreciation') {
+        if (editingRecordId) {
+          setAppreciations(prev => prev.map(a => (String(a.id) === String(editingRecordId) ? { ...a, ...finalItem } : a)));
+        } else {
+          setAppreciations(prev => [finalItem, ...prev]);
+        }
+      } else if (activeModal === 'penalty') {
+        if (editingRecordId) {
+          setPenalties(prev => prev.map(p => (String(p.id) === String(editingRecordId) ? { ...p, ...finalItem } : p)));
+        } else {
+          setPenalties(prev => [finalItem, ...prev]);
+        }
       }
       
       setActiveModal(null);
@@ -1043,6 +1346,32 @@ export default function EmployeeDetail() {
     setDeleting(true);
     try {
       const { clientName, recordId, presetId } = deleteDialog;
+
+      // Optimistically remove from state immediately
+      if (clientName === 'JobAssignment') {
+        setJobAssignments(prev => prev.filter(ja => String(ja.id) !== String(recordId)));
+      } else if (clientName === 'Qualification') {
+        setQualifications(prev => prev.filter(q => String(q.id) !== String(recordId)));
+      } else if (clientName === 'PromotionIncrement') {
+        setPromotions(prev => prev.filter(p => String(p.id) !== String(recordId)));
+      } else if (clientName === 'AnnualEvaluation') {
+        setEvaluations(prev => prev.filter(ev => String(ev.id) !== String(recordId)));
+      } else if (clientName === 'TrainingCourse') {
+        setTrainingCourses(prev => prev.filter(tc => String(tc.id) !== String(recordId)));
+      } else if (clientName === 'Transfer') {
+        setTransfers(prev => prev.filter(tr => String(tr.id) !== String(recordId)));
+      } else if (clientName === 'Retirement') {
+        setRetirements(prev => prev.filter(r => String(r.id) !== String(recordId)));
+      } else if (clientName === 'Document') {
+        setDocuments(prev => prev.filter(d => String(d.id) !== String(recordId)));
+      } else if (clientName === 'ServiceRecord') {
+        setServiceRecords(prev => prev.filter(s => String(s.id) !== String(recordId)));
+      } else if (clientName === 'Appreciation') {
+        setAppreciations(prev => prev.filter(a => String(a.id) !== String(recordId)));
+      } else if (clientName === 'Penalty') {
+        setPenalties(prev => prev.filter(p => String(p.id) !== String(recordId)));
+      }
+
       if (clientName === 'SalaryAllowance') {
         // If numeric ID, delete from DB table
         if (typeof recordId === 'number') {
@@ -1103,39 +1432,39 @@ export default function EmployeeDetail() {
   };
 
   return (
-    <div className="space-y-6" dir="rtl">
+    <div className="space-y-5" dir="rtl">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
-        <div className="flex flex-col md:flex-row items-center gap-5 text-center md:text-right">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white rounded-2xl p-5 shadow-xs border border-slate-100">
+        <div className="flex flex-col md:flex-row items-center gap-4 text-center md:text-right">
           <div className="relative">
             {employee.photo ? (
-              <img src={employee.photo} alt={employee.full_name} className="w-20 h-20 rounded-2xl object-cover border border-slate-200 shadow-sm" />
+              <img src={employee.photo} alt={employee.full_name} className="w-16 h-16 rounded-2xl object-cover border border-slate-200 shadow-xs" />
             ) : (
-              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[#1B3A6B] to-[#122748] flex items-center justify-center text-white text-3xl font-extrabold shadow-sm">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#1B3A6B] to-[#122748] flex items-center justify-center text-white text-2xl font-black shadow-xs">
                 {employee.full_name?.charAt(0)}
               </div>
             )}
-            <span className="absolute -bottom-1 -right-1 bg-yellow-500 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border-2 border-white shadow-sm">ID</span>
+            <span className="absolute -bottom-1 -right-1 bg-amber-500 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black border-2 border-white shadow-xs">ID</span>
           </div>
           <div>
             <div className="flex flex-col md:flex-row md:items-center gap-2">
-              <h1 className="text-2xl font-bold text-[#1B3A6B]">{employee.full_name} {employee.surname}</h1>
-              <span className="text-slate-400 hidden md:inline">|</span>
-              <span className="text-sm font-semibold text-slate-500 bg-slate-100 px-2.5 py-0.5 rounded-full">رقم الشركة: {employee.company_number || 'بدون'}</span>
+              <h1 className="text-xl font-bold text-[#1B3A6B]">{employee.full_name} {employee.surname}</h1>
+              <span className="text-slate-300 hidden md:inline">|</span>
+              <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">رقم الشركة: {employee.company_number || 'بدون'}</span>
             </div>
-            <p className="text-slate-500 text-sm font-medium mt-1">
+            <p className="text-slate-500 text-xs font-medium mt-0.5">
               {employee.job_title || 'بدون عنوان وظيفي'} &bull; {employee.section || employee.department || 'الدائرة العامة'} &bull; موقع العمل: {employee.work_location || 'غير محدد'}
             </p>
-            <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 mt-2">
-              <span className={`px-3 py-1 rounded-full text-xs font-bold shadow-sm ${
+            <div className="flex flex-wrap items-center justify-center md:justify-start gap-1.5 mt-1.5">
+              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold shadow-2xs ${
                 employee.status === 'مستمر' ? 'bg-green-100 text-green-700' :
                 employee.status === 'مجاز' ? 'bg-orange-100 text-orange-700' :
                 employee.status === 'موقوف' ? 'bg-red-100 text-red-700' :
                 employee.status === 'متقاعد' || employee.status === 'مستقيل' ? 'bg-rose-100 text-rose-700' :
                 'bg-blue-100 text-blue-700'
               }`}>حالة الموظف: {employee.status || 'مستمر'}</span>
-              <span className="bg-[#1B3A6B]/5 text-[#1B3A6B] px-3 py-1 rounded-full text-xs font-bold">{employee.grade >= 11 ? getGradeLabel(employee.grade) : `الدرجة ${getGradeLabel(employee.grade)}`} / المرحلة {employee.step}</span>
-              <span className="bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-bold">الرقم الوظيفي: {employee.civil_service_number || 'غير متوفر'}</span>
+              <span className="bg-[#1B3A6B]/10 text-[#1B3A6B] px-2.5 py-0.5 rounded-full text-[11px] font-bold">{employee.grade >= 11 ? getGradeLabel(employee.grade) : `الدرجة ${getGradeLabel(employee.grade)}`} / م{employee.step}</span>
+              <span className="bg-slate-100 text-slate-700 px-2.5 py-0.5 rounded-full text-[11px] font-bold">الرقم الوظيفي: {employee.civil_service_number || 'غير متوفر'}</span>
             </div>
           </div>
         </div>
@@ -1143,61 +1472,409 @@ export default function EmployeeDetail() {
           <Button
             onClick={() => setShowQRModal(true)}
             variant="outline"
-            className="rounded-xl gap-2 border-amber-500 text-amber-900 bg-amber-50/50 hover:bg-amber-100 font-bold px-4 shadow-xs"
+            size="sm"
+            className="rounded-xl gap-1.5 border-amber-500 text-amber-900 bg-amber-50/50 hover:bg-amber-100 font-bold px-3 shadow-2xs text-xs"
           >
-            <QrCode size={16} className="text-amber-600" /> رمز الوصول السريع
+            <QrCode size={14} className="text-amber-600" /> رمز الوصول السريع
           </Button>
           <Link to={`/employees/${id}/edit`}>
-            <Button variant="outline" className="rounded-xl gap-2 border-[#1B3A6B] text-[#1B3A6B] font-bold px-5">
-              <Edit size={16} /> تعديل الملف الأساسي
+            <Button variant="outline" size="sm" className="rounded-xl gap-1.5 border-[#1B3A6B] text-[#1B3A6B] font-bold px-4 text-xs">
+              <Edit size={14} /> تعديل الملف الأساسي
             </Button>
           </Link>
         </div>
       </div>
 
-      {/* Top Cards Grid - Unified design matching screenshot */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
-        {[
-          { label: 'الخدمة المباشرة الصافية الفترية', value: actualServiceDuration, color: 'text-[#1B3A6B]', icon: Clock },
-          { 
-            label: 'المدد المضافة والممددة بأوامر رسمية', 
-            value: (() => {
-              if (hasAddedService && hasExtensionService) {
-                return `${formatDurationParts(totalAddedYears, totalAddedMonths, totalAddedDays)} (مضافة) • ${formatDurationParts(finalExtYears, finalExtMonths, finalExtDays)} (تمديد)`;
-              } else if (hasAddedService) {
-                return `${formatDurationParts(totalAddedYears, totalAddedMonths, totalAddedDays)} (خدمة مضافة)`;
-              } else if (hasExtensionService) {
-                return `${formatDurationParts(finalExtYears, finalExtMonths, finalExtDays)} (تمديد تقاعدي)`;
-              }
-              return '٠ سنة، ٠ شهر، ٠ يوم';
-            })(), 
-            color: 'text-amber-600', 
-            icon: FileText 
-          },
-          { label: 'الخدمة الرسمية الكلية المعتمدة', value: totalServiceDuration, color: 'text-emerald-700 font-black', icon: ShieldCheck },
-          { label: 'الراتب الأساسي', value: formatCurrency(salaryCalc.base_salary), color: 'text-[#1B3A6B]', icon: DollarSign },
-          { label: 'صافي الراتب المتوقع', value: formatCurrency(displayedNetSalary), color: 'text-green-600', icon: DollarSign },
-          { label: 'رصيد الإجازات الاعتيادية', value: `${regularLeaveBalance} يوم`, color: 'text-emerald-600', icon: ClipboardList },
-          { label: 'رصيد الإجازات المرضية', value: `${sickLeaveBalance} يوم`, color: 'text-rose-500', icon: Heart },
-          { label: 'مدة الخدمة في هذه الشركة', value: companyServiceDuration, color: 'text-teal-600', icon: Briefcase },
-          { label: 'خدمة القطاع النفطي', value: oilSectorServiceDuration, color: 'text-amber-700', icon: Briefcase },
-          { label: 'حالة الموظف الحالية', value: employee.status || 'مستمر', color: 'text-amber-600', icon: ClipboardList },
-          { label: 'موقع العمل في الشركة', value: employee.work_location || 'غير محدد', color: 'text-indigo-600', icon: MapPin },
-          { label: 'جهة العمل (الهيكل التنظيمي)', value: workplace, color: 'text-[#1B3A6B]', icon: MapPin, className: 'sm:col-span-2 md:col-span-2 lg:col-span-3' },
-        ].map((s, i) => {
-          const IconComponent = s.icon;
-          return (
-            <div key={i} className={`bg-white rounded-2xl p-4 shadow-xs border border-slate-100 flex justify-between items-center hover:shadow-md hover:border-slate-200 transition-all ${s.className || ''}`}>
-              <div className="flex-1 min-w-0">
-                <p className="text-slate-400 text-[10px] font-bold mb-1 truncate" title={s.label}>{s.label}</p>
-                <p className={`text-sm font-extrabold truncate ${s.color}`} title={typeof s.value === 'string' ? s.value : ''}>{s.value}</p>
-              </div>
-              <div className="w-9 h-9 rounded-xl bg-slate-50 flex items-center justify-center text-slate-400 shrink-0 mr-2 border border-slate-100">
-                <IconComponent size={18} />
-              </div>
+      {/* Executive 6 Comprehensive Summary Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+        
+        {/* 1. البيانات الشخصية والهوية */}
+        <div className="bg-white rounded-2xl p-4 border border-slate-100/90 shadow-xs hover:shadow-md transition-all flex flex-col justify-start">
+          <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center font-bold">
+                <User size={15} />
+              </span>
+              <h4 className="font-bold text-xs text-[#1B3A6B]">البيانات الشخصية والهوية</h4>
             </div>
-          );
-        })}
+            <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md">
+              ملف الهوية
+            </span>
+          </div>
+
+          <div className="space-y-1.5 text-xs">
+            {/* 1. الاسم الكامل */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1.5 px-2 rounded-lg bg-indigo-50/60 border border-indigo-100/70 gap-1">
+              <span className="text-slate-600 font-bold shrink-0">الاسم الكامل:</span>
+              <span className="font-bold text-[#1B3A6B] text-right break-words leading-relaxed">
+                {[employee.first_name, employee.father_name, employee.grandfather_name, employee.great_grandfather_name, employee.surname].filter(Boolean).join(' ') || employee.full_name}
+              </span>
+            </div>
+
+            {/* 2. رقم الشركة / الرقم الوظيفي */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">رقم الشركة / الرقم الوظيفي:</span>
+              <span className="font-mono font-bold text-indigo-900 text-right break-words">
+                {employee.company_number || 'بدون'} / {employee.civil_service_number || 'بدون'}
+              </span>
+            </div>
+
+            {/* 3. الرقم الوطني / بطاقة السكن */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الرقم الوطني / بطاقة السكن:</span>
+              <span className="font-mono font-bold text-slate-800 text-right break-words">
+                {employee.national_id || 'غير متوفر'} {employee.residence_card ? `(سكن: ${employee.residence_card})` : ''}
+              </span>
+            </div>
+
+            {/* 4. المواليد ومحل الولادة */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">المواليد ومحل الولادة:</span>
+              <span className="font-bold text-slate-800 text-right break-words">
+                {employee.birth_date || '—'} {employeeAge ? `(${employeeAge} سنة)` : ''} {employee.birth_place ? `• ${employee.birth_place}` : ''}
+              </span>
+            </div>
+
+            {/* 5. الهاتف ومكان السكن */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">رقم الهاتف وعنوان السكن:</span>
+              <span className="font-bold text-slate-700 text-right break-words leading-relaxed">
+                {employee.phone || 'بدون هاتف'} &bull; {employee.address || 'غير محدد'}
+              </span>
+            </div>
+
+            {/* 6. الحالة الاجتماعية */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الحالة الاجتماعية:</span>
+              <span className="font-bold text-slate-700 text-right break-words">
+                {employee.marital_status || 'أعزب'}
+              </span>
+            </div>
+
+            {/* 7. اسم الزوجة / الزوجات */}
+            {(employee.marital_status === 'متزوج' || parsedSpouses.length > 0) && (
+              <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+                <span className="text-slate-500 font-medium shrink-0">
+                  {parsedSpouses.length > 1 ? 'أسماء الزوجات:' : 'اسم الزوجة:'}
+                </span>
+                <span className="font-bold text-slate-800 text-right break-words">
+                  {parsedSpouses.length > 0 ? parsedSpouses.join('، ') : (employee.spouse_names || 'غير مسجل')}
+                </span>
+              </div>
+            )}
+
+            {/* 8. الأطفال والمعالين وتفاصيلهم */}
+            {(employee.children_count > 0 || parsedChildren.length > 0) && (
+              <div className="py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-medium">
+                    الأطفال والمعالين:
+                  </span>
+                  <span className="font-bold text-slate-800 font-mono text-[11px]">
+                    {employee.children_count || parsedChildren.length} أولاد
+                  </span>
+                </div>
+                {parsedChildren.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {parsedChildren.map((ch, idx) => {
+                      const childAge = calculateChildAge(ch.birth_date);
+                      return (
+                        <span key={idx} className="inline-flex items-center gap-1.5 bg-slate-100/90 hover:bg-slate-200/80 transition-colors px-2 py-0.5 rounded-md border border-slate-200/90 text-[11px]">
+                          <span className="font-bold text-slate-800">{ch.name || `طفل ${idx + 1}`}</span>
+                          {ch.gender && (
+                            <span className="text-[9px] px-1 rounded font-semibold bg-white border border-slate-200 text-slate-700">
+                              {ch.gender}
+                            </span>
+                          )}
+                          {childAge && (
+                            <span className="text-[10px] font-bold text-indigo-900 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-200/70">
+                              {childAge}
+                            </span>
+                          )}
+                          {ch.birth_date && (
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              ({ch.birth_date})
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 2. البيانات الوظيفية والإدارية */}
+        <div className="bg-white rounded-2xl p-4 border border-slate-100/90 shadow-xs hover:shadow-md transition-all flex flex-col justify-start">
+          <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-blue-50 text-[#1B3A6B] flex items-center justify-center font-bold">
+                <Briefcase size={15} />
+              </span>
+              <h4 className="font-bold text-xs text-[#1B3A6B]">البيانات الوظيفية والإدارية</h4>
+            </div>
+            <span className="text-[10px] font-bold text-[#1B3A6B] bg-blue-50 px-2 py-0.5 rounded-md">
+              {employee.status || 'مستمر بالخدمة'}
+            </span>
+          </div>
+
+          <div className="space-y-1.5 text-xs">
+            {/* 1. العنوان الوظيفي */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1.5 px-2 rounded-lg bg-blue-50/60 border border-blue-100/70 gap-1">
+              <span className="text-slate-600 font-bold shrink-0">العنوان الوظيفي:</span>
+              <span className="font-bold text-[#1B3A6B] text-right break-words">{employee.job_title || 'غير محدد'}</span>
+            </div>
+
+            {/* 2. الدرجة والمرحلة (أسفل العنوان الوظيفي مباشرة) */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg bg-slate-50/80 border border-slate-200/60 gap-1">
+              <span className="text-slate-600 font-semibold shrink-0">الدرجة والمرحلة الوظيفية:</span>
+              <span className="font-bold text-[#1B3A6B] text-right break-words">
+                {employee.grade >= 11 ? getGradeLabel(employee.grade) : `الدرجة ${getGradeLabel(employee.grade)}`} / المرحلة {employee.step}
+              </span>
+            </div>
+
+            {/* 3. الجهة والموقع */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الجهة والموقع:</span>
+              <span className="font-bold text-slate-800 text-right break-words leading-relaxed">
+                {employee.section || employee.department || 'الدائرة العامة'} &bull; {employee.work_location || 'المقر الرئيسي'}
+              </span>
+            </div>
+
+            {/* 4. المسؤولية والتكليف الإداري */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">المسؤولية الإدارية:</span>
+              <span className="font-bold text-amber-800 text-right break-words">
+                {employee.primary_responsibility || 'بلا مسؤولية'} {employee.acting_responsibility && employee.acting_responsibility !== 'بلا وكالة' ? `(${employee.acting_responsibility})` : ''}
+              </span>
+            </div>
+
+            {/* 5. طبيعة الدوام ونوع الخدمة */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الدوام ونوع الخدمة:</span>
+              <span className="font-bold text-slate-700 text-right break-words">
+                {employee.work_shift_type || 'صباحي'} &bull; ملاك {employee.service_type || 'دائم'}
+              </span>
+            </div>
+
+            {/* 6. تاريخ المباشرة الأولى (أسفل القائمة) */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">تاريخ المباشرة الأولى:</span>
+              <span className="font-bold text-slate-700 text-right break-words">
+                {employee.first_appointment_date || employee.appointment_date || '—'} {employee.appointment_order ? `(أمر: ${employee.appointment_order})` : ''}
+              </span>
+            </div>
+
+            {/* 7. تاريخ المباشرة في القطاع النفطي (أسفل تاريخ المباشرة الأولى) */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">تاريخ المباشرة في القطاع النفطي:</span>
+              <span className="font-bold text-amber-800 text-right break-words">
+                {employee.oil_sector_start_date || 'غير محدد'}
+              </span>
+            </div>
+
+            {/* 8. تاريخ المباشرة في هذه الشركة (أسفل تاريخ القطاع النفطي) */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">تاريخ المباشرة في هذه الشركة:</span>
+              <span className="font-bold text-[#1B3A6B] text-right break-words">
+                {employee.current_appointment_date || 'غير محدد'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. المؤهلات الدراسية والشهادات */}
+        <div className="bg-white rounded-2xl p-4 border border-slate-100/90 shadow-xs hover:shadow-md transition-all flex flex-col justify-start">
+          <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-purple-50 text-purple-700 flex items-center justify-center font-bold">
+                <GraduationCap size={15} />
+              </span>
+              <h4 className="font-bold text-xs text-[#1B3A6B]">المؤهلات الدراسية والشهادات</h4>
+            </div>
+            <span className="text-[10px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md">
+              {qualifications.length > 0 ? `${qualifications.length} مؤهل مسجل` : 'المؤهل المعتمد'}
+            </span>
+          </div>
+
+          <div className="space-y-1.5 text-xs">
+            {/* 1. الشهادة المعتمدة */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1.5 px-2 rounded-lg bg-purple-50/60 border border-purple-100/70 gap-1">
+              <span className="text-slate-600 font-bold shrink-0">الشهادة المعتمدة:</span>
+              <span className="font-bold text-purple-900 text-right break-words">
+                {activeQualification?.education_level || activeQualification?.educationLevel || employee.education_level || 'غير محدد'}
+              </span>
+            </div>
+
+            {/* 2. التخصص الدقيق */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">التخصص الدقيق:</span>
+              <span className="font-bold text-slate-800 text-right break-words leading-relaxed">
+                {activeQualification?.specialization || employee.specialization || 'غير محدد'}
+              </span>
+            </div>
+
+            {/* 3. الجامعة / جهة التخرج */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الجامعة / جهة التخرج:</span>
+              <span className="font-bold text-slate-700 text-right break-words leading-relaxed">
+                {activeQualification?.university || activeQualification?.institution || employee.university || 'غير محدد'}
+              </span>
+            </div>
+
+            {/* 4. سنة التخرج (سنة التخرج فقط من قاعدة البيانات) */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">سنة التخرج:</span>
+              <span className="font-bold text-slate-700 text-right break-words">
+                {activeQualification?.graduation_year || employee.graduation_year || '—'}
+              </span>
+            </div>
+
+            {/* 5. أمر الاحتساب / المعادلة */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">أمر الاحتساب / المعادلة:</span>
+              <span className="font-bold text-slate-700 text-right font-mono break-words leading-relaxed">
+                {qualificationOrderDisplay || '—'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 4. سجل مدد واحتساب الخدمة */}
+        <div className="bg-white rounded-2xl p-4 border border-slate-100/90 shadow-xs hover:shadow-md transition-all flex flex-col justify-start">
+          <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center font-bold">
+                <Clock size={15} />
+              </span>
+              <h4 className="font-bold text-xs text-[#1B3A6B]">سجل مدد واحتساب الخدمة</h4>
+            </div>
+            <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md">
+              قانون الخدمة والتقاعد
+            </span>
+          </div>
+
+          <div className="space-y-1.5 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg bg-emerald-50/70 border border-emerald-100/80 gap-1">
+              <span className="font-bold text-emerald-900 flex items-center gap-1.5 shrink-0">
+                <ShieldCheck size={13} className="text-emerald-600 shrink-0" />
+                الخدمة الكلية المعتمدة:
+              </span>
+              <span className="font-black text-emerald-800 text-xs text-right break-words">{totalServiceDuration}</span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الخدمة في القطاع النفطي:</span>
+              <span className="font-bold text-amber-800 text-right break-words">{oilSectorServiceDuration}</span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الخدمة في هذه الشركة:</span>
+              <span className="font-bold text-[#1B3A6B] text-right break-words">{companyServiceDuration}</span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الخدمة المضافة:</span>
+              <span className="font-bold text-amber-600 text-right break-words">
+                {hasAddedService ? formatDurationParts(totalAddedYears, totalAddedMonths, totalAddedDays) : '٠ يوم (لا يوجد)'}
+              </span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">التمديد التقاعدي:</span>
+              <span className="font-bold text-purple-700 text-right break-words">
+                {hasExtensionService ? formatDurationParts(finalExtYears, finalExtMonths, finalExtDays) : '٠ يوم (لا يوجد)'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 5. الاستحقاق المالي وسلّم الرواتب */}
+        <div className="bg-white rounded-2xl p-4 border border-slate-100/90 shadow-xs hover:shadow-md transition-all flex flex-col justify-start">
+          <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
+                <DollarSign size={15} />
+              </span>
+              <h4 className="font-bold text-xs text-[#1B3A6B]">الاستحقاق المالي وحساب الراتب</h4>
+            </div>
+            <Link to="/salaries" className="text-[10px] font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md">
+              مسير الرواتب &larr;
+            </Link>
+          </div>
+
+          <div className="space-y-1.5 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 text-white shadow-2xs gap-1">
+              <span className="font-bold flex items-center gap-1.5 shrink-0">
+                <DollarSign size={13} className="text-emerald-200 shrink-0" />
+                صافي الراتب المستحق:
+              </span>
+              <span className="font-black text-sm text-right break-words">{formatCurrency(displayedNetSalary)}</span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الراتب الاسمي (الأساسي):</span>
+              <span className="font-bold text-[#1B3A6B] text-right break-words">{formatCurrency(salaryCalc.base_salary)}</span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">إجمالي المخصصات المستمرة:</span>
+              <span className="font-bold text-blue-600 text-right break-words">+{formatCurrency(displayedTotalAllowances)}</span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">إجمالي الاستقطاعات الشهرية:</span>
+              <span className="font-bold text-rose-600 text-right break-words">-{formatCurrency(displayedTotalDeductions)}</span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">التسكين المالي لسلم 2023:</span>
+              <span className="font-bold text-slate-700 text-right break-words">الدرجة {getGradeLabel(employee.grade)} / م{employee.step}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 6. أرصدة الإجازات والحالة المهنية */}
+        <div className="bg-white rounded-2xl p-4 border border-slate-100/90 shadow-xs hover:shadow-md transition-all flex flex-col justify-start">
+          <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center font-bold">
+                <ClipboardList size={15} />
+              </span>
+              <h4 className="font-bold text-xs text-[#1B3A6B]">الأرصدة والسجل الوظيفي</h4>
+            </div>
+            <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+              السنة الحالية {new Date().getFullYear()}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="bg-emerald-50/60 p-2.5 rounded-xl border border-emerald-100/70">
+              <p className="text-[10px] font-bold text-emerald-800 mb-0.5">الإجازات الاعتيادية</p>
+              <p className="text-base font-black text-emerald-700 break-words">{regularLeaveBalance} <span className="text-[10px] font-bold text-emerald-600">يوم</span></p>
+            </div>
+
+            <div className="bg-rose-50/60 p-2.5 rounded-xl border border-rose-100/70">
+              <p className="text-[10px] font-bold text-rose-800 mb-0.5">الإجازات المرضية</p>
+              <p className="text-base font-black text-rose-600 break-words">{sickLeaveBalance} <span className="text-[10px] font-bold text-rose-500">يوم</span></p>
+            </div>
+
+            <div className="bg-amber-50/60 p-2.5 rounded-xl border border-amber-100/70">
+              <p className="text-[10px] font-bold text-amber-800 mb-0.5">كتب الشكر (القدم)</p>
+              <p className="text-base font-black text-amber-700 break-words">{appreciations.length} <span className="text-[10px] font-bold text-amber-600">كتاب</span></p>
+            </div>
+
+            <div className={`p-2.5 rounded-xl border ${penalties.length > 0 ? 'bg-red-50/60 border-red-100/70' : 'bg-slate-50 border-slate-100'}`}>
+              <p className={`text-[10px] font-bold mb-0.5 ${penalties.length > 0 ? 'text-red-800' : 'text-slate-600'}`}>العقوبات الانضباطية</p>
+              <p className={`text-base font-black ${penalties.length > 0 ? 'text-red-600' : 'text-slate-700'} break-words`}>
+                {penalties.length > 0 ? `${penalties.length} عقوبة` : '٠ (نظيف)'}
+              </p>
+            </div>
+          </div>
+        </div>
+
       </div>
 
       {/* Tabs Layout */}
@@ -1221,8 +1898,8 @@ export default function EmployeeDetail() {
         <TabsContent value="personal" className="mt-5">
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-6">
             <div>
-              <h3 className="text-lg font-bold text-[#1B3A6B]">تفاصيل الملف الشخصي والهوية</h3>
-              <p className="text-xs text-slate-400 mt-0.5">المعلومات الشخصية والبيانات الحيوية المسجلة للموظف</p>
+              <h3 className="text-lg font-bold text-[#1B3A6B]">البيانات الشخصية والهوية</h3>
+              <p className="text-xs text-slate-400 mt-0.5">المعلومات الأساسية وبيانات التعريف والاتصال بالموظف</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1233,14 +1910,17 @@ export default function EmployeeDetail() {
                   <h4 className="font-bold text-xs text-[#1B3A6B]">معلومات الهوية الأساسية</h4>
                 </div>
                 <div className="space-y-1">
-                  <InfoRow label="الاسم الأول" value={employee.first_name || (employee.full_name?.split(/\s+/)[0])} />
-                  <InfoRow label="اسم الأب" value={employee.father_name || (employee.full_name?.split(/\s+/)[1])} />
-                  <InfoRow label="اسم الجد" value={employee.grandfather_name || (employee.full_name?.split(/\s+/)[2])} />
-                  <InfoRow label="اسم والد الجد (الاسم الرابع)" value={employee.great_grandfather_name || (employee.full_name?.split(/\s+/).slice(3).join(' '))} />
-                  <InfoRow label="اللقب" value={employee.surname} />
-                  <InfoRow label="الاسم الرباعي واللقب" value={`${employee.full_name || ''} ${employee.surname || ''}`} />
-                  <InfoRow label="الرقم الوظيفي (التخطيط)" value={employee.civil_service_number} />
-                  <InfoRow label="رقم الشركة الموحد" value={employee.company_number} />
+                  <InfoRow label="الاسم الأول" value={employee.first_name || (employee.full_name?.split(/\s+/)[0]) || '—'} />
+                  <InfoRow label="اسم الأب" value={employee.father_name || (employee.full_name?.split(/\s+/)[1]) || '—'} />
+                  <InfoRow label="اسم الجد" value={employee.grandfather_name || (employee.full_name?.split(/\s+/)[2]) || '—'} />
+                  <InfoRow label="اسم والد الجد (الاسم الرابع)" value={employee.great_grandfather_name || (employee.full_name?.split(/\s+/).slice(3).join(' ')) || '—'} />
+                  <InfoRow label="اللقب" value={employee.surname || '—'} />
+                  <div className="bg-blue-50/60 border border-blue-200/70 rounded-xl px-3 py-2 my-2 flex justify-between items-center text-xs">
+                    <span className="text-blue-900 font-semibold">الاسم الكامل المعتمد:</span>
+                    <span className="font-bold text-[#1B3A6B]">{[employee.first_name, employee.father_name, employee.grandfather_name, employee.great_grandfather_name, employee.surname].filter(Boolean).join(' ') || employee.full_name}</span>
+                  </div>
+                  <InfoRow label="الرقم الوظيفي (التخطيط)" value={employee.civil_service_number || '—'} />
+                  <InfoRow label="رقم الشركة الموحد" value={employee.company_number || '—'} />
                 </div>
               </div>
 
@@ -1251,57 +1931,87 @@ export default function EmployeeDetail() {
                   <h4 className="font-bold text-xs text-[#1B3A6B]">المعلومات الحيوية والاجتماعية</h4>
                 </div>
                 <div className="space-y-1">
-                  <InfoRow label="الجنس" value={employee.gender} />
-                  <InfoRow label="تاريخ الميلاد" value={employee.birth_date} />
-                  <InfoRow label="محل الميلاد" value={employee.birth_place} />
-                  <InfoRow label="الجنسية" value={employee.nationality} />
-                  <InfoRow label="القومية" value={employee.ethnicity || 'غير محدد'} />
-                  <InfoRow label="الديانة" value={employee.religion} />
+                  <InfoRow label="الجنس" value={employee.gender || 'ذكر'} />
+                  <InfoRow label="تاريخ الميلاد" value={employee.birth_date || '—'} />
+                  <InfoRow label="محل الميلاد" value={employee.birth_place || '—'} />
+                  <InfoRow label="الجنسية" value={employee.nationality || 'عراقي'} />
+                  <InfoRow label="القومية" value={employee.ethnicity || 'عربي/ة'} />
+                  <InfoRow label="الديانة" value={employee.religion || 'مسلم'} />
                   <InfoRow label="فصيلة الدم" value={employee.blood_type || 'غير معروف'} />
-                  <InfoRow label="الحالة الاجتماعية" value={employee.marital_status} />
-                  <InfoRow label="عدد الأولاد المعالين" value={employee.children_count} />
+                  <InfoRow label="الحالة الاجتماعية" value={employee.marital_status || 'أعزب'} />
+                  {(employee.marital_status === 'متزوج' || parsedSpouses.length > 0) && (
+                    <InfoRow label="اسم الزوجة / الزوجات" value={parsedSpouses.length > 0 ? parsedSpouses.join('، ') : employee.spouse_names || '—'} />
+                  )}
+                  <InfoRow label="عدد الأولاد المعالين" value={employee.children_count || 0} />
+                  {parsedChildren.length > 0 && (
+                    <div className="pt-2 border-t border-slate-200/60 mt-2">
+                      <span className="text-xs font-bold text-[#1B3A6B] block mb-1.5">بيانات وتفاصيل الأطفال المسجلين:</span>
+                      <div className="space-y-1">
+                        {parsedChildren.map((ch, idx) => {
+                          const childAge = calculateChildAge(ch.birth_date);
+                          return (
+                            <div key={idx} className="flex justify-between items-center bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/70 text-xs">
+                              <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                                <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-800 text-[10px] flex items-center justify-center font-bold">{idx + 1}</span>
+                                {ch.name || 'بدون اسم'}
+                                {childAge && (
+                                  <span className="text-[10px] font-bold text-indigo-900 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200/80">
+                                    العمر: {childAge}
+                                  </span>
+                                )}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[11px]">
+                                {ch.gender || 'ذكر'} {ch.birth_date ? `• ${ch.birth_date}` : ''}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* 3. المستندات الثبوتية */}
+              {/* 3. المستندات الثبوتية والوطنية */}
               <div className="bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80">
                 <div className="pb-2 border-b border-slate-200/60 flex items-center gap-2 mb-3">
                   <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
-                  <h4 className="font-bold text-xs text-[#1B3A6B]">المستندات الثبوتية</h4>
+                  <h4 className="font-bold text-xs text-[#1B3A6B]">المستندات الثبوتية والوطنية</h4>
                 </div>
                 <div className="space-y-1">
                   <InfoRow label="رقم البطاقة الوطنية / الهوية" value={employee.national_id || 'غير متوفر'} />
                   <InfoRow label="رقم بطاقة السكن" value={employee.residence_card || 'غير متوفر'} />
                   <InfoRow label="البطاقة التموينية" value={employee.ration_card || 'غير متوفر'} />
-                  <InfoRow label="رقم الجواز" value={employee.passport_number || 'غير متوفر'} />
+                  <InfoRow label="رقم جواز السفر" value={employee.passport_number || 'غير متوفر'} />
                 </div>
               </div>
 
-              {/* 4. بيانات الاتصال والسكن */}
-              <div className="bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80">
-                <div className="pb-2 border-b border-slate-200/60 flex items-center gap-2 mb-3">
-                  <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
-                  <h4 className="font-bold text-xs text-[#1B3A6B]">بيانات الاتصال والسكن</h4>
+              {/* 4. بيانات الاتصال والصورة الشخصية */}
+              <div className="bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80 flex flex-col justify-between">
+                <div>
+                  <div className="pb-2 border-b border-slate-200/60 flex items-center gap-2 mb-3">
+                    <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
+                    <h4 className="font-bold text-xs text-[#1B3A6B]">بيانات الاتصال والصورة الشخصية</h4>
+                  </div>
+                  <div className="space-y-1">
+                    <InfoRow label="عنوان السكن الكامل" value={employee.address || 'غير محدد'} />
+                    <InfoRow label="رقم الهاتف" value={employee.phone || 'غير متوفر'} />
+                    <InfoRow label="البريد الإلكتروني" value={employee.email || 'غير متوفر'} />
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <InfoRow label="عنوان السكن" value={employee.address || 'غير محدد'} />
-                  <InfoRow label="رقم الهاتف" value={employee.phone || 'غير متوفر'} />
-                  <InfoRow label="البريد الإلكتروني" value={employee.email || 'غير متوفر'} />
-                </div>
-              </div>
 
-              {/* 5. بيانات التحصيل الدراسي */}
-              <div className="bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80">
-                <div className="pb-2 border-b border-slate-200/60 flex items-center gap-2 mb-3">
-                  <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
-                  <h4 className="font-bold text-xs text-[#1B3A6B]">بيانات التحصيل الدراسي والشهادة العلمية</h4>
-                </div>
-                <div className="space-y-1">
-                  <InfoRow label="الشهادة العلمية" value={employee.education_level || 'غير محدد'} />
-                  <InfoRow label="الاختصاص" value={employee.specialization || 'غير محدد'} />
-                  <InfoRow label="الجامعة / المعهد" value={employee.university || employee.institution || 'غير محدد'} />
-                  <InfoRow label="سنة التخرج" value={employee.graduation_year || 'غير محدد'} />
-                  <InfoRow label="رقم أمر احتساب الشهادة" value={employee.education_order || employee.evaluation_order || 'غير محدد'} />
+                <div className="mt-4 pt-3 border-t border-slate-200/60 flex items-center gap-3">
+                  <div className="w-14 h-14 rounded-xl overflow-hidden border border-slate-200 shadow-2xs shrink-0 bg-white flex items-center justify-center">
+                    {employee.photo ? (
+                      <img src={employee.photo} alt={employee.full_name} className="w-full h-full object-cover" />
+                    ) : (
+                      <User size={24} className="text-slate-400" />
+                    )}
+                  </div>
+                  <div className="text-xs">
+                    <p className="font-bold text-slate-800">الصورة الشخصية المعتمدة للموظف</p>
+                    <p className="text-[11px] text-slate-400">محفوظة في قيد الموظف المركزي وملفه الرسمي</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1316,14 +2026,9 @@ export default function EmployeeDetail() {
         {/* 2. Job Tab */}
         <TabsContent value="job" className="mt-5">
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
-              <div>
-                <h3 className="text-lg font-bold text-[#1B3A6B]">البيانات الوظيفية والخدمة</h3>
-                <p className="text-xs text-slate-400 mt-0.5">معلومات التعيين، التسكين الوظيفي، وتاريخ التكاليف الإدارية</p>
-              </div>
-              <Button size="sm" onClick={() => openAddModal('assignment')} className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-xl gap-1">
-                <Plus size={14} /> تسجيل تكليف جديد
-              </Button>
+            <div className="border-b border-slate-100 pb-3">
+              <h3 className="text-lg font-bold text-[#1B3A6B]">البيانات الوظيفية والإدارية</h3>
+              <p className="text-xs text-slate-400 mt-0.5">معلومات التعيين والمباشرة، السلم الوظيفي، والجهة التنظيمية</p>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1339,6 +2044,7 @@ export default function EmployeeDetail() {
                   <InfoRow label="تاريخ المباشرة الأولى" value={employee.first_appointment_date || 'غير محدد'} />
                   <InfoRow label="تاريخ المباشرة في هذه الشركة" value={employee.current_appointment_date || 'غير محدد'} />
                   <InfoRow label="تاريخ العمل في القطاع النفطي" value={employee.oil_sector_start_date || 'غير محدد'} />
+                  <InfoRow label="نوع الخدمة" value={employee.service_type || 'دائم'} />
                   <InfoRow label="حالة الموظف الحالية" value={employee.status || 'مستمر'} />
                   {employee.status && employee.status !== 'مستمر' && (
                     <div className="mt-3 p-3 bg-amber-50 rounded-xl border border-amber-100 text-xs text-amber-800 space-y-1">
@@ -1359,32 +2065,49 @@ export default function EmployeeDetail() {
                 </div>
                 <div className="space-y-1">
                   <InfoRow label="العنوان الوظيفي" value={employee.job_title || 'غير محدد'} />
-                  <InfoRow label="القسم" value={employee.department || 'غير محدد'} />
-                  <InfoRow label="الشعبة / الفرع" value={employee.section || 'غير محدد'} />
+                  <InfoRow label="جهة العمل من الهيكل التنظيمي" value={employee.section || employee.department || 'غير محدد'} />
                   <InfoRow label="موقع العمل للشركة" value={employee.work_location || 'غير محدد'} />
                   <InfoRow label="طبيعة العمل" value={employee.work_nature || 'مكتبي'} />
-                  <InfoRow label="نوع عمل الموظف" value={employee.work_shift_type || 'صباحي'} />
+                </div>
+              </div>
+
+              {/* 3. نظام الدوام والمناوبات */}
+              <div className="bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80">
+                <div className="pb-2 border-b border-slate-200/60 flex items-center gap-2 mb-3">
+                  <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
+                  <h4 className="font-bold text-xs text-[#1B3A6B]">نظام الدوام والمناوبات</h4>
+                </div>
+                <div className="space-y-1">
+                  <InfoRow label="نوع عمل الموظف (الدوام)" value={employee.work_shift_type || 'صباحي'} />
                   {employee.work_shift_type === 'مناوب' && (
                     <>
                       {employee.shift_system_name && (
                         <InfoRow label="نظام المناوبة المثبت" value={employee.shift_system_name} />
                       )}
-                      <InfoRow label="عدد أيام الدوام" value={`${employee.shift_work_days ?? 0} يوم`} />
-                      <InfoRow label="عدد أيام الاستراحة" value={`${employee.shift_rest_days ?? 0} يوم`} />
+                      <InfoRow label="جدول الدوام والاستراحة" value={`${employee.shift_work_days ?? 0} يوم دوام / ${employee.shift_rest_days ?? 0} يوم استراحة`} />
                     </>
                   )}
-                  <InfoRow label="نوع الخدمة" value={employee.service_type || 'غير محدد'} />
-                  <InfoRow label="المسؤولية الأساسية" value={employee.primary_responsibility || 'بلا مسؤولية'} />
-                  <InfoRow label="المسؤولية بالوكالة" value={employee.acting_responsibility || 'بلا وكالة'} />
-                  <InfoRow label="درجة الوكيل" value={employee.deputy_level || 'لا يوجد'} />
                 </div>
               </div>
 
-              {/* 3. الدرجة الوظيفية (سلم الرواتب) */}
+              {/* 4. المسؤوليات والتكاليف الإدارية */}
               <div className="bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80">
                 <div className="pb-2 border-b border-slate-200/60 flex items-center gap-2 mb-3">
                   <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
-                  <h4 className="font-bold text-xs text-[#1B3A6B]">الدرجة الوظيفية (سلم الرواتب)</h4>
+                  <h4 className="font-bold text-xs text-[#1B3A6B]">المسؤوليات والتكاليف الإدارية</h4>
+                </div>
+                <div className="space-y-1">
+                  <InfoRow label="المسؤولية الأساسية" value={employee.primary_responsibility || 'بلا مسؤولية'} />
+                  <InfoRow label="المسؤولية في حالة الوكالة" value={employee.acting_responsibility || 'بلا وكالة'} />
+                  <InfoRow label="تحديد درجة الوكيل" value={employee.deputy_level || 'لا يوجد'} />
+                </div>
+              </div>
+
+              {/* 5. الدرجة الوظيفية (سلم رواتب 2023) */}
+              <div className="bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80">
+                <div className="pb-2 border-b border-slate-200/60 flex items-center gap-2 mb-3">
+                  <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
+                  <h4 className="font-bold text-xs text-[#1B3A6B]">التسكين والدرجة الوظيفية (سلم رواتب 2023)</h4>
                 </div>
                 <div className="space-y-1">
                   <InfoRow label="الدرجة الوظيفية" value={employee.grade >= 11 ? getGradeLabel(employee.grade) : `الدرجة ${getGradeLabel(employee.grade)}`} />
@@ -1393,7 +2116,7 @@ export default function EmployeeDetail() {
                 </div>
               </div>
 
-              {/* 4. الأرقام التعريفية والسجلات الإدارية */}
+              {/* 6. الأرقام التعريفية والسجلات الإدارية */}
               <div className="bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80">
                 <div className="pb-2 border-b border-slate-200/60 flex items-center gap-2 mb-3">
                   <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
@@ -1405,88 +2128,119 @@ export default function EmployeeDetail() {
                   <InfoRow label="رقم التصريح الأمني" value={employee.security_clearance_number || 'غير متوفر'} />
                   <InfoRow label="تاريخ التصريح الأمني" value={employee.security_clearance_date || 'غير متوفر'} />
                   <InfoRow label="الدور في النظام" value={employee.role === 'hr_admin' ? 'مسؤول شؤون موظفين' : employee.role === 'manager' ? 'مدير' : 'موظف'} />
+                  <InfoRow label="ملاحظات إدارية" value={employee.notes || 'لا توجد ملاحظات'} />
                 </div>
               </div>
 
-              {/* 5. احتساب الخدمة الكلية والمضافة */}
-              <div className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-200/80 space-y-3">
-                <div className="pb-2 border-b border-emerald-200/60 flex items-center justify-between">
+              {/* 7. أرصدة الإجازات والبيانات التراكمية (الافتتاحي والمتبقي) */}
+              <div className="col-span-full bg-teal-50/40 p-5 rounded-2xl border border-teal-200/70 space-y-4">
+                <div className="pb-2 border-b border-teal-200/60 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-4 bg-emerald-600 rounded-full" />
-                    <h4 className="font-bold text-xs text-emerald-900">احتساب مدة الخدمة الكلية الشاملة (السنوات/الأشهر/الأيام)</h4>
+                    <span className="w-1.5 h-4 bg-teal-600 rounded-full" />
+                    <h4 className="font-bold text-xs text-teal-900">أرصدة الإجازات والبيانات التراكمية (الافتتاحية والمتبقية)</h4>
                   </div>
-                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+                  <span className="text-[10px] bg-teal-100 text-teal-800 font-bold px-2.5 py-0.5 rounded-full border border-teal-200">
+                    محدثة تلقائياً مع حركة الإجازات
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* الاعتيادية */}
+                  <div className="bg-white p-4 rounded-xl border border-teal-100 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-900">الإجازات الاعتيادية:</span>
+                      <span className="text-xs font-extrabold text-emerald-700 font-mono">{regularLeaveBalance} يوم متبقي</span>
+                    </div>
+                    <div className="space-y-1 text-xs pt-1 border-t border-slate-100">
+                      <InfoRow label="الرصيد الافتتاحي المثبت (المدور)" value={`${employee.initial_regular_leave_balance || 0} يوم`} />
+                      <InfoRow label="الرصيد الفعلي المتاح حالياً" value={`${regularLeaveBalance} يوم`} />
+                    </div>
+                  </div>
+
+                  {/* المرضية */}
+                  <div className="bg-white p-4 rounded-xl border border-teal-100 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-rose-900">الإجازات المرضية:</span>
+                      <span className="text-xs font-extrabold text-rose-600 font-mono">{sickLeaveBalance} يوم متبقي</span>
+                    </div>
+                    <div className="space-y-1 text-xs pt-1 border-t border-slate-100">
+                      <InfoRow label="الرصيد الافتتاحي المثبت (براتب تام)" value={`${employee.initial_sick_leave_balance || 0} يوم`} />
+                      <InfoRow label="الرصيد الفعلي المتاح حالياً" value={`${sickLeaveBalance} يوم`} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 8. احتساب الخدمة الكلية والمضافة */}
+              <div className="col-span-full md:col-span-1 bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80 space-y-3">
+                <div className="pb-2 border-b border-slate-200/60 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
+                    <h4 className="font-bold text-xs text-[#1B3A6B]">احتساب مدة الخدمة الكلية الشاملة (السنوات/الأشهر/الأيام)</h4>
+                  </div>
+                  <span className="text-[10px] bg-emerald-50 text-emerald-800 font-bold px-2.5 py-0.5 rounded-full border border-emerald-200/60">
                     مباشرة + خدمة محتسبة
                   </span>
                 </div>
-                <div className="space-y-3">
-                  <div>
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-slate-500 font-semibold">1. الخدمة الفترية الفعلية (منذ المباشرة الأولى):</span>
-                      <span className="text-emerald-800 font-bold font-mono">{employee.first_appointment_date || '—'}</span>
-                    </div>
-                    <div className="mt-1 bg-white border border-emerald-100 rounded-lg px-2.5 py-1 flex justify-between items-center">
-                      <span className="text-[11px] text-slate-600">مدة المباشرة الفترية:</span>
-                      <span className="text-xs text-emerald-700 font-bold">{actualServiceDuration}</span>
-                    </div>
-                  </div>
 
-                  <div className="pt-2 border-t border-emerald-100/80">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-slate-500 font-semibold">2. إجمالي الخدمة المضافة المحتسبة بالأوامر:</span>
-                      <span className="text-emerald-800 font-bold font-mono">
-                        {totalAddedYears > 0 || totalAddedMonths > 0 || totalAddedDays > 0 
-                          ? `${totalAddedYears} سنة و ${totalAddedMonths} شهر و ${totalAddedDays} يوم`
-                          : 'لا يوجد خدمة مضافة'}
-                      </span>
-                    </div>
-                    <div className="mt-1 bg-white border border-emerald-100 rounded-lg px-2.5 py-1.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1">
-                      <span className="text-[11px] text-slate-600 font-semibold shrink-0">السبب والمبررات / التفاصيل:</span>
-                      <span className="text-[11px] text-emerald-800 font-medium truncate max-w-full">
-                        {addedServiceRecords.length > 0
-                          ? addedServiceRecords.map(r => `${r.record_type || r.recordType || 'خدمة'}${r.reason || r.notes ? `: ${r.reason || r.notes}` : ''}`).join(' • ')
-                          : 'لا توجد تفاصيل أو مبررات مسجلة'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="pt-2 border-t-2 border-emerald-200 bg-white p-3 rounded-xl border border-emerald-200 shadow-xs">
-                    <span className="text-[11px] text-emerald-800 font-bold block mb-0.5">3. إجمالي الخدمة الكلية الشاملة المعتمدة بالأنظمة:</span>
-                    <span className="text-sm text-emerald-900 font-black font-mono block leading-snug">{totalServiceDuration}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* 6. احتساب خدمة القطاع النفطي */}
-              <div className="bg-amber-50/40 p-5 rounded-2xl border border-amber-200/70">
-                <div className="pb-2 border-b border-amber-200/60 flex items-center gap-2 mb-3">
-                  <span className="w-1.5 h-4 bg-amber-600 rounded-full" />
-                  <h4 className="font-bold text-xs text-amber-900">تاريخ الخدمة في القطاع النفطي</h4>
-                </div>
-                <div className="space-y-3.5">
-                  <div>
-                    <span className="text-xs text-slate-500 font-semibold block">تاريخ بدء العمل بالقطاع النفطي:</span>
-                    <span className="text-slate-800 text-xs font-bold font-mono mt-0.5 block">{employee.oil_sector_start_date || '—'}</span>
-                    <div className="mt-2 bg-white border border-amber-200 rounded-xl p-3 flex justify-between items-center shadow-xs">
-                      <span className="text-xs text-amber-900 font-bold">مدة الخدمة بالقطاع النفطي:</span>
-                      <span className="text-xs text-amber-700 font-extrabold">{oilSectorServiceDuration}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 6. أرصدة الإجازات الافتتاحية */}
-              <div className="bg-teal-50/40 p-5 rounded-2xl border border-teal-100/80">
-                <div className="pb-2 border-b border-teal-200/60 flex items-center gap-2 mb-3">
-                  <span className="w-1.5 h-4 bg-teal-600 rounded-full" />
-                  <h4 className="font-bold text-xs text-teal-800">أرصدة الإجازات الافتتاحية (عند المباشرة)</h4>
-                </div>
                 <div className="space-y-1">
-                  <InfoRow label="رصيد الإجازات الاعتيادية الابتدائي" value={employee.initial_regular_leave_balance !== undefined ? `${employee.initial_regular_leave_balance} يوم` : '0 يوم'} />
-                  <InfoRow label="رصيد الإجازات المرضية الابتدائي" value={employee.initial_sick_leave_balance !== undefined ? `${employee.initial_sick_leave_balance} يوم` : '0 يوم'} />
+                  <InfoRow label="1. الخدمة الفترية الفعلية (منذ المباشرة الأولى)" value={employee.first_appointment_date || '—'} />
+                  <InfoRow label="مدة المباشرة الفترية" value={actualServiceDuration} />
+                  <InfoRow 
+                    label="2. إجمالي الخدمة المضافة المحتسبة بالأوامر" 
+                    value={totalAddedYears > 0 || totalAddedMonths > 0 || totalAddedDays > 0 
+                      ? `${totalAddedYears} سنة و ${totalAddedMonths} شهر و ${totalAddedDays} يوم` 
+                      : 'لا يوجد خدمة مضافة'} 
+                  />
+                  <InfoRow 
+                    label="السبب والمبررات / التفاصيل" 
+                    value={addedServiceRecords.length > 0 
+                      ? addedServiceRecords.map(r => `${r.record_type || r.recordType || 'خدمة'}${r.reason || r.notes ? `: ${r.reason || r.notes}` : ''}`).join(' • ') 
+                      : 'لا توجد تفاصيل أو مبررات مسجلة'} 
+                  />
+                </div>
+
+                <div className="mt-2 pt-2.5 border-t border-slate-200/60">
+                  <div className="bg-emerald-50/90 border border-emerald-200/80 rounded-xl p-3 flex justify-between items-center">
+                    <span className="text-xs font-bold text-emerald-950">3. إجمالي الخدمة الكلية الشاملة المعتمدة بالأنظمة:</span>
+                    <span className="text-xs font-black text-emerald-800 font-mono">{totalServiceDuration}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 9. احتساب خدمة القطاع النفطي والشركة */}
+              <div className="col-span-full md:col-span-1 bg-slate-50/50 p-5 rounded-2xl border border-slate-100/80 space-y-3">
+                <div className="pb-2 border-b border-slate-200/60 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
+                    <h4 className="font-bold text-xs text-[#1B3A6B]">سجل الخدمة في القطاع النفطي والشركة</h4>
+                  </div>
+                  <span className="text-[10px] bg-blue-50 text-blue-800 font-bold px-2.5 py-0.5 rounded-full border border-blue-200/60">
+                    مدد الخدمة التخصصية
+                  </span>
+                </div>
+
+                <div className="space-y-1">
+                  <InfoRow label="تاريخ بدء العمل بالقطاع النفطي" value={employee.oil_sector_start_date || '—'} />
+                  <InfoRow label="الخدمة بالقطاع النفطي" value={oilSectorServiceDuration} />
+                  <InfoRow label="تاريخ المباشرة في هذه الشركة" value={employee.current_appointment_date || '—'} />
+                  <InfoRow label="الخدمة في هذه الشركة" value={companyServiceDuration} />
+                </div>
+
+                <div className="mt-2 pt-2.5 border-t border-slate-200/60 grid grid-cols-2 gap-2">
+                  <div className="bg-amber-50/90 border border-amber-200/80 rounded-xl p-2.5 text-center">
+                    <span className="text-[10px] font-bold text-amber-900 block mb-0.5">الخدمة بالقطاع النفطي</span>
+                    <span className="text-xs font-black text-amber-800 font-mono block leading-tight">{oilSectorServiceDuration}</span>
+                  </div>
+                  <div className="bg-blue-50/90 border border-blue-200/80 rounded-xl p-2.5 text-center">
+                    <span className="text-[10px] font-bold text-blue-900 block mb-0.5">الخدمة في هذه الشركة</span>
+                    <span className="text-xs font-black text-[#1B3A6B] font-mono block leading-tight">{companyServiceDuration}</span>
+                  </div>
                 </div>
               </div>
             </div>
+
+
 
             {/* 7. سجل الأوامر الرسمية للخدمة المضافة والمحتسبة */}
             <div className="pt-6 border-t border-slate-100 space-y-3">
@@ -1694,45 +2448,82 @@ export default function EmployeeDetail() {
             </div>
 
             <div className="pt-4">
-              <h4 className="text-sm font-bold text-[#1B3A6B] mb-3 flex items-center gap-2">
-                <span className="w-1.5 h-3.5 bg-yellow-500 rounded-full" />
-                تاريخ التكاليف والتغييرات الإدارية
-              </h4>
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
+                <div>
+                  <h4 className="text-sm font-bold text-[#1B3A6B] flex items-center gap-2">
+                    <span className="w-1.5 h-3.5 bg-yellow-500 rounded-full" />
+                    سجل التكاليف والإعفاءات والتدوير الإداري
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-0.5">توثيق كافة الأوامر الإدارية بالمسؤوليات والتكاليف بالوكالة والأصالة</p>
+                </div>
+                <Button size="sm" onClick={() => openAddModal('assignment')} className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-xl text-xs gap-1 shadow-xs">
+                  <Plus size={14} /> تسجيل تكليف جديد
+                </Button>
+              </div>
               <div className="overflow-x-auto border border-slate-100 rounded-xl">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 border-b border-slate-100">
-                      <th className="text-right px-4 py-2.5 font-bold">العنوان الوظيفي</th>
-                      <th className="text-right px-4 py-2.5 font-bold">الدائرة / القسم</th>
-                      <th className="text-right px-4 py-2.5 font-bold">تاريخ التكليف</th>
-                      <th className="text-right px-4 py-2.5 font-bold">الأمر الإداري</th>
-                      <th className="text-right px-4 py-2.5 font-bold">نوع الخدمة</th>
-                      <th className="text-center px-4 py-2.5 font-bold">إجراءات</th>
+                      <th className="text-right px-4 py-2.5 font-bold text-xs">رقم وتاريخ الأمر</th>
+                      <th className="text-right px-4 py-2.5 font-bold text-xs">نوع الإجراء</th>
+                      <th className="text-right px-4 py-2.5 font-bold text-xs">المسؤولية الأساسية</th>
+                      <th className="text-right px-4 py-2.5 font-bold text-xs">مسؤولية الوكالة</th>
+                      <th className="text-right px-4 py-2.5 font-bold text-xs">درجة الوكيل</th>
+                      <th className="text-right px-4 py-2.5 font-bold text-xs">العنوان الوظيفي / الدائرة</th>
+                      <th className="text-center px-4 py-2.5 font-bold text-xs">إجراءات</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {jobAssignments.map(ja => (
-                      <tr key={ja.id} className="border-b border-slate-50 hover:bg-slate-50/40">
-                        <td className="px-4 py-2.5 font-semibold text-slate-800">{ja.job_title}</td>
-                        <td className="px-4 py-2.5 text-slate-600">{ja.department} / {ja.section}</td>
-                        <td className="px-4 py-2.5 text-slate-600">{ja.assignment_date}</td>
-                        <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{ja.assignment_order}</td>
-                        <td className="px-4 py-2.5"><span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs">{ja.service_type}</span></td>
-                        <td className="px-4 py-2.5 text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل التكليف" onClick={() => openEditModal('assignment', ja)}>
-                              <Edit size={14} />
-                            </Button>
-                            <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" title="حذف التكليف" onClick={() => deleteRecord('JobAssignment', ja.id)}>
-                              <Trash2 size={14} />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {jobAssignments.map(ja => {
+                      const action = ja.action_type || ja.actionType || ja.assignment_type || ja.assignmentType || 'تكليف';
+                      const isRelief = action === 'إعفاء';
+                      const isRotation = action === 'تدوير';
+                      const orderNum = ja.order_number || ja.orderNumber || ja.assignment_order || ja.assignmentOrder || '—';
+                      const orderDt = ja.order_date || ja.orderDate || ja.assignment_date || ja.assignmentDate || '—';
+                      return (
+                        <tr key={ja.id} className="border-b border-slate-50 hover:bg-slate-50/40">
+                          <td className="px-4 py-2.5 font-mono text-xs">
+                            <span className="font-bold text-[#1B3A6B] block">{orderNum}</span>
+                            <span className="text-slate-500 text-[11px] block mt-0.5">{orderDt}</span>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                              isRelief ? 'bg-red-100 text-red-700' : isRotation ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
+                            }`}>
+                              {action}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 font-semibold text-slate-800">
+                            {ja.primary_responsibility || ja.primaryResponsibility || ja.responsibility || '—'}
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-600 font-medium">
+                            {ja.acting_responsibility || ja.actingResponsibility || 'بلا وكالة'}
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-600 text-xs">
+                            <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                              {ja.deputy_level || ja.deputyLevel || 'لا يوجد'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-600 text-xs">
+                            <span className="font-semibold text-slate-700 block">{ja.job_title || employee?.job_title || '—'}</span>
+                            <span className="text-slate-400 block">{ja.department || ja.section || ''}</span>
+                          </td>
+                          <td className="px-4 py-2.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل التكليف" onClick={() => openEditModal('assignment', ja)}>
+                                <Edit size={14} />
+                              </Button>
+                              <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" title="حذف التكليف" onClick={() => deleteRecord('JobAssignment', ja.id)}>
+                                <Trash2 size={14} />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {jobAssignments.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="px-4 py-8 text-center text-slate-400">لا توجد سجلات تكليف تاريخية مضافة</td>
+                        <td colSpan={7} className="px-4 py-8 text-center text-slate-400">لا توجد سجلات تكليف تاريخية مضافة</td>
                       </tr>
                     )}
                   </tbody>
@@ -1782,15 +2573,16 @@ export default function EmployeeDetail() {
                 </thead>
                 <tbody>
                   {qualifications.map((q) => {
-                    const isActiveQual = q.is_active !== false;
-                    const isCurrentlyCalculated = isActiveQual && q.education_level === employee.education_level;
+                    const isActiveQual = q.is_active !== false && q.isActive !== false;
+                    const qualLevel = q.education_level || q.level || 'بدون';
+                    const isCurrentlyCalculated = isActiveQual && (qualLevel === (employee.education_level || employee.educationLevel));
 
                     return (
                       <tr key={q.id} className={`border-b border-slate-50 hover:bg-slate-50/40 ${!isActiveQual ? 'bg-slate-50/60 opacity-75' : ''}`}>
                         <td className="px-4 py-3 font-bold text-[#1B3A6B]">
                           <div className="flex items-center gap-2">
                             <GraduationCap size={16} className={isActiveQual ? "text-blue-600" : "text-slate-400"} />
-                            <span>{q.education_level}</span>
+                            <span>{qualLevel}</span>
                             {isCurrentlyCalculated && (
                               <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-300 flex items-center gap-1 shrink-0">
                                 <CheckCircle2 size={11} /> المعتمدة بالراتب
@@ -1800,8 +2592,10 @@ export default function EmployeeDetail() {
                         </td>
                         <td className="px-4 py-3 text-slate-700 font-semibold">{q.specialization || 'بدون تخصص'}</td>
                         <td className="px-4 py-3 text-slate-600">{q.institution || q.university || '—'}</td>
-                        <td className="px-4 py-3 text-slate-600 font-mono text-xs">{q.graduation_year || '—'}</td>
-                        <td className="px-4 py-3 text-slate-500 font-mono text-xs">{q.evaluation_order || '—'}</td>
+                        <td className="px-4 py-3 text-slate-600 font-mono text-xs">{q.graduation_year || q.graduationYear || '—'}</td>
+                        <td className="px-4 py-3 text-slate-700 font-mono text-xs font-semibold">
+                          {q.evaluation_order || q.evaluationOrder || q.equation_number || q.equationNumber || q.education_order || q.educationOrder || (isActiveQual ? (employee.education_order || employee.evaluation_order || employee.educationOrder || employee.evaluationOrder || employee.equation_number || employee.equationNumber) : null) || '—'}
+                        </td>
                         <td className="px-4 py-3 text-center">
                           {isActiveQual ? (
                             <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1">
@@ -2952,7 +3746,20 @@ export default function EmployeeDetail() {
                   </div>
                   <div>
                     <Label>رقم أمر احتساب الشهادة</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.evaluation_order || ''} onChange={e => setModalForm(prev => ({ ...prev, evaluation_order: e.target.value }))} placeholder="أ د / 1234" />
+                    <Input 
+                      className="mt-1 rounded-xl" 
+                      value={modalForm.evaluation_order || modalForm.equation_number || modalForm.education_order || ''} 
+                      onChange={e => setModalForm(prev => ({ 
+                        ...prev, 
+                        evaluation_order: e.target.value,
+                        equation_number: e.target.value,
+                        education_order: e.target.value,
+                        evaluationOrder: e.target.value,
+                        equationNumber: e.target.value,
+                        educationOrder: e.target.value
+                      }))} 
+                      placeholder="مثال: أ د / 1234 أو ق/2154" 
+                    />
                   </div>
                   <div className="md:col-span-2">
                     <Label>ملاحظات إضافية</Label>
@@ -2963,35 +3770,163 @@ export default function EmployeeDetail() {
 
               {/* 2. Job Assignment Form */}
               {activeModal === 'assignment' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <Label>العنوان الوظيفي *</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.job_title || ''} onChange={e => setModalForm(prev => ({ ...prev, job_title: e.target.value }))} required />
+                <div className="space-y-4">
+                  <div className="bg-blue-50/80 border border-blue-200/80 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-blue-900">
+                    <ShieldCheck className="text-blue-600 shrink-0 mt-0.5" size={17} />
+                    <p className="leading-relaxed">
+                      يرجى إدخال تفاصيل الأمر الإداري ونوع الإجراء (تكليف / إعفاء / تدوير) مع تحديد المسؤولية الأساسية ومسؤولية الوكالة ودرجة الوكيل. سيتم تحديث وتوثيق بيانات الموظف تلقائياً بالسجل المركزي.
+                    </p>
                   </div>
-                  <div>
-                    <Label>تاريخ المباشرة/التكليف *</Label>
-                    <Input type="date" className="mt-1 rounded-xl" value={modalForm.assignment_date || ''} onChange={e => setModalForm(prev => ({ ...prev, assignment_date: e.target.value }))} required />
-                  </div>
-                  <div>
-                    <Label>الدائرة / الوزارة / الهيئة *</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.department || ''} onChange={e => setModalForm(prev => ({ ...prev, department: e.target.value }))} required />
-                  </div>
-                  <div>
-                    <Label>القسم / الشعبة / الوحدة</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.section || ''} onChange={e => setModalForm(prev => ({ ...prev, section: e.target.value }))} />
-                  </div>
-                  <div>
-                    <Label>رقم الأمر الإداري بالتكليف *</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.assignment_order || ''} onChange={e => setModalForm(prev => ({ ...prev, assignment_order: e.target.value }))} required />
-                  </div>
-                  <div>
-                    <Label>نوع الخدمة *</Label>
-                    <Select value={modalForm.service_type} onValueChange={v => setModalForm(prev => ({ ...prev, service_type: v }))}>
-                      <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {['دائم','مؤقت','عقد','إعارة'].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* رقم وتاريخ الأمر */}
+                    <div>
+                      <Label>رقم الأمر الإداري *</Label>
+                      <Input 
+                        className="mt-1 rounded-xl" 
+                        value={modalForm.order_number || modalForm.assignment_order || ''} 
+                        onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value, assignment_order: e.target.value }))} 
+                        required 
+                        placeholder="مثال: 1234/ت" 
+                      />
+                    </div>
+                    <div>
+                      <Label>تاريخ الأمر الإداري / المباشرة *</Label>
+                      <Input 
+                        type="date" 
+                        className="mt-1 rounded-xl" 
+                        value={modalForm.order_date || modalForm.assignment_date || ''} 
+                        onChange={e => setModalForm(prev => ({ ...prev, order_date: e.target.value, assignment_date: e.target.value }))} 
+                        required 
+                      />
+                    </div>
+
+                    {/* نوع الإجراء: هل هو تكليف أم إعفاء أم تدوير */}
+                    <div className="md:col-span-2">
+                      <Label>نوع الإجراء الإداري *</Label>
+                      <Select 
+                        value={modalForm.action_type || 'تكليف'} 
+                        onValueChange={v => {
+                          setModalForm(prev => {
+                            const updated = { ...prev, action_type: v, assignment_type: v };
+                            if (v === 'إعفاء') {
+                              updated.primary_responsibility = 'بلا مسؤولية';
+                              updated.acting_responsibility = 'بلا وكالة';
+                              updated.deputy_level = 'لا يوجد';
+                            }
+                            return updated;
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="mt-1 rounded-xl font-bold">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="تكليف">تكليف بمسؤولية / منصب</SelectItem>
+                          <SelectItem value="إعفاء">إعفاء من المسؤولية</SelectItem>
+                          <SelectItem value="تدوير">تدوير وظيفي / تغيير موقع</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* القائمة المنسدلة للمسؤوليات الأساسية */}
+                    <div>
+                      <Label>المسؤولية الأساسية (أصالة) *</Label>
+                      <Select 
+                        value={modalForm.primary_responsibility || 'بلا مسؤولية'} 
+                        onValueChange={v => setModalForm(prev => ({ ...prev, primary_responsibility: v }))}
+                      >
+                        <SelectTrigger className="mt-1 rounded-xl">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {defaultResponsibilities.map(r => (
+                            <SelectItem key={r} value={r}>{r}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* القائمة المنسدلة للوكالات */}
+                    <div>
+                      <Label>المسؤولية في حالة الوكالة *</Label>
+                      <Select 
+                        value={modalForm.acting_responsibility || 'بلا وكالة'} 
+                        onValueChange={v => setModalForm(prev => ({ ...prev, acting_responsibility: v }))}
+                      >
+                        <SelectTrigger className="mt-1 rounded-xl">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {defaultActingResponsibilities.map(r => (
+                            <SelectItem key={r} value={r}>{r}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* القائمة المنسدلة لدرجة الوكالة */}
+                    <div>
+                      <Label>تحديد درجة الوكيل *</Label>
+                      <Select 
+                        value={modalForm.deputy_level || 'لا يوجد'} 
+                        onValueChange={v => setModalForm(prev => ({ ...prev, deputy_level: v }))}
+                      >
+                        <SelectTrigger className="mt-1 rounded-xl">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="لا يوجد">لا يوجد (أصالة)</SelectItem>
+                          <SelectItem value="وكيل أول">وكيل أول</SelectItem>
+                          <SelectItem value="وكيل ثاني">وكيل ثاني</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* نوع الخدمة */}
+                    <div>
+                      <Label>نوع الخدمة</Label>
+                      <Select 
+                        value={modalForm.service_type || 'دائم'} 
+                        onValueChange={v => setModalForm(prev => ({ ...prev, service_type: v }))}
+                      >
+                        <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {['دائم', 'مؤقت', 'عقد', 'إعارة', 'تنسيب'].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* العنوان الوظيفي والدائرة (اختياري/تحديث) */}
+                    <div>
+                      <Label>العنوان الوظيفي</Label>
+                      <Input 
+                        className="mt-1 rounded-xl" 
+                        value={modalForm.job_title || ''} 
+                        onChange={e => setModalForm(prev => ({ ...prev, job_title: e.target.value }))} 
+                        placeholder="العنوان الوظيفي المثبت" 
+                      />
+                    </div>
+                    <div>
+                      <Label>الدائرة / القسم / الشعبة</Label>
+                      <Input 
+                        className="mt-1 rounded-xl" 
+                        value={modalForm.department || modalForm.section || ''} 
+                        onChange={e => setModalForm(prev => ({ ...prev, department: e.target.value, section: e.target.value }))} 
+                        placeholder="الجهة التنظيمية" 
+                      />
+                    </div>
+
+                    {/* ملاحظات وتفاصيل */}
+                    <div className="md:col-span-2">
+                      <Label>ملاحظات ومبررات إضافية</Label>
+                      <Input 
+                        className="mt-1 rounded-xl" 
+                        value={modalForm.notes || ''} 
+                        onChange={e => setModalForm(prev => ({ ...prev, notes: e.target.value }))} 
+                        placeholder="أي تفاصيل أو مبررات عن الإجراء الإداري..." 
+                      />
+                    </div>
                   </div>
                 </div>
               )}

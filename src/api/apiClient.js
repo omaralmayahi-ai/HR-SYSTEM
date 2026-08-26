@@ -189,7 +189,8 @@ export const apiClient = {
     ServiceRecord: createEntityClient('service-records'),
     PenaltyType: createEntityClient('penalty-types'),
     EvaluationForm: createEntityClient('evaluation-forms'),
-    GoverningCourse: createEntityClient('governing-courses')
+    GoverningCourse: createEntityClient('governing-courses'),
+    JobTitle: createEntityClient('job-titles')
   },
   settings: {
     get: async () => request('/api/settings'),
@@ -201,6 +202,13 @@ export const apiClient = {
   logs: {
     list: async () => request('/api/logs'),
     create: async (data) => request('/api/logs', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+  },
+  leaveAccrual: {
+    getStatus: async () => request('/api/leave-accrual/status'),
+    execute: async (data = {}) => request('/api/leave-accrual/execute', {
       method: 'POST',
       body: JSON.stringify(data)
     })
