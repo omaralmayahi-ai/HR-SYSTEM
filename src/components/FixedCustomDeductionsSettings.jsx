@@ -557,15 +557,31 @@ export default function FixedCustomDeductionsSettings() {
     setLoading(true);
     try {
       // Get all allowances/deductions and filter only custom deductions
-      const data = await apiClient.entities.AllowanceDeduction.list();
+      let data: any[] = [];
+      try {
+        data = await apiClient.entities.AllowanceDeduction.list();
+      } catch (fetchErr) {
+        console.warn('API error fetching allowances-deductions, falling back to local presets:', fetchErr);
+        const saved = localStorage.getItem('ALLOWANCES_DEDUCTIONS_PRESETS');
+        if (saved) {
+          try {
+            data = JSON.parse(saved);
+          } catch (e) {}
+        }
+      }
+
+      if (!Array.isArray(data)) {
+        data = [];
+      }
       
-      const customOnly = (data || []).filter(item => {
+      const customOnly = data.filter(item => {
+        if (!item) return false;
         let isTemp = false;
         try {
           const saved = localStorage.getItem(`TEMPORARY_META_${item.id}`);
           if (saved) isTemp = JSON.parse(saved).isTemporary;
         } catch (e) {}
-        return item.type === 'deduction' && !isTemp;
+        return (item.type === 'deduction' || item.type === 'M_DEDUCTION') && !isTemp;
       });
 
       let sortedData = customOnly;
@@ -587,9 +603,12 @@ export default function FixedCustomDeductionsSettings() {
       }
       setRecords(sortedData);
       setUnfilteredRecords(data || []);
-      localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(data || []));
-      notifySettingsChanged('allowances_deductions', data || []);
+      if (data && data.length > 0) {
+        localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(data));
+        notifySettingsChanged('allowances_deductions', data);
+      }
     } catch (error) {
+      console.error('Error in fetchCustomRecords (deductions):', error);
       toast({
         title: 'خطأ في جلب البيانات',
         description: 'تعذر تحميل الاستقطاعات المخصصة من الخادم',

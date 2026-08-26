@@ -586,12 +586,29 @@ export default function FixedCustomAllowancesSettings() {
     try {
       // Get all allowances and filter only custom ones
       // Custom ones are allowances from the database that aren't marital/child
-      const data = await apiClient.entities.AllowanceDeduction.list();
+      let data: any[] = [];
+      try {
+        data = await apiClient.entities.AllowanceDeduction.list();
+      } catch (fetchErr) {
+        console.warn('API error fetching allowances-deductions, falling back to local presets:', fetchErr);
+        const saved = localStorage.getItem('ALLOWANCES_DEDUCTIONS_PRESETS');
+        if (saved) {
+          try {
+            data = JSON.parse(saved);
+          } catch (e) {}
+        }
+      }
+
+      if (!Array.isArray(data)) {
+        data = [];
+      }
       
       // Filter only allowances (not deductions) and exclude standard marital/child ones and temporary ones
-      const customOnly = (data || []).filter(item => {
-        const isSpouse = (item.name.includes('زوجية') || item.name.includes('الزوجية'));
-        const isChild = (item.name.includes('أطفال') || item.name.includes('الاطفال') || item.name.includes('أولاد') || item.name.includes('الاولاد') || item.name.includes('طفل') || item.name.includes('ولد'));
+      const customOnly = data.filter(item => {
+        if (!item) return false;
+        const name = String(item.name || '');
+        const isSpouse = (name.includes('زوجية') || name.includes('الزوجية'));
+        const isChild = (name.includes('أطفال') || name.includes('الاطفال') || name.includes('أولاد') || name.includes('الاولاد') || name.includes('طفل') || name.includes('ولد'));
         
         let isTemp = false;
         try {
@@ -599,7 +616,7 @@ export default function FixedCustomAllowancesSettings() {
           if (saved) isTemp = JSON.parse(saved).isTemporary;
         } catch (e) {}
 
-        return item.type === 'allowance' && !isSpouse && !isChild && !isTemp;
+        return (item.type === 'allowance' || item.type === 'M_ALLOWANCE') && !isSpouse && !isChild && !isTemp;
       });
 
       let sortedData = customOnly;
@@ -621,9 +638,12 @@ export default function FixedCustomAllowancesSettings() {
       }
       setRecords(sortedData);
       setUnfilteredRecords(data || []);
-      localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(data || []));
-      notifySettingsChanged('allowances_deductions', data || []);
+      if (data && data.length > 0) {
+        localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(data));
+        notifySettingsChanged('allowances_deductions', data);
+      }
     } catch (error) {
+      console.error('Error in fetchCustomRecords:', error);
       toast({
         title: 'خطأ في جلب البيانات',
         description: 'تعذر تحميل المخصصات المخصصة من الخادم',

@@ -26,6 +26,12 @@ export async function request(path, options = {}) {
   }
 
   if (!response.ok) {
+    if (response.status === 401 && path !== '/api/auth/login' && path !== '/api/settings/public') {
+      localStorage.removeItem('hr_session_token');
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    }
     const errorMsg = data?.error || data?.message || `HTTP error! status: ${response.status}`;
     throw new Error(errorMsg);
   }
