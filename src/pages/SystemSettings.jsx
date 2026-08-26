@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings as SettingsIcon, CalendarDays, GraduationCap, ShieldAlert, Briefcase, Wallet, TrendingDown, Clock, FileSpreadsheet, GripVertical, RotateCcw, ClipboardCheck } from 'lucide-react';
+import { Settings as SettingsIcon, CalendarDays, GraduationCap, ShieldAlert, Briefcase, Wallet, TrendingDown, Clock, FileSpreadsheet, GripVertical, RotateCcw, ClipboardCheck, ChevronLeft } from 'lucide-react';
+import { useAuth } from '@/lib/AuthContext';
 
 // Sub-settings components
 import SalaryScaleSettings from '@/components/SalaryScaleSettings';
@@ -112,6 +113,9 @@ const DEFAULT_TABS = [
 ];
 
 export default function SystemSettings() {
+  const { appPublicSettings } = useAuth();
+  const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
+  const secondaryColor = appPublicSettings?.secondaryColor || '#C8960C';
   const [activeTab, setActiveTab] = useState('salaryScale');
   const [tabs, setTabs] = useState(DEFAULT_TABS);
   const [draggedIndex, setDraggedIndex] = useState(null);
@@ -182,7 +186,7 @@ export default function SystemSettings() {
   };
 
   return (
-    <div className="space-y-6" dir="rtl">
+    <div className="space-y-6 settings-content" dir="rtl">
       {/* Page Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm">
         <div>
@@ -206,7 +210,7 @@ export default function SystemSettings() {
             </button>
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {tabs.map((tab, index) => {
               const TabIcon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -221,9 +225,15 @@ export default function SystemSettings() {
                   onDragOver={(e) => handleDragOver(e, index)}
                   onDrop={(e) => handleDrop(e, index)}
                   onClick={() => setActiveTab(tab.id)}
+                  style={isActive ? {
+                    backgroundColor: primaryColor,
+                    color: '#ffffff',
+                    borderColor: primaryColor,
+                    boxShadow: `0 4px 14px ${primaryColor}35`
+                  } : {}}
                   className={`group relative flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-right text-xs font-bold transition-all border cursor-pointer select-none ${
                     isActive
-                      ? tab.activeColor
+                      ? 'shadow-md'
                       : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                   } ${isDragged ? 'opacity-40 bg-slate-100' : ''} ${
                     isDragOver ? 'border-t-2 border-t-indigo-600 bg-indigo-50/40' : ''
@@ -231,15 +241,23 @@ export default function SystemSettings() {
                 >
                   <GripVertical
                     size={14}
-                    className="text-slate-300 group-hover:text-slate-500 shrink-0 cursor-grab active:cursor-grabbing"
+                    className={isActive ? "text-white/60 shrink-0 cursor-grab active:cursor-grabbing" : "text-slate-300 group-hover:text-slate-500 shrink-0 cursor-grab active:cursor-grabbing"}
                     title="اسحب لترتيب القسم"
                   />
-                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors shrink-0 ${
-                    isActive ? tab.color : 'bg-slate-100 text-slate-500'
-                  }`}>
+                  <div 
+                    className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors shrink-0"
+                    style={isActive ? {
+                      backgroundColor: 'rgba(255, 255, 255, 0.22)',
+                      color: '#ffffff'
+                    } : {
+                      backgroundColor: `${primaryColor}12`,
+                      color: primaryColor
+                    }}
+                  >
                     <TabIcon size={15} />
                   </div>
-                  <span className="truncate">{tab.label}</span>
+                  <span className="truncate flex-1">{tab.label}</span>
+                  {isActive && <ChevronLeft size={14} className="mr-auto text-white/80 shrink-0" />}
                 </div>
               );
             })}

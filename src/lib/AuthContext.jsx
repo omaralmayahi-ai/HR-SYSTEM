@@ -282,6 +282,41 @@ export const AuthProvider = ({ children }) => {
           --tw-gradient-to: var(--secondary-dark) var(--tw-gradient-to-position) !important;
         }
 
+        /* Settings Subcomponents & Button Overrides */
+        .settings-content button.bg-indigo-600,
+        .settings-content button.bg-blue-600,
+        .settings-content .bg-indigo-600,
+        button.bg-indigo-600,
+        button.bg-blue-600 {
+          background-color: var(--primary-custom) !important;
+        }
+
+        .settings-content button.hover\:bg-indigo-700:hover,
+        .settings-content button.hover\:bg-indigo-500:hover,
+        .settings-content button.hover\:bg-blue-700:hover,
+        button.hover\:bg-indigo-700:hover,
+        button.hover\:bg-indigo-500:hover,
+        button.hover\:bg-blue-700:hover {
+          background-color: var(--primary-dark) !important;
+        }
+
+        .settings-content .text-indigo-600,
+        .settings-content .text-indigo-700,
+        .settings-content .text-blue-600,
+        .settings-content .text-blue-700 {
+          color: var(--primary-custom) !important;
+        }
+
+        .settings-content .border-indigo-600,
+        .settings-content .border-blue-600 {
+          border-color: var(--primary-custom) !important;
+        }
+
+        .settings-content .bg-indigo-50,
+        .settings-content .bg-blue-50 {
+          background-color: rgba(var(--primary-rgb), 0.08) !important;
+        }
+
         /* Scrollbars */
         ::-webkit-scrollbar-thumb {
           background: rgba(var(--primary-rgb), 0.25) !important;
