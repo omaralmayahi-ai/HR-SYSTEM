@@ -3171,7 +3171,15 @@ async function startServer() {
 
   app.put('/api/education-degrees/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, is_higher_education, allowance_rate, higher_allowance_rate } = req.body;
+    const { name, is_higher_education, allowance_rate, higher_allowance_rate, status } = req.body;
+
+    if (status === 'معطل' || status === 'غير فعال') {
+      const refCheck = checkReferentialUsage('education_degrees', id, true, buildRefContext());
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+      }
+    }
+
     try {
       const [updated] = await db.update(schema.educationDegrees)
         .set({
@@ -3203,6 +3211,12 @@ async function startServer() {
 
   app.delete('/api/education-degrees/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
+
+    const refCheck = checkReferentialUsage('education_degrees', id, false, buildRefContext());
+    if (!refCheck.canProceed) {
+      return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
+    }
+
     try {
       await db.delete(schema.educationDegrees).where(eq(schema.educationDegrees.id, id));
     } catch (error: any) {
