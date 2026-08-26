@@ -478,34 +478,88 @@ export default function FixedCustomDeductionsSettings() {
     setCurrentRule(null);
   };
 
-  const fetchFixedSettings = () => {
+  const fetchFixedSettings = async () => {
     if (typeof window !== 'undefined') {
       const savedRetirement = localStorage.getItem('RETIREMENT_RATE');
       if (savedRetirement) setRetirementRate((parseFloat(savedRetirement) || 0.05) * 100);
 
       const savedRetStatus = localStorage.getItem('RETIREMENT_STATUS');
-      setRetirementStatus(savedRetStatus || 'فعال');
+      if (savedRetStatus) setRetirementStatus(savedRetStatus);
+    }
+
+    try {
+      const allAllowances = await apiClient.entities.AllowanceDeduction.list();
+      if (Array.isArray(allAllowances) && allAllowances.length > 0) {
+        const retRec = allAllowances.find(a => a.type === 'deduction' && (String(a.name).includes('تقاعد') || String(a.name).includes('التقاعد')));
+        if (retRec) {
+          setRetirementRate(retRec.value !== undefined ? retRec.value : 10);
+          setRetirementStatus(retRec.status || 'فعال');
+        }
+      }
+    } catch (e) {
+      console.warn('Fallback loading fixed deduction settings');
     }
   };
 
   const handleSaveFixed = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     setSavingFixed(true);
     try {
+      const finalRetRate = retirementRate === '' ? 0 : (parseFloat(retirementRate) || 0);
+
       if (typeof window !== 'undefined') {
-        localStorage.setItem('RETIREMENT_RATE', (retirementRate / 100).toString());
+        localStorage.setItem('RETIREMENT_RATE', (finalRetRate / 100).toString());
         localStorage.setItem('RETIREMENT_STATUS', retirementStatus);
+      }
+
+      // Synchronize with database allowances_deductions table for retirement
+      let allAllowances = [];
+      try {
+        allAllowances = await apiClient.entities.AllowanceDeduction.list();
+      } catch (err) {}
+
+      if (Array.isArray(allAllowances)) {
+        const retRec = allAllowances.find(a => a.type === 'deduction' && (String(a.name).includes('تقاعد') || String(a.name).includes('التقاعد')));
+        if (retRec) {
+          await apiClient.entities.AllowanceDeduction.update(retRec.id, {
+            name: retRec.name,
+            type: 'deduction',
+            calcType: 'percentage',
+            value: finalRetRate,
+            status: retirementStatus
+          }).catch(() => {});
+        } else {
+          await apiClient.entities.AllowanceDeduction.create({
+            name: 'استقطاع توفير التقاعد الوطني',
+            type: 'deduction',
+            calcType: 'percentage',
+            value: finalRetRate,
+            status: retirementStatus
+          }).catch(() => {});
+        }
+      }
+
+      // Refresh presets & notify settings change
+      const refreshedList = await apiClient.entities.AllowanceDeduction.list().catch(() => []);
+      if (refreshedList && refreshedList.length > 0) {
+        localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(refreshedList));
+        notifySettingsChanged('allowances_deductions', refreshedList);
+      } else {
+        notifySettingsChanged('allowances_deductions', {
+          retirementRate: finalRetRate,
+          retirementStatus
+        });
       }
 
       // Log action
       await apiClient.logs.create({
         action: 'تعديل الاستقطاعات الثابتة والقانونية',
-        details: `تحديث نسبة الاستقطاع التقاعدي الموحد إلى (${retirementRate}% - الحالة: ${retirementStatus})`
+        details: `تحديث نسبة الاستقطاع التقاعدي الموحد إلى (${finalRetRate}% - الحالة: ${retirementStatus})`
       }).catch(() => {});
 
       toast({
         title: 'تم حفظ الاستقطاعات الثابتة',
-        description: 'تم تحديث نسبة الاستقطاع التقاعدي الموحد وحالتها بنجاح في النظام.',
+        description: `تم تحديث نسبة الاستقطاع التقاعدي الموحد (${finalRetRate}%) وحالتها بنجاح في النظام.`,
         variant: 'success',
       });
     } catch (error) {
@@ -873,7 +927,7 @@ export default function FixedCustomDeductionsSettings() {
                   <button
                     type="button"
                     onClick={() => setRetirementStatus(prev => prev === 'فعال' ? 'متوقف مؤقتاً' : 'فعال')}
-                    className={`px-2 py-1 rounded text-[10px] font-bold transition-all flex items-center gap-1 ${
+                    className={`px-2 py-1 rounded text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer ${
                       retirementStatus === 'فعال' 
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
                         : 'bg-rose-50 text-rose-700 border border-rose-200'
@@ -884,19 +938,21 @@ export default function FixedCustomDeductionsSettings() {
                 </div>
                 <div className="relative">
                   <input
-                    type="number"
-                    step="0.1"
-                    disabled={retirementStatus === 'متوقف مؤقتاً'}
-                    value={retirementRate}
-                    onChange={(e) => setRetirementRate(Math.max(0, parseFloat(e.target.value) || 0))}
-                    className="w-full pl-12 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#1B3A6B] text-slate-800 disabled:opacity-50"
-                    placeholder="5"
+                    type="text"
+                    inputMode="decimal"
+                    value={retirementRate === '' ? '' : retirementRate}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRetirementRate(val === '' ? '' : val);
+                    }}
+                    className="w-full pl-12 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#1B3A6B] text-slate-800"
+                    placeholder="10"
                   />
                   <div className="absolute left-3 top-2.5">
                     <Percent size={12} className="text-slate-400" />
                   </div>
                 </div>
-                <p className="text-[10px] text-slate-400">تُخصم كنسبة من الراتب الاسمي للموظف وتذهب لصندوق التقاعد الوطني (الافتراضي 5%).</p>
+                <p className="text-[10px] text-slate-400">تُخصم كنسبة من الراتب الاسمي للموظف وتذهب لصندوق التقاعد الوطني ({retirementStatus === 'فعال' ? 'مفعّلة حالياً' : 'موقوفة مؤقتاً'}).</p>
               </div>
 
               {/* Extra explanation placeholder to balance the grid layout */}
