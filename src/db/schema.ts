@@ -424,6 +424,7 @@ export const systemSettings = pgTable('system_settings', {
   retirementAge: integer('retirement_age').default(60), // السن القانونية للتقاعد
   retirementNotificationPeriod: text('retirement_notification_period').default('three_months'), // فترة إشعار التقاعد (month, three_months, etc)
   retirementNotificationDays: integer('retirement_notification_days').default(90), // فترة الإشعار بالأيام في حال مخصص
+  degreeTrackAutoSettlement: boolean('degree_track_auto_settlement').default(false), // تفعيل التسوية التلقائية لمسار احتساب الشهادات
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -536,6 +537,8 @@ export const promotionsIncrements = pgTable('promotions_increments', {
   seniorityReason: text('seniority_reason'), // سبب القدم: كتب الشكر والتقدير / إضافة خدمة / أخرى (مع تدوين ملاحظة)
   managerRecommendation: text('manager_recommendation'), // نعم / لا
   directorApproval: text('director_approval'), // نعم / لا
+  approvedBy: text('approved_by'), // جهة أو نظام الاعتماد (مثال: نظام آلي — تسوية تلقائية)
+  notes: text('notes'), // ملاحظات التسوية أو الترفيع
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -940,6 +943,7 @@ export const commendationRulesSettings = pgTable('commendation_rules_settings', 
   configKey: text('config_key').notNull().unique().default('default_commendation_rules'),
   maxPerYear: integer('max_per_year').default(3), // الحد الأقصى لعدد كتب الشكر المحتسبة سنوياً
   allowedCombinations: text('allowed_combinations'), // JSON stringified array of permitted combinations
+  degreeTrackAutoSettlement: boolean('degree_track_auto_settlement').default(false), // تفعيل التسوية التلقائية لمسار احتساب الشهادات
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 

@@ -61,7 +61,11 @@ export default function PromotionRulesSettings() {
   const [deleteTypeConfirm, setDeleteTypeConfirm] = useState({ open: false, id: null, name: '' });
 
   // 3. Commendation Rules Settings State
-  const [rulesSettings, setRulesSettings] = useState({ max_per_year: 3, allowed_combinations: '[]' });
+  const [rulesSettings, setRulesSettings] = useState({ 
+    max_per_year: 3, 
+    allowed_combinations: '[]',
+    degree_track_auto_settlement: false 
+  });
   const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
@@ -111,7 +115,10 @@ export default function PromotionRulesSettings() {
           max_per_year: data.max_per_year || data.maxPerYear || 3,
           allowed_combinations: typeof data.allowed_combinations === 'string' 
             ? data.allowed_combinations 
-            : (data.allowedCombinations || '[]')
+            : (data.allowedCombinations || '[]'),
+          degree_track_auto_settlement: Boolean(
+            data.degree_track_auto_settlement ?? data.degreeTrackAutoSettlement
+          )
         });
       }
     } catch (err) {
@@ -237,6 +244,37 @@ export default function PromotionRulesSettings() {
       toast({ title: 'خطأ أثناء الحفظ', description: err.message, variant: 'destructive' });
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  // Toggle Degree Track Auto Settlement
+  const handleToggleAutoSettlement = async (newValue) => {
+    try {
+      const updated = {
+        ...rulesSettings,
+        degree_track_auto_settlement: newValue,
+        degreeTrackAutoSettlement: newValue
+      };
+      setRulesSettings(updated);
+
+      await apiClient.entities.CommendationRulesSetting.update({
+        max_per_year: parseInt(updated.max_per_year) || 3,
+        allowed_combinations: updated.allowed_combinations,
+        degree_track_auto_settlement: newValue,
+        degreeTrackAutoSettlement: newValue
+      });
+
+      toast({
+        title: newValue ? 'تم تفعيل التسوية التلقائية' : 'تم تفعيل الوضع اليدوي (الافتراضي الآمن)',
+        description: newValue 
+          ? 'تتم تسوية موظفي مسار احتساب الشهادات المستوفين للشروط آلياً فور اكتمال المتطلبات.'
+          : 'عادت معالجة مسار احتساب الشهادات إلى قائمة الاعتماد اليدوي بانتظار اعتماد الموارد البشرية.',
+        variant: newValue ? 'success' : 'default'
+      });
+    } catch (err) {
+      toast({ title: 'خطأ أثناء تحديث الإعداد', description: err.message, variant: 'destructive' });
+      // Revert on error
+      setRulesSettings(prev => ({ ...prev, degree_track_auto_settlement: !newValue }));
     }
   };
 
@@ -504,6 +542,73 @@ export default function PromotionRulesSettings() {
             </Button>
           </div>
         </form>
+      </div>
+
+      {/* 4. قسم التسوية التلقائية لمسار احتساب الشهادات أثناء الخدمة */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-4">
+          <div>
+            <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+              <ShieldCheck className="text-[#1B3A6B]" size={18} />
+              التسوية التلقائية لمسار احتساب الشهادات (Deficit Auto-Settlement)
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              التحكم بسلوك تسوية العجز وتثبيت الاستحقاق لموظفي مسار الشهادات أثناء الخدمة عند استيفاء المدة ودورة الاختصاص.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+              rulesSettings.degree_track_auto_settlement
+                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                : 'bg-amber-100 text-amber-800 border border-amber-300'
+            }`}>
+              {rulesSettings.degree_track_auto_settlement ? 'التسوية التلقائية مفعلة (آلي)' : 'التسوية اليدوية (الافتراضي الآمن)'}
+            </span>
+          </div>
+        </div>
+
+        {/* Toggle & Warning Section */}
+        <div className="space-y-4">
+          <div className="flex items-start sm:items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200/80 gap-4">
+            <div className="space-y-1">
+              <Label htmlFor="auto-settlement-toggle" className="text-sm font-bold text-slate-900 cursor-pointer">
+                تفعيل التسوية التلقائية لمسار احتساب الشهادات
+              </Label>
+              <p className="text-xs text-slate-600">
+                عند التفعيل، تُنفّذ تسوية الموظفين المستوفين للشروط تلقائياً وتسجيل اعتمادهم الآلي وإغلاق العجز فوراً.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                id="auto-settlement-toggle"
+                type="button"
+                role="switch"
+                aria-checked={rulesSettings.degree_track_auto_settlement}
+                onClick={() => handleToggleAutoSettlement(!rulesSettings.degree_track_auto_settlement)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#1B3A6B] focus:ring-offset-2 ${
+                  rulesSettings.degree_track_auto_settlement ? 'bg-[#1B3A6B]' : 'bg-slate-300'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                    rulesSettings.degree_track_auto_settlement ? 'translate-x-0' : '-translate-x-5'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
+          {/* Warning / Guidance Alert */}
+          <div className="p-4 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-3 text-xs text-amber-900 leading-relaxed">
+            <AlertCircle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+            <div>
+              <strong className="font-bold text-amber-950 block mb-1">تنبيه أمان وإرشادات التشغيل:</strong>
+              عند التفعيل، تصير تسوية الموظفين المستوفين للشروط تلقائياً بدون اعتماد يدوي. عطّل هذا الخيار فوراً لو لاحظت أي سلوك غير متوقع، وستعود كل الحالات المعلّقة لقائمة الاعتماد اليدوي تلقائياً.
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Add / Edit Commendation Type Dialog */}

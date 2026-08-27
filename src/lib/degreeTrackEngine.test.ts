@@ -1,10 +1,11 @@
-// src/lib/degreeTrackEngine.test.ts
 import { describe, it, expect } from 'vitest';
 import {
   calculateDegreeTrackSimulation,
   resolveDegreeBaseline,
   getAvailableSpecializationCredits,
   calculateExactPeriodMonths,
+  processDegreeTrackSettlement,
+  processBatchDegreeTrackAutoSettlement,
   DegreeTrackSnapshotEntity,
   SpecializationCreditEntity
 } from './degreeTrackEngine';
@@ -535,5 +536,241 @@ describe('Phase 2b: Degree Track Recognition Engine (محرك مسار احتس�
     expect(resolveDegreeBaseline('بكالوريوس هندسة')).toEqual({ grade: 7, step: 2 });
   });
 
+  // ============================================================================
+  // اختبار 13: التسوية التلقائية عند تفعيل الإعداد (degreeTrackAutoSettlement = true)
+  // ============================================================================
+  it('13. التسوية التلقائية لمسار الشهادات: موظف يستوفي شروطه -> يُسوّى تلقائياً، وتُغلق اللقطة كـ "مكتمل"، ويُنشأ سجل موافقة بعلامة "نظام آلي — تسوية تلقائية"', () => {
+    const employee = {
+      id: 201,
+      fullName: 'أحمد علي حسن',
+      grade: 3,
+      step: 1,
+      lastPromotionDate: '2024-01-01'
+    };
+
+    const snapshot: DegreeTrackSnapshotEntity = {
+      id: 301,
+      qualificationId: 401,
+      employeeId: 201,
+      jobTitleId: 1,
+      actualGradeBefore: 3,
+      actualStepBefore: 1,
+      baselineGrade: 7,
+      baselineStep: 1,
+      graduationDateUsed: '2020-01-01',
+      orderDate: '2026-01-01',
+      status: 'نشط'
+    };
+
+    // حساب المحاكاة بتاريخ الاستحقاق الفعلي 2028-01-01 (بعد سنتين من أمر 2026)
+    const simResult = calculateDegreeTrackSimulation(snapshot, {
+      specializationCredits: [{ employeeId: 201, weeks: 8, courseName: 'دورات تخصصية' }],
+      today: '2028-01-01'
+    });
+
+    expect(simResult.hasDeficit).toBe(true);
+    expect(simResult.realTimeNextPromotion.isEligible).toBe(true);
+
+    // تنفيذ التسوية مع autoSettlementEnabled = true
+    const settlementResult = processDegreeTrackSettlement(employee, snapshot, simResult, {
+      autoSettlementEnabled: true,
+      today: '2028-01-01'
+    });
+
+    expect(settlementResult.success).toBe(true);
+    expect(settlementResult.settled).toBe(true);
+    expect(settlementResult.updatedSnapshot.status).toBe('مكتمل');
+    expect(settlementResult.updatedEmployee.lastPromotionDate).toBe('2028-01-01');
+    expect(settlementResult.approvalRecord).toBeDefined();
+    expect(settlementResult.approvalRecord?.approvedBy).toBe('نظام آلي — تسوية تلقائية');
+    expect(settlementResult.approvalRecord?.orderNumber).toBeNull();
+    expect(settlementResult.approvalRecord?.orderDate).toBe('2028-01-01');
+    expect(settlementResult.approvalRecord?.gradeBefore).toBe(3);
+    expect(settlementResult.approvalRecord?.gradeAfter).toBe(3); // تثبيت دون تغيير درجة
+  });
+
+  // ============================================================================
+  // اختبار 14: الوضع اليدوي الافتراضي الآمن (degreeTrackAutoSettlement = false)
+  // ============================================================================
+  it('14. الوضع اليدوي الافتراضي: نفس الموظف بنفس الشروط -> يبقى اللقطة نشطة دون تسوية تلقائية بانتظار اعتماد الموارد البشرية اليدوي', () => {
+    const employee = {
+      id: 202,
+      fullName: 'سعد كريم خضير',
+      grade: 3,
+      step: 1,
+      lastPromotionDate: '2024-01-01'
+    };
+
+    const snapshot: DegreeTrackSnapshotEntity = {
+      id: 302,
+      qualificationId: 402,
+      employeeId: 202,
+      actualGradeBefore: 3,
+      actualStepBefore: 1,
+      baselineGrade: 7,
+      baselineStep: 1,
+      graduationDateUsed: '2020-01-01',
+      orderDate: '2026-01-01',
+      status: 'نشط'
+    };
+
+    const simResult = calculateDegreeTrackSimulation(snapshot, {
+      specializationCredits: [{ employeeId: 202, weeks: 8, courseName: 'دورات تخصصية' }],
+      today: '2028-01-01'
+    });
+
+    // تنفيذ مع autoSettlementEnabled = false
+    const settlementResult = processDegreeTrackSettlement(employee, snapshot, simResult, {
+      autoSettlementEnabled: false,
+      today: '2028-01-01'
+    });
+
+    expect(settlementResult.success).toBe(true);
+    expect(settlementResult.settled).toBe(false);
+    expect(settlementResult.reason).toContain('التسوية التلقائية غير مفعلة');
+    expect(snapshot.status).toBe('نشط'); // لم يتغير
+    expect(employee.lastPromotionDate).toBe('2024-01-01'); // لم يتغير
+  });
+
+  // ============================================================================
+  // اختبار 15: عزل الأخطاء التام عند فشل أو تلف بيانات موظف (Crucial Isolation Test)
+  // ============================================================================
+  it('15. عزل الأخطاء التام: محاكاة خطأ مفتعل في بيانات موظف تالفة ضمن دفعة -> ينحصر الخطأ بالموظف فقط، وتستمر معالجة باقي الموظفين بنجاح 100%، ويبقى الموظف المتعثر بالقائمة اليدوية', () => {
+    const employees = [
+      { id: 1001, fullName: 'موظف سليم 1', grade: 3, step: 1, lastPromotionDate: '2024-01-01' },
+      { id: 1002, fullName: 'موظف تالف البيانات', grade: null, step: null, lastPromotionDate: 'INVALID_DATE' }, // بيانات تالفة
+      { id: 1003, fullName: 'موظف سليم 2', grade: 4, step: 2, lastPromotionDate: '2024-01-01' },
+    ];
+
+    const snapshots: DegreeTrackSnapshotEntity[] = [
+      {
+        id: 501,
+        qualificationId: 601,
+        employeeId: 1001,
+        actualGradeBefore: 3,
+        actualStepBefore: 1,
+        baselineGrade: 7,
+        baselineStep: 1,
+        graduationDateUsed: '2020-01-01',
+        orderDate: '2026-01-01',
+        status: 'نشط'
+      },
+      {
+        id: 502,
+        qualificationId: 602,
+        employeeId: 1002,
+        actualGradeBefore: 3,
+        actualStepBefore: 1,
+        baselineGrade: 7,
+        baselineStep: 1,
+        graduationDateUsed: 'INVALID_GRADUATION_DATE', // تاريخ تالف يُحدث خطأ
+        orderDate: '2026-01-01',
+        status: 'نشط'
+      },
+      {
+        id: 503,
+        qualificationId: 603,
+        employeeId: 1003,
+        actualGradeBefore: 4,
+        actualStepBefore: 2,
+        baselineGrade: 7,
+        baselineStep: 1,
+        graduationDateUsed: '2022-01-01',
+        orderDate: '2026-01-01',
+        status: 'نشط'
+      }
+    ];
+
+    const contextMap = {
+      specializationCredits: [
+        { employeeId: 1001, weeks: 8 }, // 6 أسابيع للمحاكاة (3 دورات) + 2 أسبوع للمرحلة الحقيقية
+        { employeeId: 1002, weeks: 0 },
+        { employeeId: 1003, weeks: 6 }  // 4 أسابيع للمحاكاة (دورتان) + 2 أسبوع للمرحلة الحقيقية
+      ]
+    };
+
+    // تشغيل المعالجة الدفعية
+    const batchResult = processBatchDegreeTrackAutoSettlement(employees, snapshots, contextMap, {
+      autoSettlementEnabled: true,
+      today: '2028-01-01'
+    });
+
+    expect(batchResult.totalProcessed).toBe(3);
+    // الموظف 1001 والموظف 1003 تمت تسويتهما بنجاح
+    expect(batchResult.totalSettled).toBe(2);
+    
+    // فحص نتائج الموظف 1001 السليم
+    const emp1Res = batchResult.results.find(r => r.employeeId === 1001);
+    expect(emp1Res?.settled).toBe(true);
+    expect(emp1Res?.approvalRecord?.approvedBy).toBe('نظام آلي — تسوية تلقائية');
+
+    // فحص نتائج الموظف 1003 السليم
+    const emp3Res = batchResult.results.find(r => r.employeeId === 1003);
+    expect(emp3Res?.settled).toBe(true);
+    expect(emp3Res?.approvalRecord?.approvedBy).toBe('نظام آلي — تسوية تلقائية');
+
+    // فحص الموظف 1002 التالف: لم يكسر النظام وبقي غير مُسوّى ليظهر بالقائمة اليدوية
+    const emp2Res = batchResult.results.find(r => r.employeeId === 1002);
+    expect(emp2Res?.settled).toBe(false);
+    expect(snapshots.find(s => s.employeeId === 1002)?.status).toBe('نشط'); // اللقطة بقيت نشطة
+  });
+
+  // ============================================================================
+  // اختبار 16: تبديل الإعداد من تلقائي ليدوي أثناء التشغيل (Toggle Transition)
+  // ============================================================================
+  it('16. أمان التبديل: موظف سُوّي آلياً قبل التبديل يبقى مُسوّى كـ "مكتمل"، وموظف يستحق بعد التبديل ليدوي يبقى بالقائمة اليدوية دون تسوية', () => {
+    // موظف أ: سُوّي أثناء تفعيل الآلي
+    const empA = { id: 3001, fullName: 'موظف أ', grade: 3, step: 1 };
+    const snapA: DegreeTrackSnapshotEntity = {
+      id: 701,
+      qualificationId: 801,
+      employeeId: 3001,
+      actualGradeBefore: 3,
+      actualStepBefore: 1,
+      baselineGrade: 7,
+      baselineStep: 1,
+      graduationDateUsed: '2020-01-01',
+      orderDate: '2026-01-01',
+      status: 'نشط'
+    };
+    const simA = calculateDegreeTrackSimulation(snapA, {
+      specializationCredits: [{ employeeId: 3001, weeks: 8 }], // 6 أسابيع محاكاة + 2 أسبوع حقيقي
+      today: '2028-01-01'
+    });
+
+    const resA = processDegreeTrackSettlement(empA, snapA, simA, { autoSettlementEnabled: true, today: '2028-01-01' });
+    expect(resA.settled).toBe(true);
+    snapA.status = 'مكتمل'; // تم الإغلاق
+
+    // تم تبديل الإعداد الآن إلى يدوي (autoSettlementEnabled = false)
+    // 1. إعادة فحص موظف أ: لا تراجع ولا مساس بالسجل المكتمل
+    const resAAfterToggle = processDegreeTrackSettlement(empA, snapA, simA, { autoSettlementEnabled: false, today: '2028-06-01' });
+    expect(resAAfterToggle.settled).toBe(false);
+    expect(snapA.status).toBe('مكتمل'); // بقى مكتملاً
+
+    // 2. موظف ب: استحق بعد التبديل ليدوي
+    const empB = { id: 3002, fullName: 'موظف ب', grade: 3, step: 1, lastPromotionDate: '2024-01-01' };
+    const snapB: DegreeTrackSnapshotEntity = {
+      id: 702,
+      qualificationId: 802,
+      employeeId: 3002,
+      actualGradeBefore: 3,
+      actualStepBefore: 1,
+      baselineGrade: 7,
+      baselineStep: 1,
+      graduationDateUsed: '2020-01-01',
+      orderDate: '2026-01-01',
+      status: 'نشط'
+    };
+    const simB = calculateDegreeTrackSimulation(snapB, {
+      specializationCredits: [{ employeeId: 3002, weeks: 8 }], // 6 أسابيع محاكاة + 2 أسبوع حقيقي
+      today: '2028-06-01'
+    });
+    const resB = processDegreeTrackSettlement(empB, snapB, simB, { autoSettlementEnabled: false, today: '2028-06-01' });
+    expect(resB.settled).toBe(false);
+    expect(snapB.status).toBe('نشط'); // يبقى بالقائمة اليدوية
+  });
+
 });
+
 

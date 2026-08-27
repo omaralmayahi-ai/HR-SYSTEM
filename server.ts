@@ -2694,7 +2694,9 @@ async function startServer() {
       { label: "3 كتب عادية (شهر واحد)", maxCount: 3, creditMonths: 1 },
       { label: "كتابان عاديان + كتاب استثنائي (6 أشهر)", maxCount: 3, rules: [{ count: 2, creditMonths: 1 }, { count: 1, creditMonths: 6 }] },
       { label: "كتابان استثنائيان (6 أشهر)", maxCount: 2, rules: [{ count: 2, creditMonths: 6 }] }
-    ])
+    ]),
+    degreeTrackAutoSettlement: false,
+    degree_track_auto_settlement: false
   };
 
   let inMemoryAllowancesDeductions: any[] = [
@@ -3365,28 +3367,40 @@ async function startServer() {
   app.get('/api/commendation-rules-settings', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.commendationRulesSettings).where(eq(schema.commendationRulesSettings.configKey, 'default_commendation_rules'));
-      if (records && records.length > 0) return res.json(mapKeys(records[0], camelToSnake));
+      if (records && records.length > 0) {
+        const item = records[0];
+        inMemoryCommendationRulesSettings = {
+          ...inMemoryCommendationRulesSettings,
+          ...mapKeys(item, camelToSnake),
+          degreeTrackAutoSettlement: Boolean(item.degreeTrackAutoSettlement),
+          degree_track_auto_settlement: Boolean(item.degreeTrackAutoSettlement)
+        };
+        return res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
+      }
     } catch (e) {
       console.warn('Database fallback for commendation-rules-settings');
     }
-    res.json(inMemoryCommendationRulesSettings);
+    res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
   });
 
   app.put('/api/commendation-rules-settings', requireAuth, async (req, res) => {
-    const { max_per_year, maxPerYear, allowed_combinations, allowedCombinations } = req.body;
+    const { max_per_year, maxPerYear, allowed_combinations, allowedCombinations, degree_track_auto_settlement, degreeTrackAutoSettlement } = req.body;
     const maxVal = max_per_year !== undefined ? parseInt(max_per_year) : (maxPerYear !== undefined ? parseInt(maxPerYear) : 3);
     const combos = typeof (allowed_combinations || allowedCombinations) === 'object' ? JSON.stringify(allowed_combinations || allowedCombinations) : (allowed_combinations || allowedCombinations || '');
+    const autoSettlementVal = Boolean(degree_track_auto_settlement ?? degreeTrackAutoSettlement);
 
     try {
       await db.insert(schema.commendationRulesSettings).values({
         configKey: 'default_commendation_rules',
         maxPerYear: maxVal,
         allowedCombinations: combos,
+        degreeTrackAutoSettlement: autoSettlementVal,
       }).onConflictDoUpdate({
         target: schema.commendationRulesSettings.configKey,
         set: {
           maxPerYear: maxVal,
           allowedCombinations: combos,
+          degreeTrackAutoSettlement: autoSettlementVal,
           updatedAt: new Date()
         }
       });
@@ -3398,10 +3412,12 @@ async function startServer() {
       max_per_year: maxVal,
       maxPerYear: maxVal,
       allowed_combinations: combos,
-      allowedCombinations: combos
+      allowedCombinations: combos,
+      degree_track_auto_settlement: autoSettlementVal,
+      degreeTrackAutoSettlement: autoSettlementVal
     };
     saveLocalDb();
-    res.json(inMemoryCommendationRulesSettings);
+    res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
   });
 
   // --- Allowances and Deductions API ---
@@ -6765,6 +6781,112 @@ async function startServer() {
 
     const fullResult = recalculateEligibilitySync(emp, context);
 
+    // Check Degree Recognition Track & Deficit Auto-Settlement
+    const activeDegreeSnapshot = (genericMemoryStores['degree-track-snapshots'] || []).find(
+      s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum && (s.status === 'نشط' || !s.status)
+    );
+
+    if (activeDegreeSnapshot) {
+      try {
+        const { calculateDegreeTrackSimulation, processDegreeTrackSettlement } = require('./src/lib/degreeTrackEngine');
+        const simResult = calculateDegreeTrackSimulation(activeDegreeSnapshot, {
+          specializationCredits,
+          penalties,
+          leaves,
+          attendances
+        });
+
+        const isAutoSettlementEnabled = inMemoryCommendationRulesSettings.degreeTrackAutoSettlement === true ||
+          inMemoryCommendationRulesSettings.degree_track_auto_settlement === true;
+
+        if (isAutoSettlementEnabled && simResult.hasDeficit && simResult.realTimeNextPromotion?.isEligible) {
+          const settlementRes = processDegreeTrackSettlement(emp, activeDegreeSnapshot, simResult, {
+            autoSettlementEnabled: true
+          });
+
+          if (settlementRes.settled && settlementRes.updatedEmployee && settlementRes.approvalRecord) {
+            // Update employee last_promotion_date in memory
+            const settlementDate = settlementRes.updatedEmployee.lastPromotionDate;
+            const updatedEmpMemIdx = inMemoryEmployees.findIndex(e => parseInt(String(e.id)) === empIdNum);
+            if (updatedEmpMemIdx !== -1) {
+              inMemoryEmployees[updatedEmpMemIdx].lastPromotionDate = settlementDate;
+              inMemoryEmployees[updatedEmpMemIdx].last_promotion_date = settlementDate;
+            }
+
+            // Update snapshot to 'مكتمل'
+            activeDegreeSnapshot.status = 'مكتمل';
+            const snapIdx = (genericMemoryStores['degree-track-snapshots'] || []).findIndex(s => s.id === activeDegreeSnapshot.id);
+            if (snapIdx !== -1) {
+              genericMemoryStores['degree-track-snapshots'][snapIdx].status = 'مكتمل';
+            }
+
+            // Insert into promotions_increments in memory
+            const approvalRec = settlementRes.approvalRecord;
+            const newPromoId = (genericMemoryStores['promotions'] || []).length + 1;
+            const promoMemItem = {
+              id: newPromoId,
+              employee_id: empIdNum,
+              employeeId: empIdNum,
+              movement_type: approvalRec.movementType,
+              movementType: approvalRec.movementType,
+              grade_before: approvalRec.gradeBefore,
+              gradeBefore: approvalRec.gradeBefore,
+              grade_after: approvalRec.gradeAfter,
+              gradeAfter: approvalRec.gradeAfter,
+              step_before: approvalRec.stepBefore,
+              stepBefore: approvalRec.stepBefore,
+              step_after: approvalRec.stepAfter,
+              stepAfter: approvalRec.stepAfter,
+              due_date: approvalRec.dueDate,
+              dueDate: approvalRec.dueDate,
+              order_number: null,
+              orderNumber: null,
+              order_date: approvalRec.orderDate,
+              orderDate: approvalRec.orderDate,
+              approved_by: 'نظام آلي — تسوية تلقائية',
+              approvedBy: 'نظام آلي — تسوية تلقائية',
+              notes: approvalRec.notes,
+              created_at: new Date().toISOString()
+            };
+            genericMemoryStores['promotions'].push(promoMemItem);
+
+            // DB Updates with safe isolation
+            try {
+              await db.update(schema.employees)
+                .set({ lastPromotionDate: settlementDate })
+                .where(eq(schema.employees.id, empIdNum));
+            } catch (e) {}
+
+            try {
+              await db.update(schema.degreeTrackSnapshots)
+                .set({ status: 'مكتمل' })
+                .where(eq(schema.degreeTrackSnapshots.id, activeDegreeSnapshot.id));
+            } catch (e) {}
+
+            try {
+              await db.insert(schema.promotionsIncrements).values({
+                employeeId: empIdNum,
+                movementType: approvalRec.movementType,
+                gradeBefore: String(approvalRec.gradeBefore),
+                gradeAfter: String(approvalRec.gradeAfter),
+                stepBefore: approvalRec.stepBefore,
+                stepAfter: approvalRec.stepAfter,
+                dueDate: approvalRec.dueDate,
+                orderNumber: null,
+                orderDate: approvalRec.orderDate,
+                approvedBy: 'نظام آلي — تسوية تلقائية',
+                notes: approvalRec.notes
+              });
+            } catch (e) {}
+
+            console.log(`[DEGREE_TRACK_AUTO_SETTLED] Employee #${empIdNum} settled automatically on ${settlementDate}`);
+          }
+        }
+      } catch (degreeErr: any) {
+        console.error(`[DEGREE_TRACK_SETTLEMENT_ISOLATED_ERROR] Employee #${empIdNum}:`, degreeErr?.message || degreeErr);
+      }
+    }
+
     // Update employee record in-memory & database
     const promoDue = fullResult.promotion.nextPromotionDueDate;
     const incrDue = fullResult.increment.nextIncrementDueDate;
@@ -7352,6 +7474,167 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error fetching employee degree track:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 4. Promotions & Degree Recognition Due List (قائمة المستحقين للترقية والتسوية اليدوية)
+  app.get('/api/promotions/due-list', requireAuth, async (req, res) => {
+    try {
+      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
+      const dueList: any[] = [];
+
+      for (const emp of inMemoryEmployees) {
+        const empId = parseInt(String(emp.id));
+        if (!empId) continue;
+
+        // Check degree track snapshot
+        const activeSnap = (genericMemoryStores['degree-track-snapshots'] || []).find(
+          s => parseInt(String(s.employee_id || s.employeeId)) === empId && (s.status === 'نشط' || !s.status)
+        );
+
+        if (activeSnap) {
+          const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
+          const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+          const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+          const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+
+          const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
+          if (sim.hasDeficit && sim.realTimeNextPromotion?.isEligible) {
+            dueList.push({
+              employeeId: empId,
+              employeeName: emp.fullName || emp.full_name || emp.name,
+              trackType: 'مسار_احتساب_الشهادات',
+              currentGrade: emp.grade || activeSnap.actualGradeBefore,
+              currentStep: emp.step || activeSnap.actualStepBefore,
+              nextGrade: sim.realTimeNextPromotion.toGrade,
+              dueDate: sim.realTimeNextPromotion.nextPromotionDueDate,
+              eligibilityStatus: 'مستحق_للترفيع',
+              settlementType: 'تسوية_عجز_تثبيت_استحقاق',
+              snapshotId: activeSnap.id,
+              notes: sim.realTimeNextPromotion.statusReason
+            });
+            continue;
+          }
+        }
+
+        // Standard track check
+        const eligibility = await triggerRecalculateEligibility(empId);
+        if (eligibility?.promotion?.eligibilityStatus === 'مستحق_للترفيع') {
+          dueList.push({
+            employeeId: empId,
+            employeeName: emp.fullName || emp.full_name || emp.name,
+            trackType: 'المسار_الاعتيادي',
+            currentGrade: emp.grade,
+            currentStep: emp.step,
+            nextGrade: Math.max(1, (parseInt(String(emp.grade)) || 10) - 1),
+            dueDate: eligibility.promotion.nextPromotionDueDate,
+            eligibilityStatus: eligibility.promotion.eligibilityStatus,
+            settlementType: 'ترفيع_اعتيادي',
+            notes: eligibility.promotion.statusReason
+          });
+        }
+      }
+
+      res.json(dueList);
+    } catch (err: any) {
+      console.error('Error fetching promotion due list:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 5. Batch Auto-Settlement Trigger
+  app.post('/api/degree-track/process-auto-settlement', requireAuth, async (req, res) => {
+    try {
+      const { processBatchDegreeTrackAutoSettlement } = require('./src/lib/degreeTrackEngine');
+      const isAutoEnabled = inMemoryCommendationRulesSettings.degreeTrackAutoSettlement === true ||
+        inMemoryCommendationRulesSettings.degree_track_auto_settlement === true;
+
+      const batchResult = processBatchDegreeTrackAutoSettlement(
+        inMemoryEmployees,
+        genericMemoryStores['degree-track-snapshots'] || [],
+        {
+          specializationCredits: genericMemoryStores['specialization-credits'] || [],
+          penalties: genericMemoryStores['penalties'] || [],
+          leaves: genericMemoryStores['leaves'] || [],
+          attendances: genericMemoryStores['attendance'] || []
+        },
+        {
+          autoSettlementEnabled: isAutoEnabled
+        }
+      );
+
+      for (const item of batchResult.results) {
+        if (item.settled && item.updatedEmployee && item.approvalRecord) {
+          const empId = parseInt(String(item.employeeId));
+          const empIdx = inMemoryEmployees.findIndex(e => parseInt(String(e.id)) === empId);
+          if (empIdx !== -1) {
+            inMemoryEmployees[empIdx].lastPromotionDate = item.updatedEmployee.lastPromotionDate;
+            inMemoryEmployees[empIdx].last_promotion_date = item.updatedEmployee.lastPromotionDate;
+          }
+
+          const snapIdx = (genericMemoryStores['degree-track-snapshots'] || []).findIndex(
+            s => parseInt(String(s.employee_id || s.employeeId)) === empId && s.status === 'نشط'
+          );
+          if (snapIdx !== -1) {
+            genericMemoryStores['degree-track-snapshots'][snapIdx].status = 'مكتمل';
+          }
+
+          const newPromoId = (genericMemoryStores['promotions'] || []).length + 1;
+          genericMemoryStores['promotions'].push({
+            id: newPromoId,
+            employee_id: empId,
+            employeeId: empId,
+            movement_type: item.approvalRecord.movementType,
+            movementType: item.approvalRecord.movementType,
+            grade_before: item.approvalRecord.gradeBefore,
+            gradeBefore: item.approvalRecord.gradeBefore,
+            grade_after: item.approvalRecord.gradeAfter,
+            gradeAfter: item.approvalRecord.gradeAfter,
+            step_before: item.approvalRecord.stepBefore,
+            stepBefore: item.approvalRecord.stepBefore,
+            step_after: item.approvalRecord.stepAfter,
+            stepAfter: item.approvalRecord.stepAfter,
+            due_date: item.approvalRecord.dueDate,
+            dueDate: item.approvalRecord.dueDate,
+            order_number: null,
+            orderNumber: null,
+            order_date: item.approvalRecord.orderDate,
+            orderDate: item.approvalRecord.orderDate,
+            approved_by: 'نظام آلي — تسوية تلقائية',
+            approvedBy: 'نظام آلي — تسوية تلقائية',
+            notes: item.approvalRecord.notes,
+            created_at: new Date().toISOString()
+          });
+
+          try {
+            await db.update(schema.employees)
+              .set({ lastPromotionDate: item.updatedEmployee.lastPromotionDate })
+              .where(eq(schema.employees.id, empId));
+            await db.update(schema.degreeTrackSnapshots)
+              .set({ status: 'مكتمل' })
+              .where(eq(schema.degreeTrackSnapshots.employeeId, empId));
+            await db.insert(schema.promotionsIncrements).values({
+              employeeId: empId,
+              movementType: item.approvalRecord.movementType,
+              gradeBefore: String(item.approvalRecord.gradeBefore),
+              gradeAfter: String(item.approvalRecord.gradeAfter),
+              stepBefore: item.approvalRecord.stepBefore,
+              stepAfter: item.approvalRecord.stepAfter,
+              dueDate: item.approvalRecord.dueDate,
+              orderNumber: null,
+              orderDate: item.approvalRecord.orderDate,
+              approvedBy: 'نظام آلي — تسوية تلقائية',
+              notes: item.approvalRecord.notes
+            });
+          } catch (e) {}
+        }
+      }
+
+      saveLocalDb();
+      res.json(batchResult);
+    } catch (err: any) {
+      console.error('Error in batch auto settlement:', err);
       res.status(500).json({ error: err.message });
     }
   });

@@ -803,6 +803,10 @@ export async function ensureSchema() {
     await safeQuery(`ALTER TABLE job_titles ADD COLUMN IF NOT EXISTS min_step INTEGER DEFAULT 1;`);
     await safeQuery(`ALTER TABLE education_degrees ADD COLUMN IF NOT EXISTS baseline_grade INTEGER DEFAULT 7;`);
     await safeQuery(`ALTER TABLE education_degrees ADD COLUMN IF NOT EXISTS baseline_step INTEGER DEFAULT 1;`);
+    await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
+    await safeQuery(`ALTER TABLE promotions_increments ADD COLUMN IF NOT EXISTS approved_by TEXT;`);
+    await safeQuery(`ALTER TABLE promotions_increments ADD COLUMN IF NOT EXISTS notes TEXT;`);
 
     // 16. Degree Track Snapshots Table (لقطة بدء عملية احتساب الشهادة أثناء الخدمة)
     await safeQuery(`

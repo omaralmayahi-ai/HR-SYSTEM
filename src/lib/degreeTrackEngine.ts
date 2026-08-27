@@ -473,3 +473,263 @@ export function calculateDegreeTrackSimulation(
     },
   };
 }
+
+// ============================================================================
+// Degree Track Deficit Settlement (تسوية العجز التلقائية / اليدوية)
+// ============================================================================
+
+export interface DegreeTrackSettlementApproval {
+  id?: number | string;
+  employeeId: number | string;
+  movementType: string;
+  gradeBefore: number | string;
+  gradeAfter: number | string;
+  stepBefore: number | string;
+  stepAfter: number | string;
+  dueDate: string;
+  orderNumber: string | null;
+  orderDate: string;
+  approvedBy: string;
+  seniorityReason?: string;
+  directorApproval?: string;
+  managerRecommendation?: string;
+  notes?: string;
+  createdAt?: string | Date;
+}
+
+export interface SettlementOptions {
+  autoSettlementEnabled?: boolean;
+  today?: string;
+  executionUser?: string;
+  onSuccess?: (result: SettlementExecutionResult) => Promise<void> | void;
+  onError?: (error: any, empId: number | string) => Promise<void> | void;
+}
+
+export interface SettlementExecutionResult {
+  success: boolean;
+  settled: boolean;
+  employeeId: number | string;
+  reason?: string;
+  error?: string;
+  updatedEmployee?: any;
+  updatedSnapshot?: any;
+  approvalRecord?: DegreeTrackSettlementApproval;
+}
+
+/**
+ * Process deficit settlement for a single employee in the degree recognition track.
+ * Safely executes inside an isolated try/catch block.
+ */
+export function processDegreeTrackSettlement(
+  employee: any,
+  snapshot: DegreeTrackSnapshotEntity,
+  simResult: DegreeTrackSimulationResult,
+  options: SettlementOptions = {}
+): SettlementExecutionResult {
+  const empId = employee?.id || snapshot?.employeeId || snapshot?.employee_id;
+  
+  try {
+    if (!employee || !snapshot || !simResult) {
+      throw new Error(`بيانات الموظف أو سجل احتساب الشهادة غير مكتملة (ID: ${empId})`);
+    }
+
+    // 1. Check if auto settlement is enabled
+    if (options.autoSettlementEnabled !== true) {
+      return {
+        success: true,
+        settled: false,
+        employeeId: empId,
+        reason: 'التسوية التلقائية غير مفعلة (الوضع اليدوي الافتراضي — بانتظار اعتماد الموارد البشرية)'
+      };
+    }
+
+    // 2. Check if snapshot is already completed
+    if (snapshot.status === 'مكتمل') {
+      return {
+        success: true,
+        settled: false,
+        employeeId: empId,
+        reason: 'سجل احتساب الشهادة مكتمل ومسوّى سابقاً'
+      };
+    }
+
+    // 3. Check conditions: deficit exists, time reached, specialization course satisfied, no active pausing leave
+    const isEligible = Boolean(simResult.hasDeficit && simResult.realTimeNextPromotion?.isEligible);
+    if (!isEligible) {
+      return {
+        success: true,
+        settled: false,
+        employeeId: empId,
+        reason: `شروط التسوية غير مستوفاة حالياً: ${simResult.realTimeNextPromotion?.statusReason || 'غير مستحق'}`
+      };
+    }
+
+    const executionDate = options.today || new Date().toISOString().split('T')[0];
+    const settlementDueDate = simResult.realTimeNextPromotion.nextPromotionDueDate || executionDate;
+
+    // 4. Construct updated employee entity (update last_promotion_date)
+    const updatedEmployee = {
+      ...employee,
+      lastPromotionDate: settlementDueDate,
+      last_promotion_date: settlementDueDate,
+      promotionEligibilityStatus: 'مكتمل_بالتسوية',
+      promotion_eligibility_status: 'مكتمل_بالتسوية'
+    };
+
+    // 5. Construct updated snapshot entity (status = 'مكتمل')
+    const updatedSnapshot = {
+      ...snapshot,
+      status: 'مكتمل',
+      notes: snapshot.notes 
+        ? `${snapshot.notes} | تمت التسوية الآلية للعجز بنجاح بتاريخ ${executionDate}`
+        : `تمت التسوية الآلية للعجز بنجاح بتاريخ ${executionDate}`
+    };
+
+    // 6. Construct promotion approval record (fixation event without grade change)
+    const currentGrade = employee.grade !== undefined ? employee.grade : (snapshot.actualGradeBefore || snapshot.actual_grade_before);
+    const currentStep = parseInt(String(employee.step !== undefined ? employee.step : (snapshot.actualStepBefore || snapshot.actual_step_before))) || 1;
+
+    const approvalRecord: DegreeTrackSettlementApproval = {
+      employeeId: empId,
+      movementType: 'ترفيع درجة',
+      gradeBefore: currentGrade,
+      gradeAfter: currentGrade,
+      stepBefore: currentStep,
+      stepAfter: currentStep,
+      dueDate: settlementDueDate,
+      orderNumber: null,
+      orderDate: executionDate,
+      approvedBy: 'نظام آلي — تسوية تلقائية',
+      directorApproval: 'نظام آلي — تسوية تلقائية',
+      managerRecommendation: 'نظام آلي — تسوية تلقائية',
+      seniorityReason: 'تسوية مسار احتساب الشهادة أثناء الخدمة',
+      notes: 'تسوية عجز مسار الشهادة وتثبيت الاستحقاق بعد استيفاء المدة ودورة الاختصاص',
+      createdAt: new Date()
+    };
+
+    return {
+      success: true,
+      settled: true,
+      employeeId: empId,
+      reason: 'تمت التسوية التلقائية للعجز بنجاح',
+      updatedEmployee,
+      updatedSnapshot,
+      approvalRecord
+    };
+  } catch (err: any) {
+    const errorMsg = err?.message || String(err);
+    console.error(`[DEGREE_TRACK_AUTO_SETTLEMENT_ERROR] Failed for employee #${empId}:`, errorMsg);
+    return {
+      success: false,
+      settled: false,
+      employeeId: empId,
+      error: errorMsg,
+      reason: `فشل تنفيذ التسوية التلقائية: ${errorMsg}`
+    };
+  }
+}
+
+/**
+ * Batch processor for all degree track employees.
+ * Guarantees 100% complete isolation: any failure in one employee never blocks or interrupts others.
+ */
+export function processBatchDegreeTrackAutoSettlement(
+  employees: any[],
+  snapshots: DegreeTrackSnapshotEntity[],
+  contextMap: {
+    specializationCredits?: any[];
+    penalties?: any[];
+    leaves?: any[];
+    attendances?: any[];
+    [key: string]: any;
+  } = {},
+  options: SettlementOptions = {}
+): {
+  totalProcessed: number;
+  totalSettled: number;
+  totalFailed: number;
+  totalSkipped: number;
+  results: SettlementExecutionResult[];
+} {
+  const results: SettlementExecutionResult[] = [];
+  let totalSettled = 0;
+  let totalFailed = 0;
+  let totalSkipped = 0;
+
+  for (const emp of (employees || [])) {
+    try {
+      const empId = emp?.id;
+      if (!empId) {
+        totalSkipped++;
+        continue;
+      }
+
+      // Find active snapshot for this employee
+      const activeSnapshot = (snapshots || []).find(
+        s => String(s.employeeId || s.employee_id) === String(empId) && (s.status === 'نشط' || !s.status)
+      );
+
+      if (!activeSnapshot) {
+        totalSkipped++;
+        continue;
+      }
+
+      // Filter context for this employee
+      const empSpecialization = (contextMap.specializationCredits || []).filter(
+        c => String(c.employeeId || c.employee_id) === String(empId)
+      );
+      const empPenalties = (contextMap.penalties || []).filter(
+        p => String(p.employeeId || p.employee_id) === String(empId)
+      );
+      const empLeaves = (contextMap.leaves || []).filter(
+        l => String(l.employeeId || l.employee_id) === String(empId)
+      );
+      const empAttendances = (contextMap.attendances || []).filter(
+        a => String(a.employeeId || a.employee_id) === String(empId)
+      );
+
+      // Run simulation
+      const simResult = calculateDegreeTrackSimulation(activeSnapshot, {
+        specializationCredits: empSpecialization,
+        penalties: empPenalties,
+        leaves: empLeaves,
+        attendances: empAttendances,
+        today: options.today
+      });
+
+      // Run isolated settlement
+      const res = processDegreeTrackSettlement(emp, activeSnapshot, simResult, options);
+      results.push(res);
+
+      if (res.settled) {
+        totalSettled++;
+      } else if (!res.success) {
+        totalFailed++;
+      } else {
+        totalSkipped++;
+      }
+    } catch (empErr: any) {
+      // Isolated catch for unexpected outer errors per employee
+      totalFailed++;
+      const empId = emp?.id || 'unknown';
+      const errorMsg = empErr?.message || String(empErr);
+      console.error(`[BATCH_AUTO_SETTLEMENT_ISOLATION_GUARD] Error for employee #${empId}:`, errorMsg);
+      results.push({
+        success: false,
+        settled: false,
+        employeeId: empId,
+        error: errorMsg,
+        reason: `خطأ معزول أثناء معالجة الموظف: ${errorMsg}`
+      });
+    }
+  }
+
+  return {
+    totalProcessed: results.length,
+    totalSettled,
+    totalFailed,
+    totalSkipped,
+    results
+  };
+}
+
