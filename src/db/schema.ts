@@ -738,13 +738,15 @@ export const workLocations = pgTable('work_locations', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-// 26. Education Degrees table (الشهادات والتحصيل الدراسي ومخصصاتها المئوية)
+// 26. Education Degrees table (الشهادات والتحصيل الدراسي ومخصصاتها المئوية ودرجة الأساس)
 export const educationDegrees = pgTable('education_degrees', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم الشهادة (مثلاً: بكالوريوس، ماجستير)
   isHigherEducation: boolean('is_higher_education').default(false), // هل هي شهادة عليا؟
   allowanceRate: integer('allowance_rate').default(0), // نسبة مخصص الشهادة (مثلاً: 45 تعني 45%)
   higherAllowanceRate: integer('higher_allowance_rate').default(0), // نسبة مخصص الشهادة العليا الإضافي (مثلاً: 50 تعني 50%)
+  baselineGrade: integer('baseline_grade').default(7), // الدرجة الأساس للتعيين/الاحتساب (دكتوراه 5، ماجستير 6، بكالوريوس 7، دبلوم 8، إعدادية 8)
+  baselineStep: integer('baseline_step').default(1), // المرحلة الأساس للتعيين/الاحتساب
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -963,5 +965,88 @@ export const serviceCreditsRelations = relations(serviceCredits, ({ one }) => ({
   employee: one(employees, {
     fields: [serviceCredits.employeeId],
     references: [employees.id],
+  }),
+}));
+
+// 41. Degree Track Snapshots table (لقطة بدء عملية احتساب الشهادة أثناء الخدمة)
+export const degreeTrackSnapshots = pgTable('degree_track_snapshots', {
+  id: serial('id').primaryKey(),
+  qualificationId: integer('qualification_id')
+    .references(() => qualifications.id, { onDelete: 'cascade' })
+    .notNull(),
+  employeeId: integer('employee_id')
+    .references(() => employees.id, { onDelete: 'cascade' })
+    .notNull(),
+  actualGradeBefore: integer('actual_grade_before').notNull(), // الدرجة الفعلية الحالية وقت بدء الاحتساب (مثال: 3)
+  actualStepBefore: integer('actual_step_before').notNull(), // المرحلة الفعلية الحالية وقت بدء الاحتساب (مثال: 1)
+  baselineGrade: integer('baseline_grade').notNull().default(7), // الدرجة الأساس المقررة للشهادة (مثال: 7)
+  baselineStep: integer('baseline_step').notNull().default(1), // المرحلة الأساس المقررة للشهادة (مثال: 1)
+  graduationDateUsed: text('graduation_date_used').notNull(), // تاريخ التخرج المعتمد (YYYY-MM-DD)
+  orderDate: text('order_date').notNull(), // تاريخ صدور أمر الاحتساب (YYYY-MM-DD)
+  status: text('status').notNull().default('نشط'), // 'نشط' | 'مكتمل'
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const degreeTrackSnapshotsRelations = relations(degreeTrackSnapshots, ({ one, many }) => ({
+  employee: one(employees, {
+    fields: [degreeTrackSnapshots.employeeId],
+    references: [employees.id],
+  }),
+  qualification: one(qualifications, {
+    fields: [degreeTrackSnapshots.qualificationId],
+    references: [qualifications.id],
+  }),
+  simulationSteps: many(degreeTrackSimulationSteps),
+  specializationCredits: many(specializationCourseCredits),
+}));
+
+// 42. Degree Track Simulation Steps table (سجل خطوات ترفيع المحاكاة للفترة المقضية)
+export const degreeTrackSimulationSteps = pgTable('degree_track_simulation_steps', {
+  id: serial('id').primaryKey(),
+  snapshotId: integer('snapshot_id')
+    .references(() => degreeTrackSnapshots.id, { onDelete: 'cascade' })
+    .notNull(),
+  fromGrade: integer('from_grade').notNull(),
+  toGrade: integer('to_grade').notNull(),
+  computedDate: text('computed_date').notNull(), // التاريخ المحسوب افتراضياً لهذا الترفيع (نقطة بداية المرحلة الحقيقية)
+  weeksConsumed: integer('weeks_consumed').notNull().default(2), // عدد أسابيع دورة الاختصاص المستهلكة
+  isBundled: boolean('is_bundled').default(false), // هل دمج هذا الترفيع مع ترفيع آخر (استثناء الـ 10 سنوات)
+  status: text('status').notNull().default('ممنوح_بالمحاكاة'), // 'ممنوح_بالمحاكاة' | 'معلق_لعدم_استيفاء_الدورة'
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const degreeTrackSimulationStepsRelations = relations(degreeTrackSimulationSteps, ({ one }) => ({
+  snapshot: one(degreeTrackSnapshots, {
+    fields: [degreeTrackSimulationSteps.snapshotId],
+    references: [degreeTrackSnapshots.id],
+  }),
+}));
+
+// 43. Specialization Course Credits table (رصيد أسابيع تدريب الاختصاص التراكمي)
+export const specializationCourseCredits = pgTable('specialization_course_credits', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id')
+    .references(() => employees.id, { onDelete: 'cascade' })
+    .notNull(),
+  snapshotId: integer('snapshot_id')
+    .references(() => degreeTrackSnapshots.id, { onDelete: 'set null' }),
+  weeks: integer('weeks').notNull().default(1), // عدد أسابيع الدورة التدريبية التخصصية
+  courseDate: text('course_date'), // تاريخ الدورة
+  courseName: text('course_name'), // اسم الدورة التخصصية
+  provider: text('provider'), // الجهة المنظمة
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const specializationCourseCreditsRelations = relations(specializationCourseCredits, ({ one }) => ({
+  employee: one(employees, {
+    fields: [specializationCourseCredits.employeeId],
+    references: [employees.id],
+  }),
+  snapshot: one(degreeTrackSnapshots, {
+    fields: [specializationCourseCredits.snapshotId],
+    references: [degreeTrackSnapshots.id],
   }),
 }));

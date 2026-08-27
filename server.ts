@@ -2717,16 +2717,20 @@ async function startServer() {
   ];
 
   let inMemoryEducationDegrees: any[] = [
-    { id: 1, name: 'دكتوراه', allowance_rate: 100, is_higher_education: true, higher_allowance_rate: 100, status: 'فعال' },
-    { id: 2, name: 'ماجستير', allowance_rate: 75, is_higher_education: true, higher_allowance_rate: 75, status: 'فعال' },
-    { id: 3, name: 'دبلوم عالي', allowance_rate: 65, is_higher_education: true, higher_allowance_rate: 65, status: 'فعال' },
-    { id: 4, name: 'بكالوريوس', allowance_rate: 45, is_higher_education: false, higher_allowance_rate: 0, status: 'فعال' },
-    { id: 5, name: 'دبلوم فني', allowance_rate: 35, is_higher_education: false, higher_allowance_rate: 0, status: 'فعال' },
-    { id: 6, name: 'إعدادية', allowance_rate: 25, is_higher_education: false, higher_allowance_rate: 0, status: 'فعال' },
-    { id: 7, name: 'متوسطة', allowance_rate: 15, is_higher_education: false, higher_allowance_rate: 0, status: 'فعال' },
-    { id: 8, name: 'ابتدائية', allowance_rate: 0, is_higher_education: false, higher_allowance_rate: 0, status: 'فعال' },
-    { id: 9, name: 'يقرأ ويكتب', allowance_rate: 0, is_higher_education: false, higher_allowance_rate: 0, status: 'فعال' }
+    { id: 1, name: 'دكتوراه', allowance_rate: 100, is_higher_education: true, higher_allowance_rate: 100, baseline_grade: 5, baseline_step: 1, status: 'فعال' },
+    { id: 2, name: 'ماجستير', allowance_rate: 75, is_higher_education: true, higher_allowance_rate: 75, baseline_grade: 6, baseline_step: 1, status: 'فعال' },
+    { id: 3, name: 'دبلوم عالي', allowance_rate: 65, is_higher_education: true, higher_allowance_rate: 65, baseline_grade: 6, baseline_step: 1, status: 'فعال' },
+    { id: 4, name: 'بكالوريوس', allowance_rate: 45, is_higher_education: false, higher_allowance_rate: 0, baseline_grade: 7, baseline_step: 1, status: 'فعال' },
+    { id: 5, name: 'دبلوم فني', allowance_rate: 35, is_higher_education: false, higher_allowance_rate: 0, baseline_grade: 8, baseline_step: 1, status: 'فعال' },
+    { id: 6, name: 'إعدادية', allowance_rate: 25, is_higher_education: false, higher_allowance_rate: 0, baseline_grade: 8, baseline_step: 1, status: 'فعال' },
+    { id: 7, name: 'متوسطة', allowance_rate: 15, is_higher_education: false, higher_allowance_rate: 0, baseline_grade: 9, baseline_step: 1, status: 'فعال' },
+    { id: 8, name: 'ابتدائية', allowance_rate: 0, is_higher_education: false, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1, status: 'فعال' },
+    { id: 9, name: 'يقرأ ويكتب', allowance_rate: 0, is_higher_education: false, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1, status: 'فعال' }
   ];
+
+  let inMemoryDegreeTrackSnapshots: any[] = [];
+  let inMemoryDegreeTrackSimulationSteps: any[] = [];
+  let inMemorySpecializationCredits: any[] = [];
 
   let inMemoryResponsibilityAllowances: any[] = [
     { id: 1, name: 'مدير عام', allowance_rate: 50, status: 'فعال' },
@@ -6441,7 +6445,10 @@ async function startServer() {
     'leaves': 'leaveRequests',
     'penalties': 'penalties',
     'appreciations': 'appreciations',
-    'performance': 'performanceEvaluations'
+    'performance': 'performanceEvaluations',
+    'degree-track-snapshots': 'degreeTrackSnapshots',
+    'degree-track-simulation-steps': 'degreeTrackSimulationSteps',
+    'specialization-credits': 'specializationCourseCredits'
   };
 
   const genericMemoryStores: Record<string, any[]> = {
@@ -6460,7 +6467,10 @@ async function startServer() {
     'leaves': inMemoryLeaves,
     'penalties': inMemoryPenalties,
     'appreciations': inMemoryAppreciations,
-    'performance': inMemoryPerformanceEvaluations
+    'performance': inMemoryPerformanceEvaluations,
+    'degree-track-snapshots': inMemoryDegreeTrackSnapshots,
+    'degree-track-simulation-steps': inMemoryDegreeTrackSimulationSteps,
+    'specialization-credits': inMemorySpecializationCredits
   };
 
   // --- Local Disk Persistence Engine ---
@@ -6496,6 +6506,9 @@ async function startServer() {
         inMemoryAppreciations: genericMemoryStores['appreciations'] || inMemoryAppreciations,
         inMemoryPerformanceEvaluations: genericMemoryStores['performance'] || inMemoryPerformanceEvaluations,
         inMemoryCareerHistories: genericMemoryStores['career'] || inMemoryCareerHistories,
+        inMemoryDegreeTrackSnapshots: genericMemoryStores['degree-track-snapshots'] || inMemoryDegreeTrackSnapshots,
+        inMemoryDegreeTrackSimulationSteps: genericMemoryStores['degree-track-simulation-steps'] || inMemoryDegreeTrackSimulationSteps,
+        inMemorySpecializationCredits: genericMemoryStores['specialization-credits'] || inMemorySpecializationCredits,
         inMemoryAllowancesDeductions,
         inMemoryEducationDegrees,
         inMemoryResponsibilityAllowances,
@@ -6636,6 +6649,18 @@ async function startServer() {
           inMemoryCareerHistories = state.inMemoryCareerHistories;
           genericMemoryStores['career'] = state.inMemoryCareerHistories;
         }
+        if (Array.isArray(state.inMemoryDegreeTrackSnapshots)) {
+          inMemoryDegreeTrackSnapshots = state.inMemoryDegreeTrackSnapshots;
+          genericMemoryStores['degree-track-snapshots'] = state.inMemoryDegreeTrackSnapshots;
+        }
+        if (Array.isArray(state.inMemoryDegreeTrackSimulationSteps)) {
+          inMemoryDegreeTrackSimulationSteps = state.inMemoryDegreeTrackSimulationSteps;
+          genericMemoryStores['degree-track-simulation-steps'] = state.inMemoryDegreeTrackSimulationSteps;
+        }
+        if (Array.isArray(state.inMemorySpecializationCredits)) {
+          inMemorySpecializationCredits = state.inMemorySpecializationCredits;
+          genericMemoryStores['specialization-credits'] = state.inMemorySpecializationCredits;
+        }
         if (Array.isArray(state.inMemoryAllowancesDeductions) && state.inMemoryAllowancesDeductions.length > 0) inMemoryAllowancesDeductions = state.inMemoryAllowancesDeductions;
         if (Array.isArray(state.inMemoryEducationDegrees) && state.inMemoryEducationDegrees.length > 0) inMemoryEducationDegrees = state.inMemoryEducationDegrees;
         if (Array.isArray(state.inMemoryResponsibilityAllowances) && state.inMemoryResponsibilityAllowances.length > 0) inMemoryResponsibilityAllowances = state.inMemoryResponsibilityAllowances;
@@ -6710,6 +6735,8 @@ async function startServer() {
       ...(genericMemoryStores['service-records'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum)
     ];
     const qualifications = (genericMemoryStores['qualifications'] || []).filter(q => parseInt(String(q.employee_id || q.employeeId)) === empIdNum);
+    const degreeTrackSnapshots = (genericMemoryStores['degree-track-snapshots'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum);
+    const specializationCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empIdNum);
 
     const context: EngineContextData = {
       commendations,
@@ -6719,6 +6746,8 @@ async function startServer() {
       leaves,
       serviceCredits,
       qualifications,
+      degreeTrackSnapshots,
+      specializationCredits,
       governingCourses: inMemoryGoverningCourses,
       governingAssignments: inMemoryEmployeeAssignments,
       gradeRules: inMemoryGradePromotionRules
@@ -7064,7 +7093,7 @@ async function startServer() {
     });
   });
 
-  // --- Promotion & Increment Eligibility API (المسار الاعتيادي) ---
+  // --- Promotion & Increment Eligibility API (المسار الاعتيادي ومسار الشهادات) ---
   app.get('/api/employees/:id/promotion-eligibility', requireAuth, async (req, res) => {
     try {
       const empId = parseInt(req.params.id);
@@ -7076,6 +7105,229 @@ async function startServer() {
       return res.json(result);
     } catch (err: any) {
       console.error('Error calculating promotion eligibility:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Degree Recognition Track API (Phase 2b) ---
+
+  // 1. Initiate Degree Recognition for In-Service Qualification
+  app.post('/api/qualifications/:id/initiate-degree-recognition', requireAuth, async (req, res) => {
+    try {
+      const qualId = parseInt(req.params.id);
+      if (isNaN(qualId)) return res.status(400).json({ error: 'معرّف الشهادة غير صالح' });
+
+      // Find qualification
+      let qual = (genericMemoryStores['qualifications'] || []).find(q => parseInt(String(q.id)) === qualId);
+      if (!qual) {
+        try {
+          const dbQuals = await db.select().from(schema.qualifications).where(eq(schema.qualifications.id, qualId));
+          if (dbQuals && dbQuals.length > 0) qual = dbQuals[0];
+        } catch (e) {}
+      }
+      if (!qual) return res.status(404).json({ error: 'الشهادة غير موجودة' });
+
+      const empId = parseInt(String(qual.employee_id || qual.employeeId));
+      let emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empId);
+      if (!emp) {
+        try {
+          const dbEmps = await db.select().from(schema.employees).where(eq(schema.employees.id, empId));
+          if (dbEmps && dbEmps.length > 0) emp = dbEmps[0];
+        } catch (e) {}
+      }
+      if (!emp) return res.status(404).json({ error: 'الموظف صاحب الشهادة غير موجود' });
+
+      // Determine baseline grade and step from education_degrees table or default mapper
+      const { resolveDegreeBaseline } = require('./src/lib/degreeTrackEngine');
+      const qualLevel = qual.level || qual.education_level || qual.name || '';
+      const matchedEdu = inMemoryEducationDegrees.find((d: any) => d.name && qualLevel.includes(d.name));
+      const baselineGrade = matchedEdu?.baseline_grade || resolveDegreeBaseline(qualLevel).grade;
+      const baselineStep = matchedEdu?.baseline_step || resolveDegreeBaseline(qualLevel).step;
+
+      const actualGradeBefore = parseInt(String(emp.grade)) || 3;
+      const actualStepBefore = parseInt(String(emp.step)) || 1;
+      const graduationDateUsed = qual.graduation_date || qual.graduationDate || `${qual.graduation_year || 2020}-01-01`;
+      const orderDate = qual.equation_date || qual.equationDate || qual.order_date || new Date().toISOString().split('T')[0];
+
+      // Deactivate any existing active snapshot for this employee
+      const existingSnapshots = (genericMemoryStores['degree-track-snapshots'] || []).filter(
+        s => parseInt(String(s.employee_id || s.employeeId)) === empId
+      );
+      existingSnapshots.forEach(s => { s.status = 'مكتمل'; });
+      try {
+        await db.update(schema.degreeTrackSnapshots).set({ status: 'مكتمل' }).where(eq(schema.degreeTrackSnapshots.employeeId, empId));
+      } catch (e) {}
+
+      // Create new snapshot
+      const newSnapshotData: any = {
+        qualificationId: qualId,
+        employeeId: empId,
+        actualGradeBefore,
+        actualStepBefore,
+        baselineGrade,
+        baselineStep,
+        graduationDateUsed,
+        orderDate,
+        status: 'نشط',
+        notes: req.body.notes || `احتساب شهادة (${qualLevel}) الحاصل عليها أثناء الخدمة`,
+        createdAt: new Date()
+      };
+
+      let createdSnapshot: any = null;
+      try {
+        const [inserted] = await db.insert(schema.degreeTrackSnapshots).values(newSnapshotData).returning();
+        if (inserted) createdSnapshot = inserted;
+      } catch (e) {
+        console.warn('Database fallback for degreeTrackSnapshots');
+      }
+
+      if (!createdSnapshot) {
+        createdSnapshot = {
+          id: (genericMemoryStores['degree-track-snapshots'] || []).length + 1,
+          ...mapKeys(newSnapshotData, camelToSnake),
+          created_at: new Date().toISOString()
+        };
+      }
+
+      genericMemoryStores['degree-track-snapshots'] = genericMemoryStores['degree-track-snapshots'] || [];
+      genericMemoryStores['degree-track-snapshots'].push(mapKeys(createdSnapshot, camelToSnake));
+
+      // Run simulation engine & save steps
+      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
+      const specializationCredits = (genericMemoryStores['specialization-credits'] || []).filter(
+        c => parseInt(String(c.employee_id || c.employeeId)) === empId
+      );
+      const penalties = (genericMemoryStores['penalties'] || []).filter(p => parseInt(String(p.employee_id || p.employeeId)) === empId);
+      const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empId);
+      const attendances = (genericMemoryStores['attendance'] || []).filter(a => parseInt(String(a.employee_id || a.employeeId)) === empId);
+
+      const simResult = calculateDegreeTrackSimulation(createdSnapshot, {
+        specializationCredits,
+        penalties,
+        leaves,
+        attendances,
+        penaltyTypes: inMemoryPenaltyTypes ? Object.fromEntries(inMemoryPenaltyTypes.map((t: any) => [t.name, t.delay_months || 0])) : undefined
+      });
+
+      // Clear previous simulation steps for this snapshot and insert new ones
+      genericMemoryStores['degree-track-simulation-steps'] = (genericMemoryStores['degree-track-simulation-steps'] || []).filter(
+        st => parseInt(String(st.snapshot_id || st.snapshotId)) !== parseInt(String(createdSnapshot.id))
+      );
+
+      for (const step of simResult.simulationSteps) {
+        const stepDbData = {
+          snapshotId: createdSnapshot.id,
+          fromGrade: step.fromGrade,
+          toGrade: step.toGrade,
+          computedDate: step.computedDate,
+          weeksConsumed: step.weeksConsumed,
+          isBundled: step.isBundled || false,
+          status: step.status,
+          notes: step.notes || '',
+          createdAt: new Date()
+        };
+
+        let insertedStep: any = null;
+        try {
+          const [ins] = await db.insert(schema.degreeTrackSimulationSteps).values(stepDbData).returning();
+          if (ins) insertedStep = ins;
+        } catch (e) {}
+
+        if (!insertedStep) {
+          insertedStep = {
+            id: (genericMemoryStores['degree-track-simulation-steps'] || []).length + 1,
+            ...mapKeys(stepDbData, camelToSnake),
+            created_at: new Date().toISOString()
+          };
+        }
+        genericMemoryStores['degree-track-simulation-steps'].push(mapKeys(insertedStep, camelToSnake));
+      }
+
+      // Trigger recalculation of employee eligibility
+      await triggerRecalculateEligibility(empId);
+
+      saveLocalDb();
+      return res.status(201).json({
+        snapshot: mapKeys(createdSnapshot, camelToSnake),
+        simulation: simResult
+      });
+    } catch (err: any) {
+      console.error('Error initiating degree recognition:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 2. Get Simulation Report for Snapshot
+  app.get('/api/degree-track-snapshots/:id/simulation', requireAuth, async (req, res) => {
+    try {
+      const snapId = parseInt(req.params.id);
+      let snapshot = (genericMemoryStores['degree-track-snapshots'] || []).find(s => parseInt(String(s.id)) === snapId);
+      if (!snapshot) {
+        try {
+          const dbSnaps = await db.select().from(schema.degreeTrackSnapshots).where(eq(schema.degreeTrackSnapshots.id, snapId));
+          if (dbSnaps && dbSnaps.length > 0) snapshot = dbSnaps[0];
+        } catch (e) {}
+      }
+      if (!snapshot) return res.status(404).json({ error: 'سجل احتساب الشهادة غير موجود' });
+
+      const empId = parseInt(String(snapshot.employee_id || snapshot.employeeId));
+      const specializationCredits = (genericMemoryStores['specialization-credits'] || []).filter(
+        c => parseInt(String(c.employee_id || c.employeeId)) === empId
+      );
+      const penalties = (genericMemoryStores['penalties'] || []).filter(p => parseInt(String(p.employee_id || p.employeeId)) === empId);
+      const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empId);
+      const attendances = (genericMemoryStores['attendance'] || []).filter(a => parseInt(String(a.employee_id || a.employeeId)) === empId);
+
+      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
+      const simResult = calculateDegreeTrackSimulation(snapshot, {
+        specializationCredits,
+        penalties,
+        leaves,
+        attendances
+      });
+
+      return res.json({
+        snapshot: mapKeys(snapshot, camelToSnake),
+        simulation: simResult
+      });
+    } catch (err: any) {
+      console.error('Error fetching degree track simulation:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 3. Get Active Degree Track for Employee
+  app.get('/api/employees/:id/degree-track', requireAuth, async (req, res) => {
+    try {
+      const empId = parseInt(req.params.id);
+      const snapshot = (genericMemoryStores['degree-track-snapshots'] || []).find(
+        s => parseInt(String(s.employee_id || s.employeeId)) === empId && (s.status === 'نشط' || !s.status)
+      );
+
+      if (!snapshot) return res.json({ hasActiveDegreeTrack: false, snapshot: null, simulation: null });
+
+      const specializationCredits = (genericMemoryStores['specialization-credits'] || []).filter(
+        c => parseInt(String(c.employee_id || c.employeeId)) === empId
+      );
+      const penalties = (genericMemoryStores['penalties'] || []).filter(p => parseInt(String(p.employee_id || p.employeeId)) === empId);
+      const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empId);
+      const attendances = (genericMemoryStores['attendance'] || []).filter(a => parseInt(String(a.employee_id || a.employeeId)) === empId);
+
+      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
+      const simResult = calculateDegreeTrackSimulation(snapshot, {
+        specializationCredits,
+        penalties,
+        leaves,
+        attendances
+      });
+
+      return res.json({
+        hasActiveDegreeTrack: true,
+        snapshot: mapKeys(snapshot, camelToSnake),
+        simulation: simResult
+      });
+    } catch (err: any) {
+      console.error('Error fetching employee degree track:', err);
       res.status(500).json({ error: err.message });
     }
   });

@@ -196,6 +196,9 @@ export interface EngineContextData {
   governingCourses?: GoverningCourseRecord[];
   governingAssignments?: Record<string, any>;
   gradeRules?: GradePromotionRuleRecord[];
+  degreeTrackSnapshot?: any;
+  degreeTrackSnapshots?: any[];
+  specializationCredits?: any[];
   today?: string; // YYYY-MM-DD for deterministic testing
 }
 
@@ -811,6 +814,58 @@ export function calculatePromotionEligibility(
   const hasInServiceDegree = quals.some(
     q => (q.qualificationType === 'أثناء الخدمة' || q.qualification_type === 'أثناء الخدمة') && (q.isActive !== false && q.is_active !== false)
   );
+
+  // Check if active degree track snapshot exists for this employee
+  const matchingSnapshot = context.degreeTrackSnapshot ||
+    (context.degreeTrackSnapshots || []).find(
+      s => String(s.employeeId || s.employee_id) === String(employee.id) && (s.status === 'نشط' || !s.status)
+    );
+
+  if (hasInServiceDegree && matchingSnapshot) {
+    // Import and execute Degree Track Recognition Engine (Phase 2b)
+    const { calculateDegreeTrackSimulation } = require('./degreeTrackEngine');
+    const simResult = calculateDegreeTrackSimulation(matchingSnapshot, context);
+    const rt = simResult.realTimeNextPromotion;
+
+    return {
+      nextPromotionDueDate: rt.nextPromotionDueDate,
+      baseDueDate: addMonthsToDate(rt.anchorStartDate, rt.baseDurationMonths),
+      lastPromotionDate: rt.anchorStartDate,
+      requiredYears: 2,
+      eligibilityStatus: rt.eligibilityStatus as any,
+      isPromotionEligible: rt.isEligible,
+      statusReason: rt.statusReason,
+      isSupported: true,
+      commendationMonthsDeducted: 0,
+      penaltyMonthsAdded: rt.penaltiesDelayMonths,
+      absenceDaysAdded: rt.absenceDaysAdded,
+      serviceCreditDurationDeducted: { years: 0, months: 0, days: 0 },
+      modifiers: {
+        commendationMonths: 0,
+        penaltyDelayMonths: rt.penaltiesDelayMonths,
+        absenceDays: rt.absenceDaysAdded,
+        serviceCreditMonths: 0,
+      },
+      gateCheckResults: {
+        governingCoursesSatisfied: true,
+        missingGoverningCourses: [],
+        evaluationsSatisfied: true,
+        lastEvaluationsGrades: [],
+        activePausingLeave: rt.activePausingLeave,
+        noActivePausingLeaves: !rt.activePausingLeave,
+        pausingLeaveDetails: null,
+      },
+      gateChecks: {
+        governingCoursesSatisfied: true,
+        evaluationsSatisfied: true,
+        noActivePausingLeaves: !rt.activePausingLeave,
+      },
+      deferredItems: [],
+      appliedCommendationsCount: 0,
+      appliedPenaltiesCount: 0,
+      appliedAbsenceDays: rt.absenceDaysAdded,
+    };
+  }
 
   if (hasInServiceDegree) {
     return {

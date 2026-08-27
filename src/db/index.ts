@@ -798,6 +798,67 @@ export async function ensureSchema() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // 15. Education Degrees Baseline Grade & Step Migration
+    await safeQuery(`ALTER TABLE education_degrees ADD COLUMN IF NOT EXISTS baseline_grade INTEGER DEFAULT 7;`);
+    await safeQuery(`ALTER TABLE education_degrees ADD COLUMN IF NOT EXISTS baseline_step INTEGER DEFAULT 1;`);
+
+    // Backfill standard baseline grades for education degrees
+    await safeQuery(`UPDATE education_degrees SET baseline_grade = 5, baseline_step = 1 WHERE name LIKE '%دكتوراه%' AND (baseline_grade IS NULL OR baseline_grade = 7);`);
+    await safeQuery(`UPDATE education_degrees SET baseline_grade = 6, baseline_step = 1 WHERE (name LIKE '%ماجستير%' OR name LIKE '%دبلوم عالي%') AND (baseline_grade IS NULL OR baseline_grade = 7);`);
+    await safeQuery(`UPDATE education_degrees SET baseline_grade = 7, baseline_step = 1 WHERE name LIKE '%بكالوريوس%' AND (baseline_grade IS NULL);`);
+    await safeQuery(`UPDATE education_degrees SET baseline_grade = 8, baseline_step = 1 WHERE (name LIKE '%دبلوم%' AND name NOT LIKE '%عالي%') OR name LIKE '%إعدادية%' OR name LIKE '%اعدادية%';`);
+    await safeQuery(`UPDATE education_degrees SET baseline_grade = 9, baseline_step = 1 WHERE name LIKE '%متوسطة%';`);
+    await safeQuery(`UPDATE education_degrees SET baseline_grade = 10, baseline_step = 1 WHERE name LIKE '%ابتدائية%' OR name LIKE '%يقرأ%';`);
+
+    // 16. Degree Track Snapshots Table (لقطة بدء عملية احتساب الشهادة أثناء الخدمة)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS degree_track_snapshots (
+        id SERIAL PRIMARY KEY,
+        qualification_id INTEGER REFERENCES qualifications(id) ON DELETE CASCADE NOT NULL,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        actual_grade_before INTEGER NOT NULL,
+        actual_step_before INTEGER NOT NULL,
+        baseline_grade INTEGER NOT NULL DEFAULT 7,
+        baseline_step INTEGER NOT NULL DEFAULT 1,
+        graduation_date_used TEXT NOT NULL,
+        order_date TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'نشط',
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 17. Degree Track Simulation Steps Table (سجل خطوات ترفيع المحاكاة للفترة المقضية)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS degree_track_simulation_steps (
+        id SERIAL PRIMARY KEY,
+        snapshot_id INTEGER REFERENCES degree_track_snapshots(id) ON DELETE CASCADE NOT NULL,
+        from_grade INTEGER NOT NULL,
+        to_grade INTEGER NOT NULL,
+        computed_date TEXT NOT NULL,
+        weeks_consumed INTEGER NOT NULL DEFAULT 2,
+        is_bundled BOOLEAN DEFAULT FALSE,
+        status TEXT NOT NULL DEFAULT 'ممنوح_بالمحاكاة',
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 18. Specialization Course Credits Table (رصيد أسابيع تدريب الاختصاص التراكمي)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS specialization_course_credits (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        snapshot_id INTEGER REFERENCES degree_track_snapshots(id) ON DELETE SET NULL,
+        weeks INTEGER NOT NULL DEFAULT 1,
+        course_date TEXT,
+        course_name TEXT,
+        provider TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
   } catch (err) {
     console.error('Migration execution notice:', err);
   }
