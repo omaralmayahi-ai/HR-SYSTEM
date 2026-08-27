@@ -6489,8 +6489,18 @@ async function startServer() {
           genericMemoryStores['job-assignments'] = state.inMemoryJobAssignments;
         }
         if (Array.isArray(state.inMemoryQualifications)) {
-          inMemoryQualifications = state.inMemoryQualifications;
-          genericMemoryStores['qualifications'] = state.inMemoryQualifications;
+          inMemoryQualifications = state.inMemoryQualifications.map((q: any) => {
+            const gradYear = q.graduationYear || q.graduation_year;
+            const gradDate = q.graduationDate || q.graduation_date || (gradYear ? `${gradYear}-01-01` : null);
+            return {
+              ...q,
+              graduationDate: gradDate,
+              graduation_date: gradDate,
+              qualificationType: q.qualificationType || q.qualification_type || 'تعيين',
+              qualification_type: q.qualification_type || q.qualificationType || 'تعيين'
+            };
+          });
+          genericMemoryStores['qualifications'] = inMemoryQualifications;
         }
         if (Array.isArray(state.inMemoryPromotions)) {
           inMemoryPromotions = state.inMemoryPromotions;

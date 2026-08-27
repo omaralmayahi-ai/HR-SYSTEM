@@ -459,6 +459,8 @@ export const qualifications = pgTable('qualifications', {
   university: text('university'), // اسم الجامعة أو الكلية
   country: text('country'), // بلد الدراسة
   graduationYear: integer('graduation_year').notNull(), // سنة التخرج
+  graduationDate: text('graduation_date'), // تاريخ التخرج الكامل (YYYY-MM-DD)
+  qualificationType: text('qualification_type'), // نوع الشهادة: 'تعيين' أو 'أثناء الخدمة'
   average: text('average'), // المعدل
   grade: text('grade'), // التقدير: ضعيف / متوسط / جيد / جيد جداً / امتياز
   equationNumber: text('equation_number'), // رقم كتاب المعادلة/الاحتساب

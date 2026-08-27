@@ -876,6 +876,8 @@ export default function EmployeeDetail() {
         specialization: '', 
         institution: '', 
         graduation_year: new Date().getFullYear(), 
+        graduation_date: `${new Date().getFullYear()}-07-01`,
+        qualification_type: 'تعيين',
         evaluation_order: '',
         equation_number: '',
         education_order: '',
@@ -967,11 +969,15 @@ export default function EmployeeDetail() {
     let editValues = {};
     if (type === 'qualification') {
       const orderVal = record.evaluation_order || record.evaluationOrder || record.equation_number || record.equationNumber || record.education_order || record.educationOrder || '';
+      const gradYr = record.graduation_year || record.graduationYear || new Date().getFullYear();
+      const gradDt = record.graduation_date || record.graduationDate || (gradYr ? `${gradYr}-01-01` : '');
       editValues = {
         education_level: record.education_level || record.educationLevel || record.level || 'بكالوريوس',
         specialization: record.specialization || '',
         institution: record.institution || record.university || '',
-        graduation_year: record.graduation_year || record.graduationYear || new Date().getFullYear(),
+        graduation_year: gradYr,
+        graduation_date: gradDt,
+        qualification_type: record.qualification_type || record.qualificationType || 'تعيين',
         evaluation_order: orderVal,
         equation_number: orderVal,
         education_order: orderVal,
@@ -1163,13 +1169,21 @@ export default function EmployeeDetail() {
       if (activeModal === 'qualification') {
         clientName = 'Qualification';
         const ord = modalForm.evaluation_order || modalForm.equation_number || modalForm.education_order || '';
+        const gDate = modalForm.graduation_date || (modalForm.graduation_year ? `${modalForm.graduation_year}-01-01` : null);
+        const gYear = gDate ? parseInt(gDate.split('-')[0]) : (parseInt(modalForm.graduation_year) || new Date().getFullYear());
+        const qType = modalForm.qualification_type || 'تعيين';
+
         payload.level = modalForm.education_level;
         payload.education_level = modalForm.education_level;
         payload.specialization = modalForm.specialization;
         payload.university = modalForm.institution;
         payload.institution = modalForm.institution;
-        payload.graduationYear = parseInt(modalForm.graduation_year) || 0;
-        payload.graduation_year = parseInt(modalForm.graduation_year) || 0;
+        payload.graduationYear = gYear;
+        payload.graduation_year = gYear;
+        payload.graduationDate = gDate;
+        payload.graduation_date = gDate;
+        payload.qualificationType = qType;
+        payload.qualification_type = qType;
         payload.equationNumber = ord;
         payload.equation_number = ord;
         payload.evaluationOrder = ord;
@@ -2572,9 +2586,10 @@ export default function EmployeeDetail() {
                 <thead>
                   <tr className="bg-slate-50 text-slate-500 border-b border-slate-100">
                     <th className="text-right px-4 py-2.5 font-bold">الشهادة العلمية</th>
+                    <th className="text-center px-4 py-2.5 font-bold">نوع الشهادة</th>
                     <th className="text-right px-4 py-2.5 font-bold">التخصص العام والدقيق</th>
                     <th className="text-right px-4 py-2.5 font-bold">الجهة المانحة والجامعة</th>
-                    <th className="text-right px-4 py-2.5 font-bold">سنة التخرج</th>
+                    <th className="text-right px-4 py-2.5 font-bold">تاريخ التخرج</th>
                     <th className="text-right px-4 py-2.5 font-bold">أمر احتساب الشهادة</th>
                     <th className="text-center px-4 py-2.5 font-bold">الحالة المعتمدة</th>
                     <th className="text-center px-4 py-2.5 font-bold">إجراءات</th>
@@ -2585,6 +2600,8 @@ export default function EmployeeDetail() {
                     const isActiveQual = q.is_active !== false && q.isActive !== false;
                     const qualLevel = q.education_level || q.level || 'بدون';
                     const isCurrentlyCalculated = isActiveQual && (qualLevel === (employee.education_level || employee.educationLevel));
+                    const qType = q.qualification_type || q.qualificationType || 'تعيين';
+                    const gradDateFormatted = q.graduation_date || q.graduationDate || (q.graduation_year || q.graduationYear ? `${q.graduation_year || q.graduationYear}-01-01` : '—');
 
                     return (
                       <tr key={q.id} className={`border-b border-slate-50 hover:bg-slate-50/40 ${!isActiveQual ? 'bg-slate-50/60 opacity-75' : ''}`}>
@@ -2599,9 +2616,18 @@ export default function EmployeeDetail() {
                             )}
                           </div>
                         </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${
+                            qType === 'أثناء الخدمة'
+                              ? 'bg-purple-50 text-purple-700 border-purple-200'
+                              : 'bg-blue-50 text-blue-700 border-blue-200'
+                          }`}>
+                            {qType}
+                          </span>
+                        </td>
                         <td className="px-4 py-3 text-slate-700 font-semibold">{q.specialization || 'بدون تخصص'}</td>
                         <td className="px-4 py-3 text-slate-600">{q.institution || q.university || '—'}</td>
-                        <td className="px-4 py-3 text-slate-600 font-mono text-xs">{q.graduation_year || q.graduationYear || '—'}</td>
+                        <td className="px-4 py-3 text-slate-600 font-mono text-xs">{gradDateFormatted}</td>
                         <td className="px-4 py-3 text-slate-700 font-mono text-xs font-semibold">
                           {q.evaluation_order || q.evaluationOrder || q.equation_number || q.equationNumber || q.education_order || q.educationOrder || (isActiveQual ? (employee.education_order || employee.evaluation_order || employee.educationOrder || employee.evaluationOrder || employee.equation_number || employee.equationNumber) : null) || '—'}
                         </td>
@@ -3745,13 +3771,36 @@ export default function EmployeeDetail() {
                     <Label>التخصص العام والدقيق *</Label>
                     <Input className="mt-1 rounded-xl" value={modalForm.specialization || ''} onChange={e => setModalForm(prev => ({ ...prev, specialization: e.target.value }))} required placeholder="مثال: هندسة برمجيات" />
                   </div>
+                  <div>
+                    <Label>نوع الشهادة *</Label>
+                    <Select 
+                      value={modalForm.qualification_type || 'تعيين'} 
+                      onValueChange={v => setModalForm(prev => ({ ...prev, qualification_type: v, qualificationType: v }))}
+                    >
+                      <SelectTrigger className="mt-1 rounded-xl font-bold"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="تعيين">تعيين (شهادة التعيين الأساسية)</SelectItem>
+                        <SelectItem value="أثناء الخدمة">أثناء الخدمة (شهادة مضافة بعد التعيين)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>تاريخ التخرج الكامل *</Label>
+                    <Input 
+                      type="date" 
+                      className="mt-1 rounded-xl font-mono" 
+                      value={modalForm.graduation_date || ''} 
+                      onChange={e => {
+                        const val = e.target.value;
+                        const yr = val ? parseInt(val.split('-')[0]) : '';
+                        setModalForm(prev => ({ ...prev, graduation_date: val, graduation_year: yr }));
+                      }} 
+                      required 
+                    />
+                  </div>
                   <div className="md:col-span-2">
                     <Label>الجامعة / المعهد / الجهة المانحة *</Label>
                     <Input className="mt-1 rounded-xl" value={modalForm.institution || ''} onChange={e => setModalForm(prev => ({ ...prev, institution: e.target.value }))} required placeholder="مثال: جامعة بغداد / كلية الهندسة" />
-                  </div>
-                  <div>
-                    <Label>سنة التخرج *</Label>
-                    <Input type="number" className="mt-1 rounded-xl" value={modalForm.graduation_year || ''} onChange={e => setModalForm(prev => ({ ...prev, graduation_year: parseInt(e.target.value) || '' }))} required />
                   </div>
                   <div>
                     <Label>رقم أمر احتساب الشهادة</Label>

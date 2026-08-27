@@ -487,11 +487,27 @@ export async function ensureSchema() {
         specialization TEXT,
         university TEXT,
         graduation_year INTEGER,
+        graduation_date TEXT,
+        qualification_type TEXT,
         equation_number TEXT,
         equation_date TEXT,
         is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+    `);
+
+    await safeQuery(`ALTER TABLE qualifications ADD COLUMN IF NOT EXISTS graduation_date TEXT;`);
+    await safeQuery(`ALTER TABLE qualifications ADD COLUMN IF NOT EXISTS qualification_type TEXT;`);
+    await safeQuery(`ALTER TABLE qualifications ADD COLUMN IF NOT EXISTS sub_specialization TEXT;`);
+    await safeQuery(`ALTER TABLE qualifications ADD COLUMN IF NOT EXISTS country TEXT;`);
+    await safeQuery(`ALTER TABLE qualifications ADD COLUMN IF NOT EXISTS average TEXT;`);
+    await safeQuery(`ALTER TABLE qualifications ADD COLUMN IF NOT EXISTS grade TEXT;`);
+
+    // Backfill graduation_date: approximate to 1st January of graduation_year for legacy records
+    await safeQuery(`
+      UPDATE qualifications 
+      SET graduation_date = CONCAT(graduation_year, '-01-01')
+      WHERE graduation_date IS NULL AND graduation_year IS NOT NULL;
     `);
 
     // 1. Trainers Table
