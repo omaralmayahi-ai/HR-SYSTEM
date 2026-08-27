@@ -4829,11 +4829,28 @@ async function startServer() {
     }
 
     // Sync Grade, Step and Date with Central Employee Record
+    const movementType = String(data.movement_type || data.movementType || '').trim();
+    const actionDate = data.order_date || data.orderDate || data.due_date || data.dueDate;
+
     const empUpdate: any = {};
     if (data.grade_after || data.gradeAfter) empUpdate.grade = data.grade_after || data.gradeAfter;
     if (data.step_after || data.stepAfter) empUpdate.step = parseInt(data.step_after || data.stepAfter);
-    if (data.order_date || data.orderDate || data.due_date || data.dueDate) {
-      empUpdate.gradeDate = data.order_date || data.orderDate || data.due_date || data.dueDate;
+    if (actionDate) {
+      empUpdate.gradeDate = actionDate;
+    }
+
+    // Specific field update based on movement type:
+    // "ترفيع درجة" -> updates lastPromotionDate (preserves lastIncrementDate)
+    // "علاوة سنوية" -> updates lastIncrementDate (preserves lastPromotionDate)
+    if (movementType.includes('ترفيع')) {
+      if (actionDate) empUpdate.lastPromotionDate = actionDate;
+    } else if (movementType.includes('علاوة')) {
+      if (actionDate) empUpdate.lastIncrementDate = actionDate;
+    } else {
+      if (actionDate) {
+        empUpdate.lastPromotionDate = actionDate;
+        empUpdate.lastIncrementDate = actionDate;
+      }
     }
     await updateEmployeeCentralRecord(employeeId, empUpdate);
 
