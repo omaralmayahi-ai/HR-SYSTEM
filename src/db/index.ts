@@ -776,6 +776,9 @@ export async function ensureSchema() {
       FROM leave_types lt
       WHERE lr.leave_type_id IS NULL AND TRIM(lr.leave_type) = TRIM(lt.name);
     `);
+
+    // 13. Job Titles career ladder migration
+    await safeQuery(`ALTER TABLE job_titles ADD COLUMN IF NOT EXISTS next_title_id INTEGER;`);
   } catch (err) {
     console.error('Migration execution notice:', err);
   }

@@ -881,6 +881,7 @@ export const jobTitles = pgTable('job_titles', {
   name: text('name').notNull(),
   category: text('category').default('عام'), // هندسي، إداري، مالي، قانوني، حاسبات وتقنية، فني، طبي وصحي، خدمات، أخرى
   minGrade: integer('min_grade').default(7), // الدرجة الوظيفية المقترحة
+  nextTitleId: integer('next_title_id'), // العنوان الوظيفي التالي في الترقية / التدرج الهرمي
   status: text('status').default('فعال'), // فعال / معطل
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),

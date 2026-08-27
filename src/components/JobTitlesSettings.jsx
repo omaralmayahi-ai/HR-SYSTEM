@@ -63,6 +63,7 @@ export default function JobTitlesSettings() {
     name: '',
     category: 'عام',
     min_grade: 7,
+    next_title_id: null,
     status: 'فعال',
     notes: ''
   });
@@ -119,6 +120,7 @@ export default function JobTitlesSettings() {
       name: '',
       category: 'عام',
       min_grade: 7,
+      next_title_id: null,
       status: 'فعال',
       notes: ''
     });
@@ -131,6 +133,7 @@ export default function JobTitlesSettings() {
       name: titleItem.name || '',
       category: titleItem.category || 'عام',
       min_grade: titleItem.min_grade || titleItem.minGrade || 7,
+      next_title_id: titleItem.next_title_id || titleItem.nextTitleId || null,
       status: titleItem.status || 'فعال',
       notes: titleItem.notes || ''
     });
@@ -376,6 +379,7 @@ export default function JobTitlesSettings() {
                 <th className="px-4 py-3.5">العنوان الوظيفي</th>
                 <th className="px-4 py-3.5">المجال / التخصص</th>
                 <th className="px-4 py-3.5">الدرجة المقترحة</th>
+                <th className="px-4 py-3.5">العنوان التالي بالترقية</th>
                 <th className="px-4 py-3.5 text-center">الحالة</th>
                 <th className="px-4 py-3.5">الملاحظات</th>
                 <th className="px-4 py-3.5 w-28 text-center">الإجراءات</th>
@@ -384,14 +388,14 @@ export default function JobTitlesSettings() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 text-slate-400">
+                  <td colSpan={8} className="text-center py-12 text-slate-400">
                     <RefreshCw size={24} className="animate-spin mx-auto mb-2 text-[#1B3A6B]" />
                     <p className="font-semibold text-xs">جاري تحميل دليل العناوين الوظيفية...</p>
                   </td>
                 </tr>
               ) : filteredTitles.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 text-slate-400">
+                  <td colSpan={8} className="text-center py-12 text-slate-400">
                     <Briefcase size={36} className="mx-auto mb-2 opacity-30" />
                     <p className="font-bold text-sm text-slate-600">لا توجد عناوين وظيفية مطابقة</p>
                     <p className="text-xs text-slate-400 mt-1">جرّب تغيير كلمات البحث أو التصنيف المحدد، أو أضف عنواناً جديداً.</p>
@@ -401,6 +405,8 @@ export default function JobTitlesSettings() {
                 filteredTitles.map((item, index) => {
                   const isActive = item.status === 'فعال' || !item.status;
                   const catClass = CATEGORY_COLORS[item.category] || CATEGORY_COLORS['عام'];
+                  const nextId = item.next_title_id || item.nextTitleId;
+                  const nextObj = nextId ? titles.find(t => t.id === nextId) : null;
 
                   return (
                     <tr 
@@ -430,6 +436,16 @@ export default function JobTitlesSettings() {
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold text-[11px]">
                           الدرجة {item.min_grade || item.minGrade || 7}
                         </span>
+                      </td>
+
+                      <td className="px-4 py-3.5">
+                        {nextObj ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-bold text-[11px] border border-indigo-200">
+                            {nextObj.name}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300 text-xs">-</span>
+                        )}
                       </td>
 
                       <td className="px-4 py-3.5 text-center">
@@ -541,6 +557,28 @@ export default function JobTitlesSettings() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div>
+              <Label className="text-xs font-bold text-slate-700">العنوان التالي بالترقية (المسار الوظيفي)</Label>
+              <Select
+                value={form.next_title_id ? String(form.next_title_id) : 'none'}
+                onValueChange={(v) => setForm(prev => ({ ...prev, next_title_id: v === 'none' ? null : parseInt(v) }))}
+              >
+                <SelectTrigger className="mt-1 rounded-xl text-xs">
+                  <SelectValue placeholder="اختر العنوان التالي (اختياري)" />
+                </SelectTrigger>
+                <SelectContent className="z-[9999] max-h-56">
+                  <SelectItem value="none">بدون تحديد (نهاية السلم أو غير مقيد)</SelectItem>
+                  {titles
+                    .filter(t => !editingTitle || t.id !== editingTitle.id)
+                    .map(t => (
+                      <SelectItem key={t.id} value={String(t.id)}>
+                        {t.name} (الدرجة {t.min_grade || t.minGrade || '-'})
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div>

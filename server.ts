@@ -2816,15 +2816,19 @@ async function startServer() {
   });
 
   app.post('/api/job-titles', requireAuth, async (req, res) => {
-    const { name, category, min_grade, status, notes } = req.body;
+    const { name, category, min_grade, minGrade, next_title_id, nextTitleId, status, notes } = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'اسم العنوان الوظيفي مطلوب' });
     }
+    const mGrade = min_grade !== undefined ? parseInt(min_grade) : (minGrade !== undefined ? parseInt(minGrade) : 7);
+    const nxtId = next_title_id !== undefined ? (next_title_id ? parseInt(next_title_id) : null) : (nextTitleId !== undefined ? (nextTitleId ? parseInt(nextTitleId) : null) : null);
+
     try {
       const [newRecord] = await db.insert(schema.jobTitles).values({
         name: name.trim(),
         category: category || 'عام',
-        minGrade: min_grade !== undefined ? parseInt(min_grade) : 7,
+        minGrade: mGrade,
+        nextTitleId: nxtId,
         status: status || 'فعال',
         notes: notes || '',
       }).returning();
@@ -2840,8 +2844,10 @@ async function startServer() {
       id: newId,
       name: name.trim(),
       category: category || 'عام',
-      min_grade: min_grade !== undefined ? parseInt(min_grade) : 7,
-      minGrade: min_grade !== undefined ? parseInt(min_grade) : 7,
+      min_grade: mGrade,
+      minGrade: mGrade,
+      next_title_id: nxtId,
+      nextTitleId: nxtId,
       status: status || 'فعال',
       notes: notes || '',
       created_at: new Date().toISOString(),
@@ -2854,7 +2860,9 @@ async function startServer() {
 
   app.put('/api/job-titles/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, category, min_grade, status, notes } = req.body;
+    const { name, category, min_grade, minGrade, next_title_id, nextTitleId, status, notes } = req.body;
+    const mGrade = min_grade !== undefined ? parseInt(min_grade) : (minGrade !== undefined ? parseInt(minGrade) : undefined);
+    const nxtId = next_title_id !== undefined ? (next_title_id ? parseInt(next_title_id) : null) : (nextTitleId !== undefined ? (nextTitleId ? parseInt(nextTitleId) : null) : undefined);
 
     // Referential guard: check if deactivating an in-use job title
     if (status === 'معطل' || status === 'غير فعال') {
@@ -2865,15 +2873,16 @@ async function startServer() {
     }
 
     try {
+      const updateData: any = { updatedAt: new Date() };
+      if (name) updateData.name = name.trim();
+      if (category !== undefined) updateData.category = category;
+      if (mGrade !== undefined) updateData.minGrade = mGrade;
+      if (nxtId !== undefined) updateData.nextTitleId = nxtId;
+      if (status !== undefined) updateData.status = status;
+      if (notes !== undefined) updateData.notes = notes;
+
       const [updated] = await db.update(schema.jobTitles)
-        .set({
-          name: name ? name.trim() : undefined,
-          category: category !== undefined ? category : undefined,
-          minGrade: min_grade !== undefined ? parseInt(min_grade) : undefined,
-          status: status !== undefined ? status : undefined,
-          notes: notes !== undefined ? notes : undefined,
-          updatedAt: new Date(),
-        })
+        .set(updateData)
         .where(eq(schema.jobTitles.id, id))
         .returning();
       if (updated) {
@@ -2889,8 +2898,10 @@ async function startServer() {
         ...inMemoryJobTitles[idx],
         name: name ? name.trim() : inMemoryJobTitles[idx].name,
         category: category !== undefined ? category : inMemoryJobTitles[idx].category,
-        min_grade: min_grade !== undefined ? parseInt(min_grade) : inMemoryJobTitles[idx].min_grade,
-        minGrade: min_grade !== undefined ? parseInt(min_grade) : inMemoryJobTitles[idx].minGrade,
+        min_grade: mGrade !== undefined ? mGrade : inMemoryJobTitles[idx].min_grade,
+        minGrade: mGrade !== undefined ? mGrade : inMemoryJobTitles[idx].minGrade,
+        next_title_id: nxtId !== undefined ? nxtId : inMemoryJobTitles[idx].next_title_id,
+        nextTitleId: nxtId !== undefined ? nxtId : inMemoryJobTitles[idx].nextTitleId,
         status: status !== undefined ? status : inMemoryJobTitles[idx].status,
         notes: notes !== undefined ? notes : inMemoryJobTitles[idx].notes,
         updated_at: new Date().toISOString(),
@@ -2899,7 +2910,7 @@ async function startServer() {
       saveLocalDb();
       return res.json(mapKeys(inMemoryJobTitles[idx], camelToSnake));
     }
-    res.json({ id, name, category, min_grade, status, notes });
+    res.json({ id, name, category, min_grade: mGrade, next_title_id: nxtId, status, notes });
   });
 
   app.delete('/api/job-titles/:id', requireAuth, async (req, res) => {
