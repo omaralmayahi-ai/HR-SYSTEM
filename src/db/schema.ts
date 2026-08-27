@@ -867,3 +867,13 @@ export const jobTitles = pgTable('job_titles', {
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
+
+// 36. Grade Promotion Rules table (سنوات الترفيع القانونية لكل درجة وظيفية)
+export const gradePromotionRules = pgTable('grade_promotion_rules', {
+  id: serial('id').primaryKey(),
+  grade: integer('grade').notNull().unique(), // الدرجة الوظيفية (1 - 10, والدرجات الخاصة 11, 12, 13)
+  promotionYears: integer('promotion_years'), // عدد سنوات الخدمة المطلوبة للترفيع للدرجة الأعلى (null يعني لا يوجد ترفيع أعلى)
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});

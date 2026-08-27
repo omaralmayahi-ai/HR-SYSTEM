@@ -655,6 +655,37 @@ export async function ensureSchema() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // 8. Grade Promotion Rules Table (سنوات الترفيع لكل درجة وظيفية)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS grade_promotion_rules (
+        id SERIAL PRIMARY KEY,
+        grade INTEGER UNIQUE NOT NULL,
+        promotion_years INTEGER,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await safeQuery(`
+      INSERT INTO grade_promotion_rules (grade, promotion_years, notes)
+      VALUES 
+        (1, NULL, 'قمة السلم الوظيفي - لا يوجد ترفيع أعلى'),
+        (2, 5, 'الدرجة الثانية إلى الأولى'),
+        (3, 5, 'الدرجة الثالثة إلى الثانية'),
+        (4, 5, 'الدرجة الرابعة إلى الثالثة'),
+        (5, 5, 'الدرجة الخامسة إلى الرابعة'),
+        (6, 4, 'الدرجة السادسة إلى الخامسة'),
+        (7, 4, 'الدرجة السابعة إلى السادسة'),
+        (8, 4, 'الدرجة الثامنة إلى السابعة'),
+        (9, 4, 'الدرجة التاسعة إلى الثامنة'),
+        (10, 4, 'الدرجة العاشرة إلى التاسعة'),
+        (11, NULL, 'درجة خاصة / عليا أ'),
+        (12, NULL, 'درجة خاصة / عليا ب'),
+        (13, NULL, 'درجة خاصة / عليا ج')
+      ON CONFLICT (grade) DO NOTHING;
+    `);
   } catch (err) {
     console.error('Migration execution notice:', err);
   }

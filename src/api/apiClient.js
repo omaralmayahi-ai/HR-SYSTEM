@@ -198,7 +198,8 @@ export const apiClient = {
     PenaltyType: createEntityClient('penalty-types'),
     EvaluationForm: createEntityClient('evaluation-forms'),
     GoverningCourse: createEntityClient('governing-courses'),
-    JobTitle: createEntityClient('job-titles')
+    JobTitle: createEntityClient('job-titles'),
+    GradePromotionRule: createEntityClient('grade-promotion-rules')
   },
   settings: {
     get: async () => request('/api/settings'),

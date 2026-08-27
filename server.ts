@@ -2654,6 +2654,22 @@ async function startServer() {
     return records;
   }
 
+  let inMemoryGradePromotionRules: any[] = [
+    { id: 1, grade: 1, promotion_years: null, promotionYears: null, notes: 'قمة السلم الوظيفي - لا يوجد ترفيع أعلى' },
+    { id: 2, grade: 2, promotion_years: 5, promotionYears: 5, notes: 'الدرجة الثانية إلى الأولى' },
+    { id: 3, grade: 3, promotion_years: 5, promotionYears: 5, notes: 'الدرجة الثالثة إلى الثانية' },
+    { id: 4, grade: 4, promotion_years: 5, promotionYears: 5, notes: 'الدرجة الرابعة إلى الثالثة' },
+    { id: 5, grade: 5, promotion_years: 5, promotionYears: 5, notes: 'الدرجة الخامسة إلى الرابعة' },
+    { id: 6, grade: 6, promotion_years: 4, promotionYears: 4, notes: 'الدرجة السادسة إلى الخامسة' },
+    { id: 7, grade: 7, promotion_years: 4, promotionYears: 4, notes: 'الدرجة السابعة إلى السادسة' },
+    { id: 8, grade: 8, promotion_years: 4, promotionYears: 4, notes: 'الدرجة الثامنة إلى السابعة' },
+    { id: 9, grade: 9, promotion_years: 4, promotionYears: 4, notes: 'الدرجة التاسعة إلى الثامنة' },
+    { id: 10, grade: 10, promotion_years: 4, promotionYears: 4, notes: 'الدرجة العاشرة إلى التاسعة' },
+    { id: 11, grade: 11, promotion_years: null, promotionYears: null, notes: 'درجة خاصة / عليا أ' },
+    { id: 12, grade: 12, promotion_years: null, promotionYears: null, notes: 'درجة خاصة / عليا ب' },
+    { id: 13, grade: 13, promotion_years: null, promotionYears: null, notes: 'درجة خاصة / عليا ج' },
+  ];
+
   let inMemoryAllowancesDeductions: any[] = [
     { id: 1, name: 'مخصصات شهادة دكتوراه', type: 'allowance', calcType: 'percentage', value: 100, status: 'فعال' },
     { id: 2, name: 'مخصصات شهادة ماجستير', type: 'allowance', calcType: 'percentage', value: 75, status: 'فعال' },
@@ -2995,6 +3011,99 @@ async function startServer() {
     inMemorySalaryScale = inMemorySalaryScale.filter(r => r.id !== id);
     saveLocalDb();
     res.json({ success: true });
+  });
+
+  // --- Grade Promotion Rules API (سنوات الترفيع القانونية لكل درجة) ---
+  app.get('/api/grade-promotion-rules', requireAuth, async (req, res) => {
+    try {
+      const records = await db.select().from(schema.gradePromotionRules).orderBy(asc(schema.gradePromotionRules.grade));
+      if (records && records.length > 0) {
+        return res.json(records.map(r => mapKeys(r, camelToSnake)));
+      }
+    } catch (error: any) {
+      console.warn('Database fallback for grade promotion rules query');
+    }
+    res.json(inMemoryGradePromotionRules.map(r => mapKeys(r, camelToSnake)));
+  });
+
+  app.put('/api/grade-promotion-rules/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    const { promotion_years, promotionYears, notes } = req.body;
+    const pYears = promotion_years !== undefined ? (promotion_years === null || promotion_years === '' ? null : parseInt(promotion_years)) : (promotionYears !== undefined ? (promotionYears === null || promotionYears === '' ? null : parseInt(promotionYears)) : undefined);
+    
+    try {
+      const updateData: any = { updatedAt: new Date() };
+      if (pYears !== undefined) updateData.promotionYears = pYears;
+      if (notes !== undefined) updateData.notes = notes;
+
+      const [updated] = await db.update(schema.gradePromotionRules)
+        .set(updateData)
+        .where(eq(schema.gradePromotionRules.id, id))
+        .returning();
+      if (updated) {
+        const idx = inMemoryGradePromotionRules.findIndex(r => r.id === id || r.grade === id);
+        if (idx !== -1) {
+          inMemoryGradePromotionRules[idx] = { ...inMemoryGradePromotionRules[idx], ...mapKeys(updated, camelToSnake), ...updated };
+        }
+        saveLocalDb();
+        return res.json(mapKeys(updated, camelToSnake));
+      }
+    } catch (error: any) {
+      console.warn('Database fallback for update grade promotion rule');
+    }
+
+    const idx = inMemoryGradePromotionRules.findIndex(r => r.id === id || r.grade === id);
+    if (idx !== -1) {
+      if (pYears !== undefined) {
+        inMemoryGradePromotionRules[idx].promotionYears = pYears;
+        inMemoryGradePromotionRules[idx].promotion_years = pYears;
+      }
+      if (notes !== undefined) inMemoryGradePromotionRules[idx].notes = notes;
+      inMemoryGradePromotionRules[idx].updatedAt = new Date().toISOString();
+      saveLocalDb();
+      return res.json(mapKeys(inMemoryGradePromotionRules[idx], camelToSnake));
+    }
+
+    res.json({ id, promotion_years: pYears, notes });
+  });
+
+  app.put('/api/grade-promotion-rules', requireAuth, async (req, res) => {
+    const items = req.body;
+    if (!Array.isArray(items)) {
+      return res.status(400).json({ error: 'Body must be an array of rules' });
+    }
+    try {
+      for (const item of items) {
+        const g = parseInt(item.grade);
+        const pYears = item.promotion_years !== undefined ? (item.promotion_years === null || item.promotion_years === '' ? null : parseInt(item.promotion_years)) : (item.promotionYears !== undefined ? (item.promotionYears === null || item.promotionYears === '' ? null : parseInt(item.promotionYears)) : null);
+        await db.insert(schema.gradePromotionRules).values({
+          grade: g,
+          promotionYears: pYears,
+          notes: item.notes || ''
+        }).onConflictDoUpdate({
+          target: schema.gradePromotionRules.grade,
+          set: {
+            promotionYears: pYears,
+            notes: item.notes || '',
+            updatedAt: new Date()
+          }
+        });
+      }
+    } catch (error: any) {
+      console.warn('Database fallback for bulk grade promotion rules');
+    }
+
+    items.forEach(item => {
+      const idx = inMemoryGradePromotionRules.findIndex(r => r.grade === parseInt(item.grade) || r.id === parseInt(item.id));
+      const pYears = item.promotion_years !== undefined ? (item.promotion_years === null || item.promotion_years === '' ? null : parseInt(item.promotion_years)) : (item.promotionYears !== undefined ? (item.promotionYears === null || item.promotionYears === '' ? null : parseInt(item.promotionYears)) : null);
+      if (idx !== -1) {
+        inMemoryGradePromotionRules[idx].promotionYears = pYears;
+        inMemoryGradePromotionRules[idx].promotion_years = pYears;
+        if (item.notes !== undefined) inMemoryGradePromotionRules[idx].notes = item.notes;
+      }
+    });
+    saveLocalDb();
+    res.json({ success: true, count: items.length });
   });
 
   // --- Allowances and Deductions API ---
@@ -6057,6 +6166,7 @@ async function startServer() {
         inMemoryShiftSystems,
         inMemoryLeaveTypes,
         inMemorySalaryScale,
+        inMemoryGradePromotionRules,
         inMemoryJobTitles,
         systemSettingsStore,
         leaveAccrualLogs,
@@ -6176,6 +6286,7 @@ async function startServer() {
         if (Array.isArray(state.inMemoryShiftSystems) && state.inMemoryShiftSystems.length > 0) inMemoryShiftSystems = state.inMemoryShiftSystems;
         if (Array.isArray(state.inMemoryLeaveTypes) && state.inMemoryLeaveTypes.length > 0) inMemoryLeaveTypes = state.inMemoryLeaveTypes;
         if (Array.isArray(state.inMemorySalaryScale) && state.inMemorySalaryScale.length > 0) inMemorySalaryScale = state.inMemorySalaryScale;
+        if (Array.isArray(state.inMemoryGradePromotionRules) && state.inMemoryGradePromotionRules.length > 0) inMemoryGradePromotionRules = state.inMemoryGradePromotionRules;
         if (Array.isArray(state.inMemoryJobTitles) && state.inMemoryJobTitles.length > 0) inMemoryJobTitles = state.inMemoryJobTitles;
         if (state.systemSettingsStore && typeof state.systemSettingsStore === 'object') {
           systemSettingsStore = { ...systemSettingsStore, ...state.systemSettingsStore };
