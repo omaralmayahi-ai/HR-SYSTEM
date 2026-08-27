@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings as SettingsIcon, CalendarDays, GraduationCap, ShieldAlert, Briefcase, Wallet, TrendingDown, Clock, FileSpreadsheet, GripVertical, RotateCcw, ClipboardCheck, ChevronLeft } from 'lucide-react';
+import { Settings as SettingsIcon, CalendarDays, GraduationCap, ShieldAlert, Briefcase, Wallet, TrendingDown, TrendingUp, Clock, FileSpreadsheet, GripVertical, RotateCcw, ClipboardCheck, ChevronLeft } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
 
 // Sub-settings components
@@ -17,6 +17,7 @@ import PenaltyTypesSettings from '@/components/PenaltyTypesSettings';
 import EvaluationFormsSettings from '@/components/EvaluationFormsSettings';
 import GoverningCoursesSettings from '@/components/GoverningCoursesSettings';
 import JobTitlesSettings from '@/components/JobTitlesSettings';
+import PromotionRulesSettings from '@/components/PromotionRulesSettings';
 
 const DEFAULT_TABS = [
   {
@@ -102,6 +103,13 @@ const DEFAULT_TABS = [
     icon: CalendarDays,
     color: 'bg-teal-100 text-teal-700',
     activeColor: 'bg-teal-50 text-teal-700 shadow-sm border-teal-150',
+  },
+  {
+    id: 'promotionRules',
+    label: 'ضوابط الترقية والعلاوة وكتب الشكر',
+    icon: TrendingUp,
+    color: 'bg-emerald-100 text-emerald-800',
+    activeColor: 'bg-emerald-50 text-emerald-800 shadow-sm border-emerald-200 font-bold',
   },
   {
     id: 'employeeImport',
@@ -423,6 +431,18 @@ export default function SystemSettings() {
                 transition={{ duration: 0.2 }}
               >
                 <LeaveTypesSettings />
+              </motion.div>
+            )}
+
+            {activeTab === 'promotionRules' && (
+              <motion.div
+                key="promotionRules"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.2 }}
+              >
+                <PromotionRulesSettings />
               </motion.div>
             )}
           </AnimatePresence>
