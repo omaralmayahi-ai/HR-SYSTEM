@@ -501,19 +501,39 @@ describe('Phase 2b: Degree Track Recognition Engine (محرك مسار احتس�
   });
 
   // ============================================================================
-  // اختبار إضافي: دقة تعيين الدرجة الأساس القانونية
+  // اختبار 12: تعيين الدرجة والمرحلة الأساس بناءً على العنوان الوظيفي (job_titles) والتوافقية القديمة
   // ============================================================================
-  it('12. مطابقة الدرجة الأساس القانونية ومرحلة الأساس لمختلف التحصيلات الدراسية', () => {
+  it('12. تعيين الدرجة والمرحلة الأساس بناءً على العنوان الوظيفي المعتمد jobTitleId ومرحلة الأساس min_step', () => {
+    // محاكاة عنوان وظيفي مقترن (مثلاً: مهندس min_grade: 7, min_step: 2)
+    const snapshotEngineer: DegreeTrackSnapshotEntity = {
+      id: 991,
+      qualificationId: 881,
+      employeeId: 15,
+      jobTitleId: 1, // معرف العنوان الوظيفي
+      actualGradeBefore: 4,
+      actualStepBefore: 1,
+      baselineGrade: 7, // مستخرج من job_titles.min_grade
+      baselineStep: 2,  // مستخرج من job_titles.min_step
+      graduationDateUsed: '2022-01-01',
+      orderDate: '2026-01-01',
+      status: 'نشط'
+    };
+
+    const result = calculateDegreeTrackSimulation(snapshotEngineer, {
+      specializationCredits: [{ employeeId: 15, weeks: 4, courseName: 'دورة هندسية' }],
+      today: '2026-01-01'
+    });
+
+    expect(result.jobTitleId).toBe(1);
+    expect(result.baselineGrade).toBe(7);
+    expect(result.baselineStep).toBe(2);
+    expect(result.simulatedGradeReached).toBe(5); // 7 -> 6 -> 5 (دورتان كل سنتين)
+
+    // التحقق من أن resolveDegreeBaseline القديمة تعمل كـ Deprecated Fallback للتوافقية
     expect(resolveDegreeBaseline('دكتوراه هندسة')).toEqual({ grade: 5, step: 1 });
     expect(resolveDegreeBaseline('ماجستير علوم حاسوب')).toEqual({ grade: 6, step: 1 });
-    expect(resolveDegreeBaseline('دبلوم عالي')).toEqual({ grade: 6, step: 1 });
-    expect(resolveDegreeBaseline('بكالوريوس قانون')).toEqual({ grade: 7, step: 1 });
     expect(resolveDegreeBaseline('بكالوريوس هندسة')).toEqual({ grade: 7, step: 2 });
-    expect(resolveDegreeBaseline('بكالوريوس طب عام')).toEqual({ grade: 7, step: 3 });
-    expect(resolveDegreeBaseline('دبلوم فني')).toEqual({ grade: 8, step: 1 });
-    expect(resolveDegreeBaseline('إعدادية علمي')).toEqual({ grade: 8, step: 1 });
-    expect(resolveDegreeBaseline('متوسطة')).toEqual({ grade: 9, step: 1 });
-    expect(resolveDegreeBaseline('ابتدائية')).toEqual({ grade: 10, step: 1 });
   });
 
 });
+

@@ -296,6 +296,74 @@ export default function EmployeeDetail() {
   const [deleteDialog, setDeleteDialog] = useState({ open: false, clientName: '', recordId: null, presetId: null });
   const [deleting, setDeleting] = useState(false);
 
+  // Degree Recognition Modal State
+  const [degreeRecogModal, setDegreeRecogModal] = useState({
+    open: false,
+    qualification: null,
+    jobTitleId: '',
+    notes: '',
+    saving: false
+  });
+  const [availableJobTitles, setAvailableJobTitles] = useState([]);
+
+  const handleOpenDegreeRecognitionModal = async (qual) => {
+    try {
+      const titles = await apiClient.entities.JobTitle.list();
+      const activeTitles = (titles || []).filter(t => t.status === 'فعال' || !t.status);
+      setAvailableJobTitles(activeTitles);
+      setDegreeRecogModal({
+        open: true,
+        qualification: qual,
+        jobTitleId: activeTitles.length > 0 ? String(activeTitles[0].id) : '',
+        notes: '',
+        saving: false
+      });
+    } catch (err) {
+      console.error('Error fetching job titles for degree recognition:', err);
+      toast({
+        title: 'خطأ',
+        description: 'تعذر جلب قائمة العناوين الوظيفية',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  const handleConfirmDegreeRecognition = async () => {
+    if (!degreeRecogModal.jobTitleId) {
+      toast({
+        title: 'تنبيه',
+        description: 'يرجى اختيار العنوان الوظيفي المرتبط بالشهادة',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    try {
+      setDegreeRecogModal(prev => ({ ...prev, saving: true }));
+      await apiClient.post(`/qualifications/${degreeRecogModal.qualification.id}/initiate-degree-recognition`, {
+        job_title_id: parseInt(degreeRecogModal.jobTitleId),
+        notes: degreeRecogModal.notes
+      });
+
+      toast({
+        title: 'تم بدء احتساب الشهادة بنجاح',
+        description: 'تم إطلاق مسار المحاكاة وربط الشهادة بالعنوان الوظيفي المختار.',
+      });
+
+      setDegreeRecogModal({ open: false, qualification: null, jobTitleId: '', notes: '', saving: false });
+      await fetchData();
+    } catch (err) {
+      console.error('Error initiating degree recognition:', err);
+      toast({
+        title: 'فشل في بدء احتساب الشهادة',
+        description: err.message || 'حدث خطأ أثناء بدء عملية الاحتساب',
+        variant: 'destructive'
+      });
+    } finally {
+      setDegreeRecogModal(prev => ({ ...prev, saving: false }));
+    }
+  };
+
   const fetchData = async () => {
     try {
       const [
@@ -2663,6 +2731,18 @@ export default function EmployeeDetail() {
                         </td>
                         <td className="px-4 py-3 text-center">
                           <div className="flex items-center justify-center gap-1">
+                            {qType === 'أثناء الخدمة' && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 px-2.5 text-xs font-bold rounded-lg gap-1.5 border-purple-300 text-purple-700 hover:bg-purple-50 hover:border-purple-400"
+                                onClick={() => handleOpenDegreeRecognitionModal(q)}
+                                title="بدء احتساب الشهادة أثناء الخدمة وربطها بالعنوان الوظيفي ومحاكاة الترفيع"
+                              >
+                                <Award size={13} className="text-purple-600" />
+                                احتساب الشهادة
+                              </Button>
+                            )}
                             <Button
                               size="sm"
                               variant="outline"
@@ -4765,6 +4845,121 @@ export default function EmployeeDetail() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 16. Degree Recognition Initiation Modal */}
+      <Dialog
+        open={degreeRecogModal.open}
+        onOpenChange={(isOpen) => {
+          if (!isOpen && !degreeRecogModal.saving) {
+            setDegreeRecogModal({ open: false, qualification: null, jobTitleId: '', notes: '', saving: false });
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg rounded-2xl p-6" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-[#1B3A6B] flex items-center gap-2">
+              <Award className="text-purple-600" size={22} />
+              بدء مسار احتساب الشهادة الحاصل عليها أثناء الخدمة
+            </DialogTitle>
+          </DialogHeader>
+
+          {degreeRecogModal.qualification && (() => {
+            const selectedTitle = availableJobTitles.find(t => String(t.id) === String(degreeRecogModal.jobTitleId));
+            const qual = degreeRecogModal.qualification;
+            const qualLevel = qual.level || qual.education_level || '—';
+            const gradDate = qual.graduation_date || qual.graduationDate || (qual.graduation_year ? `${qual.graduation_year}-01-01` : '—');
+            const baselineGrade = selectedTitle ? (selectedTitle.min_grade || selectedTitle.minGrade || 7) : 7;
+            const baselineStep = selectedTitle ? (selectedTitle.min_step || selectedTitle.minStep || 1) : 1;
+
+            return (
+              <div className="space-y-4 mt-3">
+                <div className="bg-purple-50/70 border border-purple-200 rounded-xl p-3.5 space-y-2 text-xs">
+                  <div className="flex justify-between items-center text-purple-950 font-bold">
+                    <span>بيانات الشهادة المراد احتسابها:</span>
+                    <span className="bg-purple-200/80 px-2 py-0.5 rounded-md text-[11px]">{qualLevel}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-purple-900 text-[11px]">
+                    <div>التخصص: <span className="font-semibold">{qual.specialization || '—'}</span></div>
+                    <div>تاريخ التخرج: <span className="font-semibold font-mono">{gradDate}</span></div>
+                    <div>الجهة المانحة: <span className="font-semibold">{qual.university || qual.institution || '—'}</span></div>
+                    <div>رقم أمر المعادلة: <span className="font-semibold font-mono">{qual.equation_number || qual.evaluation_order || '—'}</span></div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <Label className="text-xs font-bold text-slate-700">
+                      العنوان الوظيفي المقترن بالشهادة (محدد الدرجة والمرحلة الأساس) *
+                    </Label>
+                    <Select
+                      value={String(degreeRecogModal.jobTitleId)}
+                      onValueChange={(val) => setDegreeRecogModal(prev => ({ ...prev, jobTitleId: val }))}
+                    >
+                      <SelectTrigger className="mt-1 rounded-xl text-xs">
+                        <SelectValue placeholder="اختر العنوان الوظيفي المقترن" />
+                      </SelectTrigger>
+                      <SelectContent className="z-[9999] max-h-60">
+                        {availableJobTitles.map(t => (
+                          <SelectItem key={t.id} value={String(t.id)}>
+                            {t.name} ({t.category || 'عام'}) — الدرجة {t.min_grade || t.minGrade || 7} / المرحلة {t.min_step || t.minStep || 1}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Preview Card */}
+                  {selectedTitle && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 grid grid-cols-2 gap-3 text-xs">
+                      <div className="bg-white p-2.5 rounded-lg border border-slate-100 shadow-2xs">
+                        <span className="text-slate-500 block text-[11px]">الدرجة الأساس المقررة:</span>
+                        <span className="text-[#1B3A6B] font-bold text-sm">الدرجة {baselineGrade}</span>
+                      </div>
+                      <div className="bg-white p-2.5 rounded-lg border border-slate-100 shadow-2xs">
+                        <span className="text-slate-500 block text-[11px]">المرحلة الأساس المقررة:</span>
+                        <span className="text-[#1B3A6B] font-bold text-sm">المرحلة {baselineStep}</span>
+                      </div>
+                      <div className="col-span-2 text-[11px] text-slate-500 bg-amber-50/70 border border-amber-200/80 rounded-lg p-2 leading-relaxed text-amber-900">
+                        💡 <strong>ملاحظة قانونية:</strong> تبدأ محاكاة الترفيعات من نقطة الأساس (الدرجة {baselineGrade} والمرحلة {baselineStep}) وتتدرج افتراضياً كل سنتين مع استهلاك أسابيع دورات الاختصاص التراكمية، مع الحفاظ التام على الدرجة الفعلية الحالية للموظف (الدرجة {employee?.grade || 3}) وعدم تنزيلها نهائياً.
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <Label className="text-xs font-bold text-slate-700">ملاحظات إضافية (اختياري)</Label>
+                    <Input
+                      value={degreeRecogModal.notes}
+                      onChange={(e) => setDegreeRecogModal(prev => ({ ...prev, notes: e.target.value }))}
+                      placeholder="أدخل أي ملاحظات حول أمر الاحتساب..."
+                      className="mt-1 rounded-xl text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setDegreeRecogModal({ open: false, qualification: null, jobTitleId: '', notes: '', saving: false })}
+                    disabled={degreeRecogModal.saving}
+                    className="rounded-xl text-xs"
+                  >
+                    إلغاء
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleConfirmDegreeRecognition}
+                    disabled={degreeRecogModal.saving || !degreeRecogModal.jobTitleId}
+                    className="bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs gap-1.5 font-bold"
+                  >
+                    {degreeRecogModal.saving ? 'جاري الاحتساب...' : 'تأكيد وبدء الاحتساب'}
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>

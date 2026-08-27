@@ -876,6 +876,7 @@ export const jobTitles = pgTable('job_titles', {
   name: text('name').notNull(),
   category: text('category').default('عام'), // هندسي، إداري، مالي، قانوني، حاسبات وتقنية، فني، طبي وصحي، خدمات، أخرى
   minGrade: integer('min_grade').default(7), // الدرجة الوظيفية المقترحة
+  minStep: integer('min_step').default(1), // المرحلة الوظيفية الأساسية المقترحة
   nextTitleId: integer('next_title_id'), // العنوان الوظيفي التالي في الترقية / التدرج الهرمي
   status: text('status').default('فعال'), // فعال / معطل
   notes: text('notes'),
@@ -977,10 +978,12 @@ export const degreeTrackSnapshots = pgTable('degree_track_snapshots', {
   employeeId: integer('employee_id')
     .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
+  jobTitleId: integer('job_title_id')
+    .references(() => jobTitles.id, { onDelete: 'set null' }), // العنوان الوظيفي المعتمد المقترن بالشهادة
   actualGradeBefore: integer('actual_grade_before').notNull(), // الدرجة الفعلية الحالية وقت بدء الاحتساب (مثال: 3)
   actualStepBefore: integer('actual_step_before').notNull(), // المرحلة الفعلية الحالية وقت بدء الاحتساب (مثال: 1)
-  baselineGrade: integer('baseline_grade').notNull().default(7), // الدرجة الأساس المقررة للشهادة (مثال: 7)
-  baselineStep: integer('baseline_step').notNull().default(1), // المرحلة الأساس المقررة للشهادة (مثال: 1)
+  baselineGrade: integer('baseline_grade').notNull().default(7), // الدرجة الأساس المقررة للعنوان الوظيفي (مثال: 7)
+  baselineStep: integer('baseline_step').notNull().default(1), // المرحلة الأساس المقررة للعنوان الوظيفي (مثال: 1)
   graduationDateUsed: text('graduation_date_used').notNull(), // تاريخ التخرج المعتمد (YYYY-MM-DD)
   orderDate: text('order_date').notNull(), // تاريخ صدور أمر الاحتساب (YYYY-MM-DD)
   status: text('status').notNull().default('نشط'), // 'نشط' | 'مكتمل'
@@ -996,6 +999,10 @@ export const degreeTrackSnapshotsRelations = relations(degreeTrackSnapshots, ({ 
   qualification: one(qualifications, {
     fields: [degreeTrackSnapshots.qualificationId],
     references: [qualifications.id],
+  }),
+  jobTitle: one(jobTitles, {
+    fields: [degreeTrackSnapshots.jobTitleId],
+    references: [jobTitles.id],
   }),
   simulationSteps: many(degreeTrackSimulationSteps),
   specializationCredits: many(specializationCourseCredits),

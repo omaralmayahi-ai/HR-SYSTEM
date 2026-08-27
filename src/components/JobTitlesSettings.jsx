@@ -63,6 +63,7 @@ export default function JobTitlesSettings() {
     name: '',
     category: 'عام',
     min_grade: 7,
+    min_step: 1,
     next_title_id: null,
     status: 'فعال',
     notes: ''
@@ -120,6 +121,7 @@ export default function JobTitlesSettings() {
       name: '',
       category: 'عام',
       min_grade: 7,
+      min_step: 1,
       next_title_id: null,
       status: 'فعال',
       notes: ''
@@ -133,6 +135,7 @@ export default function JobTitlesSettings() {
       name: titleItem.name || '',
       category: titleItem.category || 'عام',
       min_grade: titleItem.min_grade || titleItem.minGrade || 7,
+      min_step: titleItem.min_step || titleItem.minStep || 1,
       next_title_id: titleItem.next_title_id || titleItem.nextTitleId || null,
       status: titleItem.status || 'فعال',
       notes: titleItem.notes || ''
@@ -434,7 +437,7 @@ export default function JobTitlesSettings() {
 
                       <td className="px-4 py-3.5">
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold text-[11px]">
-                          الدرجة {item.min_grade || item.minGrade || 7}
+                          الدرجة {item.min_grade || item.minGrade || 7} / المرحلة {item.min_step || item.minStep || 1}
                         </span>
                       </td>
 
@@ -523,7 +526,7 @@ export default function JobTitlesSettings() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div>
                 <Label className="text-xs font-bold text-slate-700">المجال / الفئة</Label>
                 <Select
@@ -542,7 +545,7 @@ export default function JobTitlesSettings() {
               </div>
 
               <div>
-                <Label className="text-xs font-bold text-slate-700">الدرجة المقترحة</Label>
+                <Label className="text-xs font-bold text-slate-700">الدرجة الأساس</Label>
                 <Select
                   value={String(form.min_grade)}
                   onValueChange={(v) => setForm(prev => ({ ...prev, min_grade: parseInt(v) }))}
@@ -553,6 +556,23 @@ export default function JobTitlesSettings() {
                   <SelectContent className="z-[9999]">
                     {[1,2,3,4,5,6,7,8,9,10].map(g => (
                       <SelectItem key={g} value={String(g)}>الدرجة {g}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label className="text-xs font-bold text-slate-700">المرحلة الأساس</Label>
+                <Select
+                  value={String(form.min_step || 1)}
+                  onValueChange={(v) => setForm(prev => ({ ...prev, min_step: parseInt(v) }))}
+                >
+                  <SelectTrigger className="mt-1 rounded-xl text-xs">
+                    <SelectValue placeholder="المرحلة" />
+                  </SelectTrigger>
+                  <SelectContent className="z-[9999]">
+                    {[1,2,3,4,5,6,7,8,9,10,11].map(s => (
+                      <SelectItem key={s} value={String(s)}>المرحلة {s}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

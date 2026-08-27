@@ -795,63 +795,63 @@ async function startServer() {
 
   // --- In-Memory Stores for Job Titles (دليل العناوين الوظيفية والمهنية) ---
   let inMemoryJobTitles: any[] = [
-    { id: 1, name: 'رئيس مهندسين أقدم', category: 'هندسي', min_grade: 1, minGrade: 1, status: 'فعال', notes: 'الدرجة الأولى والثانية' },
-    { id: 2, name: 'رئيس مهندسين', category: 'هندسي', min_grade: 3, minGrade: 3, status: 'فعال', notes: 'الدرجة الثالثة' },
-    { id: 3, name: 'مهندس أقدم', category: 'هندسي', min_grade: 4, minGrade: 4, status: 'فعال', notes: 'الدرجة الرابعة' },
-    { id: 4, name: 'مهندس', category: 'هندسي', min_grade: 5, minGrade: 5, status: 'فعال', notes: 'الدرجة الخامسة' },
-    { id: 5, name: 'معاون مهندس', category: 'هندسي', min_grade: 7, minGrade: 7, status: 'فعال', notes: 'الدرجة السابعة' },
-    { id: 6, name: 'رئيس مبرمجين أقدم', category: 'حاسبات وتقنية', min_grade: 1, minGrade: 1, status: 'فعال', notes: '' },
-    { id: 7, name: 'رئيس مبرمجين', category: 'حاسبات وتقنية', min_grade: 3, minGrade: 3, status: 'فعال', notes: '' },
-    { id: 8, name: 'معاون رئيس مبرمجين', category: 'حاسبات وتقنية', min_grade: 4, minGrade: 4, status: 'فعال', notes: '' },
-    { id: 9, name: 'مبرمج أقدم', category: 'حاسبات وتقنية', min_grade: 5, minGrade: 5, status: 'فعال', notes: '' },
-    { id: 10, name: 'مبرمج', category: 'حاسبات وتقنية', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 11, name: 'معاون مبرمج', category: 'حاسبات وتقنية', min_grade: 7, minGrade: 7, status: 'فعال', notes: '' },
-    { id: 12, name: 'رئيس محللي نظم', category: 'حاسبات وتقنية', min_grade: 3, minGrade: 3, status: 'فعال', notes: '' },
-    { id: 13, name: 'محلل نظم أقدم', category: 'حاسبات وتقنية', min_grade: 4, minGrade: 4, status: 'فعال', notes: '' },
-    { id: 14, name: 'محلل نظم', category: 'حاسبات وتقنية', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 15, name: 'رئيس محاسبين أقدم', category: 'مالي', min_grade: 1, minGrade: 1, status: 'فعال', notes: '' },
-    { id: 16, name: 'رئيس محاسبين', category: 'مالي', min_grade: 3, minGrade: 3, status: 'فعال', notes: '' },
-    { id: 17, name: 'محاسب أقدم', category: 'مالي', min_grade: 4, minGrade: 4, status: 'فعال', notes: '' },
-    { id: 18, name: 'محاسب', category: 'مالي', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 19, name: 'معاون محاسب', category: 'مالي', min_grade: 7, minGrade: 7, status: 'فعال', notes: '' },
-    { id: 20, name: 'رئيس مدققين', category: 'مالي', min_grade: 3, minGrade: 3, status: 'فعال', notes: '' },
-    { id: 21, name: 'مدقق أقدم', category: 'مالي', min_grade: 4, minGrade: 4, status: 'فعال', notes: '' },
-    { id: 22, name: 'مدقق', category: 'مالي', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 23, name: 'رئيس مشاورين قانونيين', category: 'قانوني', min_grade: 2, minGrade: 2, status: 'فعال', notes: '' },
-    { id: 24, name: 'مشاور قانوني أقدم', category: 'قانوني', min_grade: 3, minGrade: 3, status: 'فعال', notes: '' },
-    { id: 25, name: 'مشاور قانوني', category: 'قانوني', min_grade: 4, minGrade: 4, status: 'فعال', notes: '' },
-    { id: 26, name: 'قانوني', category: 'قانوني', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 27, name: 'معاون قانوني', category: 'قانوني', min_grade: 7, minGrade: 7, status: 'فعال', notes: '' },
-    { id: 28, name: 'رئيس إداريين أقدم', category: 'إداري', min_grade: 2, minGrade: 2, status: 'فعال', notes: '' },
-    { id: 29, name: 'رئيس إداريين', category: 'إداري', min_grade: 3, minGrade: 3, status: 'فعال', notes: '' },
-    { id: 30, name: 'إداري أقدم', category: 'إداري', min_grade: 4, minGrade: 4, status: 'فعال', notes: '' },
-    { id: 31, name: 'إداري', category: 'إداري', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 32, name: 'معاون إداري', category: 'إداري', min_grade: 7, minGrade: 7, status: 'فعال', notes: '' },
-    { id: 33, name: 'رئيس باحثين', category: 'إداري', min_grade: 3, minGrade: 3, status: 'فعال', notes: '' },
-    { id: 34, name: 'باحث أقدم', category: 'إداري', min_grade: 4, minGrade: 4, status: 'فعال', notes: '' },
-    { id: 35, name: 'باحث', category: 'إداري', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 36, name: 'معاون باحث', category: 'إداري', min_grade: 7, minGrade: 7, status: 'فعال', notes: '' },
-    { id: 37, name: 'رئيس فنيين أقدم', category: 'فني', min_grade: 3, minGrade: 3, status: 'فعال', notes: '' },
-    { id: 38, name: 'رئيس فنيين', category: 'فني', min_grade: 4, minGrade: 4, status: 'فعال', notes: '' },
-    { id: 39, name: 'فني أقدم', category: 'فني', min_grade: 5, minGrade: 5, status: 'فعال', notes: '' },
-    { id: 40, name: 'فني', category: 'فني', min_grade: 7, minGrade: 7, status: 'فعال', notes: '' },
-    { id: 41, name: 'معاون فني', category: 'فني', min_grade: 8, minGrade: 8, status: 'فعال', notes: '' },
-    { id: 42, name: 'رئيس حرفيين', category: 'مهني وحرفي', min_grade: 5, minGrade: 5, status: 'فعال', notes: '' },
-    { id: 43, name: 'حرفي أقدم', category: 'مهني وحرفي', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 44, name: 'حرفي', category: 'مهني وحرفي', min_grade: 8, minGrade: 8, status: 'فعال', notes: '' },
-    { id: 45, name: 'طبيب اختصاص', category: 'طبي وصحي', min_grade: 2, minGrade: 2, status: 'فعال', notes: '' },
-    { id: 46, name: 'طبيب ممارس', category: 'طبي وصحي', min_grade: 5, minGrade: 5, status: 'فعال', notes: '' },
-    { id: 47, name: 'طبيب مقيم أقدم', category: 'طبي وصحي', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 48, name: 'ممرض جامعي أقدم', category: 'طبي وصحي', min_grade: 4, minGrade: 4, status: 'فعال', notes: '' },
-    { id: 49, name: 'ممرض ماهر', category: 'طبي وصحي', min_grade: 7, minGrade: 7, status: 'فعال', notes: '' },
-    { id: 50, name: 'سائق أول', category: 'خدمات', min_grade: 7, minGrade: 7, status: 'فعال', notes: '' },
-    { id: 51, name: 'سائق', category: 'خدمات', min_grade: 8, minGrade: 8, status: 'فعال', notes: '' },
-    { id: 52, name: 'حارس أقدم', category: 'أمن وحماية', min_grade: 7, minGrade: 7, status: 'فعال', notes: '' },
-    { id: 53, name: 'حارس', category: 'أمن وحماية', min_grade: 8, minGrade: 8, status: 'فعال', notes: '' },
-    { id: 54, name: 'رئيس كتبة', category: 'إداري', min_grade: 5, minGrade: 5, status: 'فعال', notes: '' },
-    { id: 55, name: 'كاتب أقدم', category: 'إداري', min_grade: 6, minGrade: 6, status: 'فعال', notes: '' },
-    { id: 56, name: 'كاتب', category: 'إداري', min_grade: 8, minGrade: 8, status: 'فعال', notes: '' },
-    { id: 57, name: 'معاون كاتب', category: 'إداري', min_grade: 9, minGrade: 9, status: 'فعال', notes: '' }
+    { id: 1, name: 'رئيس مهندسين أقدم', category: 'هندسي', min_grade: 1, minGrade: 1, min_step: 1, minStep: 1, status: 'فعال', notes: 'الدرجة الأولى والثانية' },
+    { id: 2, name: 'رئيس مهندسين', category: 'هندسي', min_grade: 3, minGrade: 3, min_step: 1, minStep: 1, status: 'فعال', notes: 'الدرجة الثالثة' },
+    { id: 3, name: 'مهندس أقدم', category: 'هندسي', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: 'الدرجة الرابعة' },
+    { id: 4, name: 'مهندس', category: 'هندسي', min_grade: 5, minGrade: 5, min_step: 1, minStep: 1, status: 'فعال', notes: 'الدرجة الخامسة' },
+    { id: 5, name: 'معاون مهندس', category: 'هندسي', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: 'الدرجة السابعة' },
+    { id: 6, name: 'رئيس مبرمجين أقدم', category: 'حاسبات وتقنية', min_grade: 1, minGrade: 1, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 7, name: 'رئيس مبرمجين', category: 'حاسبات وتقنية', min_grade: 3, minGrade: 3, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 8, name: 'معاون رئيس مبرمجين', category: 'حاسبات وتقنية', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 9, name: 'مبرمج أقدم', category: 'حاسبات وتقنية', min_grade: 5, minGrade: 5, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 10, name: 'مبرمج', category: 'حاسبات وتقنية', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 11, name: 'معاون مبرمج', category: 'حاسبات وتقنية', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 12, name: 'رئيس محللي نظم', category: 'حاسبات وتقنية', min_grade: 3, minGrade: 3, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 13, name: 'محلل نظم أقدم', category: 'حاسبات وتقنية', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 14, name: 'محلل نظم', category: 'حاسبات وتقنية', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 15, name: 'رئيس محاسبين أقدم', category: 'مالي', min_grade: 1, minGrade: 1, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 16, name: 'رئيس محاسبين', category: 'مالي', min_grade: 3, minGrade: 3, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 17, name: 'محاسب أقدم', category: 'مالي', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 18, name: 'محاسب', category: 'مالي', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 19, name: 'معاون محاسب', category: 'مالي', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 20, name: 'رئيس مدققين', category: 'مالي', min_grade: 3, minGrade: 3, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 21, name: 'مدقق أقدم', category: 'مالي', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 22, name: 'مدقق', category: 'مالي', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 23, name: 'رئيس مشاورين قانونيين', category: 'قانوني', min_grade: 2, minGrade: 2, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 24, name: 'مشاور قانوني أقدم', category: 'قانوني', min_grade: 3, minGrade: 3, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 25, name: 'مشاور قانوني', category: 'قانوني', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 26, name: 'قانوني', category: 'قانوني', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 27, name: 'معاون قانوني', category: 'قانوني', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 28, name: 'رئيس إداريين أقدم', category: 'إداري', min_grade: 2, minGrade: 2, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 29, name: 'رئيس إداريين', category: 'إداري', min_grade: 3, minGrade: 3, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 30, name: 'إداري أقدم', category: 'إداري', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 31, name: 'إداري', category: 'إداري', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 32, name: 'معاون إداري', category: 'إداري', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 33, name: 'رئيس باحثين', category: 'إداري', min_grade: 3, minGrade: 3, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 34, name: 'باحث أقدم', category: 'إداري', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 35, name: 'باحث', category: 'إداري', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 36, name: 'معاون باحث', category: 'إداري', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 37, name: 'رئيس فنيين أقدم', category: 'فني', min_grade: 3, minGrade: 3, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 38, name: 'رئيس فنيين', category: 'فني', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 39, name: 'فني أقدم', category: 'فني', min_grade: 5, minGrade: 5, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 40, name: 'فني', category: 'فني', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 41, name: 'معاون فني', category: 'فني', min_grade: 8, minGrade: 8, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 42, name: 'رئيس حرفيين', category: 'مهني وحرفي', min_grade: 5, minGrade: 5, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 43, name: 'حرفي أقدم', category: 'مهني وحرفي', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 44, name: 'حرفي', category: 'مهني وحرفي', min_grade: 8, minGrade: 8, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 45, name: 'طبيب اختصاص', category: 'طبي وصحي', min_grade: 2, minGrade: 2, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 46, name: 'طبيب ممارس', category: 'طبي وصحي', min_grade: 5, minGrade: 5, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 47, name: 'طبيب مقيم أقدم', category: 'طبي وصحي', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 48, name: 'ممرض جامعي أقدم', category: 'طبي وصحي', min_grade: 4, minGrade: 4, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 49, name: 'ممرض ماهر', category: 'طبي وصحي', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 50, name: 'سائق أول', category: 'خدمات', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 51, name: 'سائق', category: 'خدمات', min_grade: 8, minGrade: 8, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 52, name: 'حارس أقدم', category: 'أمن وحماية', min_grade: 7, minGrade: 7, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 53, name: 'حارس', category: 'أمن وحماية', min_grade: 8, minGrade: 8, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 54, name: 'رئيس كتبة', category: 'إداري', min_grade: 5, minGrade: 5, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 55, name: 'كاتب أقدم', category: 'إداري', min_grade: 6, minGrade: 6, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 56, name: 'كاتب', category: 'إداري', min_grade: 8, minGrade: 8, min_step: 1, minStep: 1, status: 'فعال', notes: '' },
+    { id: 57, name: 'معاون كاتب', category: 'إداري', min_grade: 9, minGrade: 9, min_step: 1, minStep: 1, status: 'فعال', notes: '' }
   ];
 
   function ensureJobTitleExists(title: string, grade?: number | string, category?: string) {
@@ -2766,6 +2766,8 @@ async function startServer() {
     { id: 6, name: 'إجازة دراسية', max_days: 730, description: 'لإكمال الدراسات العليا', status: 'فعال' }
   ];
 
+
+
   let inMemoryServiceRecords: any[] = [];
   let inMemoryServiceCredits: any[] = [];
 
@@ -2822,11 +2824,12 @@ async function startServer() {
   });
 
   app.post('/api/job-titles', requireAuth, async (req, res) => {
-    const { name, category, min_grade, minGrade, next_title_id, nextTitleId, status, notes } = req.body;
+    const { name, category, min_grade, minGrade, min_step, minStep, next_title_id, nextTitleId, status, notes } = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'اسم العنوان الوظيفي مطلوب' });
     }
     const mGrade = min_grade !== undefined ? parseInt(min_grade) : (minGrade !== undefined ? parseInt(minGrade) : 7);
+    const mStep = min_step !== undefined ? parseInt(min_step) : (minStep !== undefined ? parseInt(minStep) : 1);
     const nxtId = next_title_id !== undefined ? (next_title_id ? parseInt(next_title_id) : null) : (nextTitleId !== undefined ? (nextTitleId ? parseInt(nextTitleId) : null) : null);
 
     try {
@@ -2834,6 +2837,7 @@ async function startServer() {
         name: name.trim(),
         category: category || 'عام',
         minGrade: mGrade,
+        minStep: mStep,
         nextTitleId: nxtId,
         status: status || 'فعال',
         notes: notes || '',
@@ -2852,6 +2856,8 @@ async function startServer() {
       category: category || 'عام',
       min_grade: mGrade,
       minGrade: mGrade,
+      min_step: mStep,
+      minStep: mStep,
       next_title_id: nxtId,
       nextTitleId: nxtId,
       status: status || 'فعال',
@@ -2866,8 +2872,9 @@ async function startServer() {
 
   app.put('/api/job-titles/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, category, min_grade, minGrade, next_title_id, nextTitleId, status, notes } = req.body;
+    const { name, category, min_grade, minGrade, min_step, minStep, next_title_id, nextTitleId, status, notes } = req.body;
     const mGrade = min_grade !== undefined ? parseInt(min_grade) : (minGrade !== undefined ? parseInt(minGrade) : undefined);
+    const mStep = min_step !== undefined ? parseInt(min_step) : (minStep !== undefined ? parseInt(minStep) : undefined);
     const nxtId = next_title_id !== undefined ? (next_title_id ? parseInt(next_title_id) : null) : (nextTitleId !== undefined ? (nextTitleId ? parseInt(nextTitleId) : null) : undefined);
 
     // Referential guard: check if deactivating an in-use job title
@@ -2883,6 +2890,7 @@ async function startServer() {
       if (name) updateData.name = name.trim();
       if (category !== undefined) updateData.category = category;
       if (mGrade !== undefined) updateData.minGrade = mGrade;
+      if (mStep !== undefined) updateData.minStep = mStep;
       if (nxtId !== undefined) updateData.nextTitleId = nxtId;
       if (status !== undefined) updateData.status = status;
       if (notes !== undefined) updateData.notes = notes;
@@ -2906,6 +2914,8 @@ async function startServer() {
         category: category !== undefined ? category : inMemoryJobTitles[idx].category,
         min_grade: mGrade !== undefined ? mGrade : inMemoryJobTitles[idx].min_grade,
         minGrade: mGrade !== undefined ? mGrade : inMemoryJobTitles[idx].minGrade,
+        min_step: mStep !== undefined ? mStep : inMemoryJobTitles[idx].min_step,
+        minStep: mStep !== undefined ? mStep : inMemoryJobTitles[idx].minStep,
         next_title_id: nxtId !== undefined ? nxtId : inMemoryJobTitles[idx].next_title_id,
         nextTitleId: nxtId !== undefined ? nxtId : inMemoryJobTitles[idx].nextTitleId,
         status: status !== undefined ? status : inMemoryJobTitles[idx].status,
@@ -2916,7 +2926,7 @@ async function startServer() {
       saveLocalDb();
       return res.json(mapKeys(inMemoryJobTitles[idx], camelToSnake));
     }
-    res.json({ id, name, category, min_grade: mGrade, next_title_id: nxtId, status, notes });
+    res.json({ id, name, category, min_grade: mGrade, min_step: mStep, next_title_id: nxtId, status, notes });
   });
 
   app.delete('/api/job-titles/:id', requireAuth, async (req, res) => {
@@ -7117,6 +7127,12 @@ async function startServer() {
       const qualId = parseInt(req.params.id);
       if (isNaN(qualId)) return res.status(400).json({ error: 'معرّف الشهادة غير صالح' });
 
+      const rawJobTitleId = req.body.job_title_id || req.body.jobTitleId;
+      if (!rawJobTitleId) {
+        return res.status(400).json({ error: 'العنوان الوظيفي المرتبط مطلوب لبدء مسار احتساب الشهادة (job_title_id)' });
+      }
+      const jobTitleId = parseInt(String(rawJobTitleId));
+
       // Find qualification
       let qual = (genericMemoryStores['qualifications'] || []).find(q => parseInt(String(q.id)) === qualId);
       if (!qual) {
@@ -7137,13 +7153,20 @@ async function startServer() {
       }
       if (!emp) return res.status(404).json({ error: 'الموظف صاحب الشهادة غير موجود' });
 
-      // Determine baseline grade and step from education_degrees table or default mapper
-      const { resolveDegreeBaseline } = require('./src/lib/degreeTrackEngine');
-      const qualLevel = qual.level || qual.education_level || qual.name || '';
-      const matchedEdu = inMemoryEducationDegrees.find((d: any) => d.name && qualLevel.includes(d.name));
-      const baselineGrade = matchedEdu?.baseline_grade || resolveDegreeBaseline(qualLevel).grade;
-      const baselineStep = matchedEdu?.baseline_step || resolveDegreeBaseline(qualLevel).step;
+      // Find Job Title and extract baseline grade and step strictly from job_titles table
+      let jobTitle = inMemoryJobTitles.find(t => parseInt(String(t.id)) === jobTitleId);
+      if (!jobTitle) {
+        try {
+          const dbTitles = await db.select().from(schema.jobTitles).where(eq(schema.jobTitles.id, jobTitleId));
+          if (dbTitles && dbTitles.length > 0) jobTitle = dbTitles[0];
+        } catch (e) {}
+      }
+      if (!jobTitle) return res.status(400).json({ error: 'العنوان الوظيفي المحدد غير موجود' });
 
+      const baselineGrade = parseInt(String(jobTitle.min_grade ?? jobTitle.minGrade)) || 7;
+      const baselineStep = parseInt(String(jobTitle.min_step ?? jobTitle.minStep)) || 1;
+
+      const qualLevel = qual.level || qual.education_level || qual.name || '';
       const actualGradeBefore = parseInt(String(emp.grade)) || 3;
       const actualStepBefore = parseInt(String(emp.step)) || 1;
       const graduationDateUsed = qual.graduation_date || qual.graduationDate || `${qual.graduation_year || 2020}-01-01`;
@@ -7162,6 +7185,7 @@ async function startServer() {
       const newSnapshotData: any = {
         qualificationId: qualId,
         employeeId: empId,
+        jobTitleId: jobTitleId,
         actualGradeBefore,
         actualStepBefore,
         baselineGrade,
@@ -7169,7 +7193,7 @@ async function startServer() {
         graduationDateUsed,
         orderDate,
         status: 'نشط',
-        notes: req.body.notes || `احتساب شهادة (${qualLevel}) الحاصل عليها أثناء الخدمة`,
+        notes: req.body.notes || `بدء مسار احتساب شهادة (${qualLevel}) مقترنة بالعنوان الوظيفي (${jobTitle.name}) بدرجة أساس (${baselineGrade}) ومرحلة أساس (${baselineStep})`,
         createdAt: new Date()
       };
 

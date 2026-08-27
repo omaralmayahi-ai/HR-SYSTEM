@@ -31,6 +31,8 @@ export interface DegreeTrackSnapshotEntity {
   qualification_id?: number | string;
   employeeId: number | string;
   employee_id?: number | string;
+  jobTitleId?: number | string;
+  job_title_id?: number | string;
   actualGradeBefore: number;
   actual_grade_before?: number;
   actualStepBefore: number;
@@ -89,6 +91,7 @@ export interface SpecializationCreditEntity {
 export interface DegreeTrackSimulationResult {
   snapshotId?: number | string;
   employeeId: number | string;
+  jobTitleId?: number | string;
   graduationDateUsed: string;
   orderDate: string;
   spentPeriodMonths: number;
@@ -124,7 +127,11 @@ export interface DegreeTrackSimulationResult {
   };
 }
 
-// Default standard degree baseline grades in Iraqi Civil Service Law
+/**
+ * @deprecated مهملة (Deprecated): كانت مبنية على افتراض خاطئ بتخمين الدرجة الأساس من اسم الشهادة.
+ * الدرجة والمرحلة الأساس تُحدد حصراً من العنوان الوظيفي المعتمد (job_titles.min_grade / min_step)
+ * الذي يختاره مسؤول الموارد البشرية عند بدء عملية احتساب الشهادة، ولا تُستخدم هذه المصفوفة في المسار الفعلي.
+ */
 export const DEFAULT_DEGREE_BASELINES: Record<string, { grade: number; step: number }> = {
   'دكتوراه': { grade: 5, step: 1 },
   'ماجستير': { grade: 6, step: 1 },
@@ -144,7 +151,8 @@ export const DEFAULT_DEGREE_BASELINES: Record<string, { grade: number; step: num
 };
 
 /**
- * Resolves the legal baseline grade and step for a qualification
+ * @deprecated مهملة (Deprecated): لا يجوز استنتاج الدرجة الأساس من نص اسم الشهادة.
+ * تم الاحتفاظ بالدالة كـ Fallback للتوافقية القديمة فقط، ومسار الاحتساب الفعلي يعتمد حصراً على job_titles.
  */
 export function resolveDegreeBaseline(degreeName?: string): { grade: number; step: number } {
   if (!degreeName) return { grade: 7, step: 1 };
@@ -429,6 +437,7 @@ export function calculateDegreeTrackSimulation(
   return {
     snapshotId: snapshot.id,
     employeeId,
+    jobTitleId: snapshot.jobTitleId || snapshot.job_title_id,
     graduationDateUsed,
     orderDate,
     spentPeriodMonths,

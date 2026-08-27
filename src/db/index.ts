@@ -799,17 +799,10 @@ export async function ensureSchema() {
       );
     `);
 
-    // 15. Education Degrees Baseline Grade & Step Migration
+    // 15. Job Titles min_step & Education Degrees Baseline Migration
+    await safeQuery(`ALTER TABLE job_titles ADD COLUMN IF NOT EXISTS min_step INTEGER DEFAULT 1;`);
     await safeQuery(`ALTER TABLE education_degrees ADD COLUMN IF NOT EXISTS baseline_grade INTEGER DEFAULT 7;`);
     await safeQuery(`ALTER TABLE education_degrees ADD COLUMN IF NOT EXISTS baseline_step INTEGER DEFAULT 1;`);
-
-    // Backfill standard baseline grades for education degrees
-    await safeQuery(`UPDATE education_degrees SET baseline_grade = 5, baseline_step = 1 WHERE name LIKE '%دكتوراه%' AND (baseline_grade IS NULL OR baseline_grade = 7);`);
-    await safeQuery(`UPDATE education_degrees SET baseline_grade = 6, baseline_step = 1 WHERE (name LIKE '%ماجستير%' OR name LIKE '%دبلوم عالي%') AND (baseline_grade IS NULL OR baseline_grade = 7);`);
-    await safeQuery(`UPDATE education_degrees SET baseline_grade = 7, baseline_step = 1 WHERE name LIKE '%بكالوريوس%' AND (baseline_grade IS NULL);`);
-    await safeQuery(`UPDATE education_degrees SET baseline_grade = 8, baseline_step = 1 WHERE (name LIKE '%دبلوم%' AND name NOT LIKE '%عالي%') OR name LIKE '%إعدادية%' OR name LIKE '%اعدادية%';`);
-    await safeQuery(`UPDATE education_degrees SET baseline_grade = 9, baseline_step = 1 WHERE name LIKE '%متوسطة%';`);
-    await safeQuery(`UPDATE education_degrees SET baseline_grade = 10, baseline_step = 1 WHERE name LIKE '%ابتدائية%' OR name LIKE '%يقرأ%';`);
 
     // 16. Degree Track Snapshots Table (لقطة بدء عملية احتساب الشهادة أثناء الخدمة)
     await safeQuery(`
@@ -817,6 +810,7 @@ export async function ensureSchema() {
         id SERIAL PRIMARY KEY,
         qualification_id INTEGER REFERENCES qualifications(id) ON DELETE CASCADE NOT NULL,
         employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        job_title_id INTEGER REFERENCES job_titles(id) ON DELETE SET NULL,
         actual_grade_before INTEGER NOT NULL,
         actual_step_before INTEGER NOT NULL,
         baseline_grade INTEGER NOT NULL DEFAULT 7,
@@ -828,6 +822,7 @@ export async function ensureSchema() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await safeQuery(`ALTER TABLE degree_track_snapshots ADD COLUMN IF NOT EXISTS job_title_id INTEGER REFERENCES job_titles(id) ON DELETE SET NULL;`);
 
     // 17. Degree Track Simulation Steps Table (سجل خطوات ترفيع المحاكاة للفترة المقضية)
     await safeQuery(`
