@@ -14,6 +14,7 @@ import jwt from 'jsonwebtoken';
 import { SALARY_TABLE } from './src/lib/salaryTable.js';
 import { encryptData, decryptData } from './src/lib/cryptoStorage.ts';
 import { checkReferentialUsage, validateEmployeeImportRow } from './src/lib/referentialIntegrity.ts';
+import { recalculateEligibilitySync, EngineContextData } from './src/lib/promotionEngine.ts';
 
 
 const currentFilename = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' && import.meta.url ? fileURLToPath(import.meta.url) : '');
@@ -3278,6 +3279,7 @@ async function startServer() {
       if (inserted) {
         inMemoryEmployeeCommendations.push(mapKeys(inserted, camelToSnake));
         saveLocalDb();
+        triggerRecalculateEligibility(employeeId).catch(() => {});
         return res.status(201).json(mapKeys(inserted, camelToSnake));
       }
     } catch (e) {
@@ -3287,6 +3289,7 @@ async function startServer() {
     const mem = { id: newId, employee_id: employeeId, ...data, credit_months_snapshot: creditMonthsSnapshot, creditMonthsSnapshot, created_at: new Date().toISOString() };
     inMemoryEmployeeCommendations.push(mem);
     saveLocalDb();
+    triggerRecalculateEligibility(employeeId).catch(() => {});
     res.status(201).json(mem);
   });
 
@@ -3311,6 +3314,7 @@ async function startServer() {
         const idx = inMemoryEmployeeCommendations.findIndex(r => r.id === id);
         if (idx !== -1) inMemoryEmployeeCommendations[idx] = { ...inMemoryEmployeeCommendations[idx], ...mapKeys(updated, camelToSnake) };
         saveLocalDb();
+        if (updated.employeeId) triggerRecalculateEligibility(updated.employeeId).catch(() => {});
         return res.json(mapKeys(updated, camelToSnake));
       }
     } catch (e) {
@@ -3320,6 +3324,8 @@ async function startServer() {
     if (idx !== -1) {
       inMemoryEmployeeCommendations[idx] = { ...inMemoryEmployeeCommendations[idx], ...data };
       saveLocalDb();
+      const empId = inMemoryEmployeeCommendations[idx].employee_id || inMemoryEmployeeCommendations[idx].employeeId;
+      if (empId) triggerRecalculateEligibility(empId).catch(() => {});
       return res.json(inMemoryEmployeeCommendations[idx]);
     }
     res.json({ id, ...data });
@@ -3327,6 +3333,7 @@ async function startServer() {
 
   app.delete('/api/employee-commendations/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
+    const existing = inMemoryEmployeeCommendations.find(r => r.id === id);
     try {
       await db.delete(schema.employeeCommendations).where(eq(schema.employeeCommendations.id, id));
     } catch (e) {
@@ -3334,6 +3341,9 @@ async function startServer() {
     }
     inMemoryEmployeeCommendations = inMemoryEmployeeCommendations.filter(r => r.id !== id);
     saveLocalDb();
+    if (existing?.employee_id || existing?.employeeId) {
+      triggerRecalculateEligibility(existing.employee_id || existing.employeeId).catch(() => {});
+    }
     res.json({ success: true });
   });
 
@@ -5792,6 +5802,7 @@ async function startServer() {
         }
       }
 
+      triggerRecalculateEligibility(employeeId).catch(() => {});
       res.json(record);
     } catch (error: any) {
       console.error('Error creating service record:', error);
@@ -5819,6 +5830,9 @@ async function startServer() {
         .where(eq(schema.serviceRecords.id, id))
         .returning();
 
+      if (updated?.employeeId) {
+        triggerRecalculateEligibility(updated.employeeId).catch(() => {});
+      }
       res.json(updated);
     } catch (error: any) {
       console.error('Error updating service record:', error);
@@ -5865,6 +5879,9 @@ async function startServer() {
         }
       }
 
+      if (recordToDelete?.employeeId) {
+        triggerRecalculateEligibility(recordToDelete.employeeId).catch(() => {});
+      }
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting service record:', error);
@@ -6658,6 +6675,89 @@ async function startServer() {
     }
   }, 1000 * 60 * 60);
 
+  // Central Promotion and Increment Recalculation Trigger
+  async function triggerRecalculateEligibility(employeeId: number | string) {
+    if (!employeeId) return null;
+    const empIdNum = parseInt(String(employeeId));
+    if (isNaN(empIdNum)) return null;
+
+    let emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empIdNum);
+    if (!emp) {
+      try {
+        const dbEmps = await db.select().from(schema.employees).where(eq(schema.employees.id, empIdNum));
+        if (dbEmps && dbEmps.length > 0) {
+          emp = dbEmps[0];
+        }
+      } catch (e) {}
+    }
+    if (!emp) return null;
+
+    // Collect Context Data
+    const commendations = [
+      ...inMemoryEmployeeCommendations.filter(c => parseInt(String(c.employee_id || c.employeeId)) === empIdNum),
+      ...(genericMemoryStores['appreciations'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empIdNum)
+    ];
+
+    const penalties = (genericMemoryStores['penalties'] || []).filter(p => parseInt(String(p.employee_id || p.employeeId)) === empIdNum);
+    const attendances = (genericMemoryStores['attendance'] || []).filter(a => parseInt(String(a.employee_id || a.employeeId)) === empIdNum);
+    const evaluations = [
+      ...(genericMemoryStores['performance'] || []).filter(e => parseInt(String(e.employee_id || e.employeeId)) === empIdNum),
+      ...(genericMemoryStores['annual-evaluations'] || []).filter(e => parseInt(String(e.employee_id || e.employeeId)) === empIdNum)
+    ];
+    const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empIdNum);
+    const serviceCredits = [
+      ...(genericMemoryStores['service-credits'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum),
+      ...(genericMemoryStores['service-records'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum)
+    ];
+    const qualifications = (genericMemoryStores['qualifications'] || []).filter(q => parseInt(String(q.employee_id || q.employeeId)) === empIdNum);
+
+    const context: EngineContextData = {
+      commendations,
+      penalties,
+      attendances,
+      evaluations,
+      leaves,
+      serviceCredits,
+      qualifications,
+      governingCourses: inMemoryGoverningCourses,
+      governingAssignments: inMemoryEmployeeAssignments,
+      gradeRules: inMemoryGradePromotionRules
+    };
+
+    const fullResult = recalculateEligibilitySync(emp, context);
+
+    // Update employee record in-memory & database
+    const promoDue = fullResult.promotion.nextPromotionDueDate;
+    const incrDue = fullResult.increment.nextIncrementDueDate;
+
+    const memIdx = inMemoryEmployees.findIndex(e => parseInt(String(e.id)) === empIdNum);
+    if (memIdx !== -1) {
+      inMemoryEmployees[memIdx] = {
+        ...inMemoryEmployees[memIdx],
+        nextPromotionDueDate: promoDue,
+        next_promotion_due_date: promoDue,
+        nextIncrementDueDate: incrDue,
+        next_increment_due_date: incrDue,
+        promotionEligibilityStatus: fullResult.promotion.eligibilityStatus,
+        promotion_eligibility_status: fullResult.promotion.eligibilityStatus,
+        incrementEligibilityStatus: fullResult.increment.eligibilityStatus,
+        increment_eligibility_status: fullResult.increment.eligibilityStatus
+      };
+    }
+
+    try {
+      await db.update(schema.employees)
+        .set({
+          nextPromotionDueDate: promoDue,
+          nextIncrementDueDate: incrDue,
+        })
+        .where(eq(schema.employees.id, empIdNum));
+    } catch (e) {}
+
+    saveLocalDb();
+    return fullResult;
+  }
+
   // Qualifications Toggle Endpoint
   app.patch('/api/qualifications/:id/toggle', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
@@ -6710,6 +6810,7 @@ async function startServer() {
           });
         }
       }
+      triggerRecalculateEligibility(empId).catch(() => {});
     }
 
     saveLocalDb();
@@ -6807,6 +6908,12 @@ async function startServer() {
         }
       }
 
+      // Trigger real-time promotion/increment recalculation if relevant entity
+      const targetEmpId = parseInt(String(cleanSnake.employee_id || cleanSnake.employeeId || data.employeeId));
+      if (targetEmpId && !isNaN(targetEmpId)) {
+        triggerRecalculateEligibility(targetEmpId).catch(() => {});
+      }
+
       saveLocalDb();
       res.status(201).json(mapKeys(memRecord, camelToSnake));
     });
@@ -6900,6 +7007,12 @@ async function startServer() {
         }
       }
 
+      // Trigger real-time promotion/increment recalculation if relevant entity
+      const targetEmpId = parseInt(String(savedRecord?.employee_id || savedRecord?.employeeId || data.employeeId));
+      if (targetEmpId && !isNaN(targetEmpId)) {
+        triggerRecalculateEligibility(targetEmpId).catch(() => {});
+      }
+
       saveLocalDb();
       return res.json(mapKeys(savedRecord, camelToSnake));
     });
@@ -6940,9 +7053,31 @@ async function startServer() {
         }
       }
 
+      // Trigger real-time promotion/increment recalculation if relevant entity
+      const targetEmpId = parseInt(String(deletedRecord?.employee_id || deletedRecord?.employeeId));
+      if (targetEmpId && !isNaN(targetEmpId)) {
+        triggerRecalculateEligibility(targetEmpId).catch(() => {});
+      }
+
       saveLocalDb();
       res.json({ success: true });
     });
+  });
+
+  // --- Promotion & Increment Eligibility API (المسار الاعتيادي) ---
+  app.get('/api/employees/:id/promotion-eligibility', requireAuth, async (req, res) => {
+    try {
+      const empId = parseInt(req.params.id);
+      if (isNaN(empId)) return res.status(400).json({ error: 'ID غير صالح للموظف' });
+
+      const result = await triggerRecalculateEligibility(empId);
+      if (!result) return res.status(404).json({ error: 'الموظف غير موجود' });
+
+      return res.json(result);
+    } catch (err: any) {
+      console.error('Error calculating promotion eligibility:', err);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // --- Vite & Asset Serving Middleware ---
