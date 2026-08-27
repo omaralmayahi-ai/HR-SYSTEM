@@ -195,6 +195,7 @@ export const apiClient = {
     ResponsibilityAllowance: createEntityClient('responsibility-allowances'),
     ShiftSystem: createEntityClient('shift-systems'),
     ServiceRecord: createEntityClient('service-records'),
+    ServiceCredit: createEntityClient('service-credits'),
     PenaltyType: createEntityClient('penalty-types'),
     EvaluationForm: createEntityClient('evaluation-forms'),
     GoverningCourse: createEntityClient('governing-courses'),

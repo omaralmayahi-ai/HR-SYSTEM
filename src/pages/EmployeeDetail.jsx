@@ -1238,7 +1238,26 @@ export default function EmployeeDetail() {
       else if (activeModal === 'transfer') clientName = 'Transfer';
       else if (activeModal === 'retirement') clientName = 'Retirement';
       else if (activeModal === 'document') clientName = 'Document';
-      else if (activeModal === 'service_record') clientName = 'ServiceRecord';
+      else if (activeModal === 'service_record') {
+        clientName = 'ServiceRecord';
+        try {
+          await apiClient.entities.ServiceCredit.create({
+            employee_id: parseInt(id),
+            credit_type: modalForm.record_type || 'أخرى',
+            calculated_years: parseInt(modalForm.years) || 0,
+            calculated_months: parseInt(modalForm.months) || 0,
+            calculated_days: parseInt(modalForm.days) || 0,
+            order_number: modalForm.order_number,
+            order_date: modalForm.order_date,
+            purpose: modalForm.purpose || 'علاوة_وترفيع',
+            is_counted_for_promotion: modalForm.purpose !== 'pension_only',
+            is_counted_for_retirement: true,
+            notes: modalForm.notes || modalForm.reason || ''
+          });
+        } catch (eErr) {
+          console.warn('Could not mirror to ServiceCredit table:', eErr);
+        }
+      }
       else if (activeModal === 'appreciation') clientName = 'Appreciation';
       else if (activeModal === 'penalty') clientName = 'Penalty';
 

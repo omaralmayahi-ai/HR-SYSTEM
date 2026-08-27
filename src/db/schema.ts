@@ -946,3 +946,29 @@ export const commendationRulesSettings = pgTable('commendation_rules_settings', 
   allowedCombinations: text('allowed_combinations'), // JSON stringified array of permitted combinations
   updatedAt: timestamp('updated_at').defaultNow(),
 });
+
+// 40. Service Credits table (احتساب الخدمة السابقة والمهنية والعسكرية المضافة)
+export const serviceCredits = pgTable('service_credits', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id')
+    .references(() => employees.id, { onDelete: 'cascade' })
+    .notNull(),
+  creditType: text('credit_type').notNull(), // خدمة_عسكرية، خدمة_عقد، ممارسة_مهنة، خدمة_خارجية، أخرى
+  calculatedYears: integer('calculated_years').default(0),
+  calculatedMonths: integer('calculated_months').default(0),
+  calculatedDays: integer('calculated_days').default(0),
+  orderNumber: text('order_number'),
+  orderDate: text('order_date'),
+  purpose: text('purpose').default('علاوة_وترفيع'), // علاوة_وترفيع، تقاعد_فقط، علاوة_فقط
+  isCountedForPromotion: boolean('is_counted_for_promotion').default(true),
+  isCountedForRetirement: boolean('is_counted_for_retirement').default(true),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const serviceCreditsRelations = relations(serviceCredits, ({ one }) => ({
+  employee: one(employees, {
+    fields: [serviceCredits.employeeId],
+    references: [employees.id],
+  }),
+}));

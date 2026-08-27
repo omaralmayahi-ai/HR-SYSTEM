@@ -2762,6 +2762,7 @@ async function startServer() {
   ];
 
   let inMemoryServiceRecords: any[] = [];
+  let inMemoryServiceCredits: any[] = [];
 
   function buildRefContext() {
     return {
@@ -6419,6 +6420,7 @@ async function startServer() {
     'retirements': 'retirements',
     'documents': 'documents',
     'service-records': 'serviceRecords',
+    'service-credits': 'serviceCredits',
     'leaves': 'leaveRequests',
     'penalties': 'penalties',
     'appreciations': 'appreciations',
@@ -6437,6 +6439,7 @@ async function startServer() {
     'retirements': inMemoryRetirements,
     'documents': inMemoryDocuments,
     'service-records': inMemoryServiceRecords,
+    'service-credits': inMemoryServiceCredits,
     'leaves': inMemoryLeaves,
     'penalties': inMemoryPenalties,
     'appreciations': inMemoryAppreciations,
@@ -6470,6 +6473,7 @@ async function startServer() {
         inMemoryRetirements: genericMemoryStores['retirements'] || inMemoryRetirements,
         inMemoryDocuments: genericMemoryStores['documents'] || inMemoryDocuments,
         inMemoryServiceRecords: genericMemoryStores['service-records'] || inMemoryServiceRecords,
+        inMemoryServiceCredits: genericMemoryStores['service-credits'] || inMemoryServiceCredits,
         inMemoryLeaves: genericMemoryStores['leaves'] || inMemoryLeaves,
         inMemoryPenalties: genericMemoryStores['penalties'] || inMemoryPenalties,
         inMemoryAppreciations: genericMemoryStores['appreciations'] || inMemoryAppreciations,
@@ -6587,6 +6591,10 @@ async function startServer() {
         if (Array.isArray(state.inMemoryServiceRecords)) {
           inMemoryServiceRecords = state.inMemoryServiceRecords;
           genericMemoryStores['service-records'] = state.inMemoryServiceRecords;
+        }
+        if (Array.isArray(state.inMemoryServiceCredits)) {
+          inMemoryServiceCredits = state.inMemoryServiceCredits;
+          genericMemoryStores['service-credits'] = state.inMemoryServiceCredits;
         }
         if (Array.isArray(state.inMemoryLeaves)) {
           inMemoryLeaves = state.inMemoryLeaves;

@@ -779,6 +779,25 @@ export async function ensureSchema() {
 
     // 13. Job Titles career ladder migration
     await safeQuery(`ALTER TABLE job_titles ADD COLUMN IF NOT EXISTS next_title_id INTEGER;`);
+
+    // 14. Service Credits Table (احتساب الخدمة السابقة والمهنية والعسكرية المضافة)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS service_credits (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        credit_type TEXT NOT NULL,
+        calculated_years INTEGER DEFAULT 0,
+        calculated_months INTEGER DEFAULT 0,
+        calculated_days INTEGER DEFAULT 0,
+        order_number TEXT,
+        order_date TEXT,
+        purpose TEXT DEFAULT 'علاوة_وترفيع',
+        is_counted_for_promotion BOOLEAN DEFAULT TRUE,
+        is_counted_for_retirement BOOLEAN DEFAULT TRUE,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
   } catch (err) {
     console.error('Migration execution notice:', err);
   }
