@@ -496,6 +496,7 @@ export const jobAssignments = pgTable('job_assignments', {
   responsibility: text('responsibility'), // المسؤولية
   primaryResponsibility: text('primary_responsibility'), // المسؤولية الأساسية
   actingResponsibility: text('acting_responsibility'), // المسؤولية بالوكالة
+  actingEndDate: text('acting_end_date'), // تاريخ انتهاء التكليف بالوكالة (اختياري)
   deputyLevel: text('deputy_level'), // درجة الوكيل (وكيل أول / وكيل ثاني / لا يوجد)
   serviceType: text('service_type'), // دائم / مؤقت / عقد / إعارة
   notes: text('notes'),

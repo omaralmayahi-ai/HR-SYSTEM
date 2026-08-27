@@ -4746,9 +4746,16 @@ async function startServer() {
         section: data.section,
         confirmationDate: data.confirmation_date || data.confirmationDate || new Date().toISOString().split('T')[0],
         assignmentType: data.assignment_type || data.assignmentType || 'تعيين',
+        actionType: data.action_type || data.actionType || 'تكليف',
         orderNumber: data.order_number || data.orderNumber,
         orderDate: data.order_date || data.orderDate,
-        responsibility: data.responsibility || 'بلا مسؤولية',
+        responsibility: data.responsibility || data.primary_responsibility || data.primaryResponsibility || 'بلا مسؤولية',
+        primaryResponsibility: data.primary_responsibility || data.primaryResponsibility || data.responsibility || 'بلا مسؤولية',
+        actingResponsibility: data.acting_responsibility || data.actingResponsibility || 'بلا وكالة',
+        actingEndDate: data.acting_end_date || data.actingEndDate || null,
+        deputyLevel: data.deputy_level || data.deputyLevel || 'لا يوجد',
+        serviceType: data.service_type || data.serviceType || 'دائم',
+        notes: data.notes || '',
       }).returning();
       record = inserted;
     } catch (error: any) {
@@ -4758,6 +4765,18 @@ async function startServer() {
     // Sync with Central Employee Record
     const empUpdate: any = {};
     if (data.job_title || data.jobTitle) empUpdate.jobTitle = data.job_title || data.jobTitle;
+    if (data.department) empUpdate.department = data.department;
+    if (data.section) empUpdate.section = data.section;
+    if (data.responsibility || data.primary_responsibility || data.primaryResponsibility) {
+      empUpdate.jobResponsibility = data.primary_responsibility || data.primaryResponsibility || data.responsibility;
+      empUpdate.primaryResponsibility = data.primary_responsibility || data.primaryResponsibility || data.responsibility;
+    }
+    if (data.acting_responsibility || data.actingResponsibility) {
+      empUpdate.actingResponsibility = data.acting_responsibility || data.actingResponsibility;
+    }
+    if (data.deputy_level || data.deputyLevel) {
+      empUpdate.deputyLevel = data.deputy_level || data.deputyLevel;
+    }
     if (data.department) empUpdate.department = data.department;
     if (data.section) empUpdate.section = data.section;
     if (data.responsibility) {

@@ -891,6 +891,7 @@ export default function EmployeeDetail() {
         assignment_type: 'تكليف',
         primary_responsibility: employee?.primary_responsibility || 'بلا مسؤولية', 
         acting_responsibility: employee?.acting_responsibility || 'بلا وكالة', 
+        acting_end_date: '',
         deputy_level: employee?.deputy_level || 'لا يوجد', 
         job_title: employee?.job_title || '', 
         department: employee?.department || '', 
@@ -986,6 +987,7 @@ export default function EmployeeDetail() {
         assignment_type: record.assignment_type || record.assignmentType || record.action_type || record.actionType || 'تكليف',
         primary_responsibility: record.primary_responsibility || record.primaryResponsibility || record.responsibility || employee?.primary_responsibility || 'بلا مسؤولية',
         acting_responsibility: record.acting_responsibility || record.actingResponsibility || employee?.acting_responsibility || 'بلا وكالة',
+        acting_end_date: record.acting_end_date || record.actingEndDate || '',
         deputy_level: record.deputy_level || record.deputyLevel || employee?.deputy_level || 'لا يوجد',
         job_title: record.job_title || record.jobTitle || employee?.job_title || '',
         department: record.department || employee?.department || '',
@@ -1189,6 +1191,8 @@ export default function EmployeeDetail() {
         payload.assignment_type = actionType;
         payload.primary_responsibility = modalForm.primary_responsibility || 'بلا مسؤولية';
         payload.acting_responsibility = modalForm.acting_responsibility || 'بلا وكالة';
+        payload.acting_end_date = modalForm.acting_end_date || null;
+        payload.actingEndDate = modalForm.acting_end_date || null;
         payload.deputy_level = modalForm.deputy_level || 'لا يوجد';
         payload.responsibility = modalForm.primary_responsibility || 'بلا مسؤولية';
         payload.job_title = modalForm.job_title || employee?.job_title || 'غير محدد';
@@ -2497,7 +2501,12 @@ export default function EmployeeDetail() {
                             {ja.primary_responsibility || ja.primaryResponsibility || ja.responsibility || '—'}
                           </td>
                           <td className="px-4 py-2.5 text-slate-600 font-medium">
-                            {ja.acting_responsibility || ja.actingResponsibility || 'بلا وكالة'}
+                            <div>{ja.acting_responsibility || ja.actingResponsibility || 'بلا وكالة'}</div>
+                            {(ja.acting_end_date || ja.actingEndDate) && (
+                              <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-mono mt-1 inline-block">
+                                حتى: {ja.acting_end_date || ja.actingEndDate}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-2.5 text-slate-600 text-xs">
                             <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
@@ -3881,6 +3890,18 @@ export default function EmployeeDetail() {
                           <SelectItem value="وكيل ثاني">وكيل ثاني</SelectItem>
                         </SelectContent>
                       </Select>
+                    </div>
+
+                    {/* تاريخ نهاية التكليف بالوكالة (اختياري) */}
+                    <div>
+                      <Label>تاريخ نهاية التكليف / الوكالة (اختياري)</Label>
+                      <Input 
+                        type="date" 
+                        value={modalForm.acting_end_date || ''} 
+                        onChange={e => setModalForm(prev => ({ ...prev, acting_end_date: e.target.value }))} 
+                        className="mt-1 rounded-xl" 
+                      />
+                      <p className="text-[10px] text-slate-400 mt-0.5">اتركه فارغاً إذا كان التكليف مفتوحاً أو مستمراً.</p>
                     </div>
 
                     {/* نوع الخدمة */}
