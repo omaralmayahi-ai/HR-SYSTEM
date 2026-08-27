@@ -5,10 +5,12 @@
  * 
  * القواعد الصارمة:
  * 1. المسار الاعتيادي فقط: استبعاد موظفي احتساب الشهادات أثناء الخدمة مع تعليمهم كـ "غير مدعوم حالياً".
- * 2. المحرك يحسب فقط ولا يغير grade أو step.
+ * 2. المحرك يحسب فقط ولا ينفّذ (ممنوع تعديل grade أو step).
  * 3. الحساب آني ودقيق (دقة اليوم الواحد للغياب، دقة الشهر للقدم والتأخير).
- * 4. نقل أثر احتساب الخدمة: أي كتاب شكر/عقوبة/غياب يقع في الفترة المختصرة بالخدمة يؤجل للدورة التالية.
- * 5. الشروط الحاكمة (Gate Conditions): الدورات الحتمية، تقييم الأداء (لا مقبول/ضعيف)، الإجازات الموقفة.
+ * 4. نقل أثر احتساب الخدمة: أي حدث من المؤثرات الخمسة (كتب شكر، عقوبات، غياب، تقييم، إجازات موقفة)
+ *    يقع في الفترة المختصرة باحتساب الخدمة يؤجل للدورة التالية بـ deferredItems ولا يطبَّق على الدورة الحالية.
+ * 5. احتساب الخدمة ينطبق على العلاوة والترفيع معاً.
+ * 6. الشروط الحاكمة (Gate Conditions): الدورات الحتمية، تقييم الأداء (لا مقبول/ضعيف)، الإجازات الموقفة.
  */
 
 export interface EmployeeEntity {
@@ -139,7 +141,7 @@ export interface ServiceCreditRecord {
   order_number?: string;
   orderDate?: string;
   order_date?: string;
-  purpose?: string; // 'علاوة_وترفيع', 'تقاعد_فقط', 'علاوة_فقط'
+  purpose?: string; // 'علاوة_وترفيع', 'تقاعد_وترقية_وعلاوة', 'promotion_allowance_pension', 'تقاعد_فقط', 'علاوة_فقط'
   isCountedForPromotion?: boolean;
   is_counted_for_promotion?: boolean;
   isCountedForRetirement?: boolean;
@@ -199,8 +201,9 @@ export interface EngineContextData {
 
 export interface DeferredImpactItem {
   id?: number | string;
-  type: 'commendation' | 'penalty' | 'absence' | 'service_credit';
-  originalDate: string;
+  type: 'commendation' | 'penalty' | 'absence' | 'evaluation' | 'leave' | 'service_credit';
+  originalDate?: string;
+  year?: number | string;
   effect: string;
   description: string;
   reason?: string;
@@ -208,6 +211,9 @@ export interface DeferredImpactItem {
   months?: number;
   creditMonths?: number;
   days?: number;
+  score?: number | string;
+  grade?: string;
+  leaveType?: string;
 }
 
 export interface IncrementEligibilityResult {
@@ -219,11 +225,18 @@ export interface IncrementEligibilityResult {
   commendationMonthsDeducted: number;
   penaltyMonthsAdded: number;
   absenceDaysAdded: number;
+  serviceCreditDurationDeducted: {
+    years: number;
+    months: number;
+    days: number;
+  };
   modifiers?: {
     commendationMonths: number;
     penaltyDelayMonths: number;
     absenceDays: number;
+    serviceCreditMonths: number;
   };
+  deferredItems: DeferredImpactItem[];
   isSupported: boolean;
   statusReason?: string;
   unsupportedReason?: string;
@@ -350,15 +363,6 @@ export function addDaysToDate(dateStr: string, daysToAdd: number): string {
   return formatDateString(dt);
 }
 
-export function diffMonths(d1: string, d2: string): number {
-  const date1 = parseDateString(d1);
-  const date2 = parseDateString(d2);
-  return (
-    (date2.getUTCFullYear() - date1.getUTCFullYear()) * 12 +
-    (date2.getUTCMonth() - date1.getUTCMonth())
-  );
-}
-
 export function isDateOnOrAfter(dateStr: string, refDateStr: string): boolean {
   return parseDateString(dateStr).getTime() >= parseDateString(refDateStr).getTime();
 }
@@ -410,7 +414,9 @@ export const DEFAULT_PENALTY_DELAYS: Record<string, number> = {
 
 export function checkGateConditions(
   employee: EmployeeEntity,
-  context: EngineContextData = {}
+  context: EngineContextData = {},
+  cutoffDate?: string,
+  outDeferredItems?: DeferredImpactItem[]
 ): PromotionGateCheckResults {
   const today = context.today || formatDateString(new Date());
   const gradeNum = parseInt(String(employee.grade)) || 10;
@@ -450,20 +456,47 @@ export function checkGateConditions(
       return yrB - yrA;
     });
 
-  const lastTwoEvaluations = evaluations.slice(0, 2);
+  const cutoffYear = cutoffDate ? parseDateString(cutoffDate).getUTCFullYear() : undefined;
   let evaluationsSatisfied = true;
   let evaluationBlockReason = '';
   const lastEvaluationsGrades: string[] = [];
+  let evaluatedCount = 0;
 
-  lastTwoEvaluations.forEach(ev => {
+  for (const ev of evaluations) {
+    const evYear = parseInt(String(ev.year)) || 0;
+    const evDate = ev.evaluationDate || ev.evaluation_date;
+    const isAfterCutoff = cutoffDate ? ((cutoffYear && evYear > cutoffYear) || (evDate && isDateOnOrAfter(evDate, cutoffDate))) : false;
+
     const g = (ev.grade || ev.rating || ev.evaluationGrade || ev.evaluation_grade || '').trim();
     const score = ev.totalScore !== undefined ? ev.totalScore : (ev.total_score !== undefined ? ev.total_score : (ev.score !== undefined ? parseInt(String(ev.score)) : undefined));
-    lastEvaluationsGrades.push(g || `${score}%`);
-    if (g === 'مقبول' || g === 'ضعيف' || g === 'غير مرضي' || (score !== undefined && score < 60)) {
-      evaluationsSatisfied = false;
-      evaluationBlockReason = `حصول الموظف على تقييم (${g || score + '%'}) في تقييم أداء سنة (${ev.year || '—'})`;
+    const isUnsatisfactory = g === 'مقبول' || g === 'ضعيف' || g === 'غير مرضي' || (score !== undefined && score < 60);
+
+    if (isAfterCutoff) {
+      if (isUnsatisfactory && outDeferredItems) {
+        outDeferredItems.push({
+          id: ev.id,
+          type: 'evaluation',
+          year: ev.year,
+          grade: g,
+          score,
+          effect: `تقييم أداء (${g || score + '%'}) مؤجل لدورة الاستحقاق التالية`,
+          reason: `تقييم أداء لسنة (${ev.year || '—'}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
+          status: 'مؤجل_للدورة_التالية',
+          description: `تقييم أداء (${g || score + '%'}) لسنة (${ev.year || '—'}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
+        });
+      }
+      continue; // Skip evaluating for current cycle gate check!
     }
-  });
+
+    if (evaluatedCount < 2) {
+      lastEvaluationsGrades.push(g || `${score}%`);
+      if (isUnsatisfactory) {
+        evaluationsSatisfied = false;
+        evaluationBlockReason = `حصول الموظف على تقييم (${g || score + '%'}) في تقييم أداء سنة (${ev.year || '—'})`;
+      }
+      evaluatedCount++;
+    }
+  }
 
   // C. Pausing Leave Gate (الإجازات الموقفة للترفيع حالياً)
   const leaves = context.leaves || [];
@@ -473,11 +506,31 @@ export function checkGateConditions(
   leaves.forEach(lv => {
     const adminEffect = lv.administrativeEffect || lv.administrative_effect || '';
     const isPausing = adminEffect === 'يوقف_الترفيع' || adminEffect === 'pause_promotion';
+    if (!isPausing) return;
     const sDate = lv.startDate || lv.start_date || '';
     const eDate = lv.endDate || lv.end_date || '';
-    const isCurrentStatus = lv.status === 'موافق_عليها' || lv.status === 'ساري' || lv.status === 'نشط' || lv.status === 'approved' || !lv.status;
+    const isApproved = lv.status === 'موافق_عليها' || lv.status === 'ساري' || lv.status === 'نشط' || lv.status === 'approved' || !lv.status;
+    if (!isApproved) return;
+
+    const isAfterCutoff = cutoffDate && sDate ? isDateOnOrAfter(sDate, cutoffDate) : false;
+    if (isAfterCutoff) {
+      if (outDeferredItems) {
+        outDeferredItems.push({
+          id: lv.id,
+          type: 'leave',
+          originalDate: sDate,
+          leaveType: lv.leaveType || lv.leave_type || 'إجازة موقفة للترفيع',
+          effect: `إجازة موقفة مؤجلة لدورة الاستحقاق التالية`,
+          reason: `إجازة (${lv.leaveType || lv.leave_type || 'موقفة'}) بدأت بتاريخ (${sDate}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
+          status: 'مؤجل_للدورة_التالية',
+          description: `إجازة (${lv.leaveType || lv.leave_type || 'موقفة'}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
+        });
+      }
+      return;
+    }
+
     const isInDateRange = sDate && eDate ? isDateBetween(today, sDate, eDate) : true;
-    if (isPausing && isInDateRange && isCurrentStatus) {
+    if (isInDateRange) {
       activePausingLeave = true;
       pausingLeaveDetails = {
         leaveType: lv.leaveType || lv.leave_type || 'إجازة موقفة للترفيع',
@@ -525,11 +578,14 @@ export function calculateIncrementEligibility(
       commendationMonthsDeducted: 0,
       penaltyMonthsAdded: 0,
       absenceDaysAdded: 0,
+      serviceCreditDurationDeducted: { years: 0, months: 0, days: 0 },
       modifiers: {
         commendationMonths: 0,
         penaltyDelayMonths: 0,
         absenceDays: 0,
+        serviceCreditMonths: 0,
       },
+      deferredItems: [],
       isSupported: false,
       statusReason: 'الموظف مرتبط بمسار احتساب الشهادات أثناء الخدمة — مسار احتساب الشهادات قيد التطوير في المرحلة القادمة',
       unsupportedReason: 'الموظف مرتبط بمسار احتساب الشهادات أثناء الخدمة — مسار احتساب الشهادات قيد التطوير في المرحلة القادمة',
@@ -554,9 +610,34 @@ export function calculateIncrementEligibility(
     today;
 
   // Base rule: 12 months for annual increment
-  const baseDueDate = addMonthsToDate(lastIncr, 12);
+  const baseTotalMonths = 12;
+  const baseDueDate = addMonthsToDate(lastIncr, baseTotalMonths);
 
-  // 3. Modifiers: Commendations since lastIncrementDate
+  // 3. Service Credit Reduction for Increment (احتساب الخدمة المقررة للعلاوة)
+  const serviceCredits = context.serviceCredits || [];
+  let creditYears = 0;
+  let creditMonths = 0;
+  let creditDays = 0;
+
+  serviceCredits.forEach(sc => {
+    const isCounted = sc.isCountedForPromotion !== false && sc.is_counted_for_promotion !== false;
+    const purpose = sc.purpose || '';
+    const isPensionOnly = purpose === 'تقاعد_فقط' || purpose === 'pension_only';
+    const isPromotionOnly = purpose === 'ترفيع_فقط' || purpose === 'promotion_only';
+    if (isCounted && !isPensionOnly && !isPromotionOnly) {
+      creditYears += sc.calculatedYears !== undefined ? sc.calculatedYears : (sc.calculated_years !== undefined ? sc.calculated_years : (sc.years || 0));
+      creditMonths += sc.calculatedMonths !== undefined ? sc.calculatedMonths : (sc.calculated_months !== undefined ? sc.calculated_months : (sc.months || 0));
+      creditDays += sc.calculatedDays !== undefined ? sc.calculatedDays : (sc.calculated_days !== undefined ? sc.calculated_days : (sc.days || 0));
+    }
+  });
+
+  const totalCreditMonths = creditYears * 12 + creditMonths;
+  const effectiveMonthsAfterCredit = Math.max(0, baseTotalMonths - totalCreditMonths);
+  const creditAdjustedDate = addMonthsToDate(lastIncr, effectiveMonthsAfterCredit);
+
+  const deferredItems: DeferredImpactItem[] = [];
+
+  // 4. Modifiers: Commendations since lastIncrementDate
   const commendations = context.commendations || [];
   let commendationMonths = 0;
   let appliedCommendationsCount = 0;
@@ -565,21 +646,37 @@ export function calculateIncrementEligibility(
     const isHidden = c.isHidden === true || c.is_hidden === true;
     if (isHidden) return;
     const orderDate = c.orderDate || c.order_date;
-    if (orderDate && isDateOnOrAfter(orderDate, lastIncr)) {
-      let months = c.creditMonthsSnapshot !== undefined ? c.creditMonthsSnapshot : c.credit_months_snapshot;
-      if (months === undefined || months === null) {
-        const impact = c.seniorityImpact || c.seniority_impact || '';
-        if (impact.includes('شهرين') || impact.includes('2')) months = 2;
-        else if (impact.includes('6') || impact.includes('ستة')) months = 6;
-        else if (impact.includes('شهر') || impact.includes('1')) months = 1;
-        else months = 0;
-      }
+    if (!orderDate || !isDateOnOrAfter(orderDate, lastIncr)) return;
+
+    let months = c.creditMonthsSnapshot !== undefined ? c.creditMonthsSnapshot : c.credit_months_snapshot;
+    if (months === undefined || months === null) {
+      const impact = c.seniorityImpact || c.seniority_impact || '';
+      if (impact.includes('شهرين') || impact.includes('2')) months = 2;
+      else if (impact.includes('6') || impact.includes('ستة')) months = 6;
+      else if (impact.includes('شهر') || impact.includes('1')) months = 1;
+      else months = 0;
+    }
+    if (months <= 0) return;
+
+    if (totalCreditMonths > 0 && isDateOnOrAfter(orderDate, creditAdjustedDate)) {
+      deferredItems.push({
+        id: c.id,
+        type: 'commendation',
+        originalDate: orderDate,
+        months,
+        creditMonths: months,
+        effect: `+${months} شهر قدَم مؤجل لدورة الاستحقاق التالية`,
+        reason: `كتاب شكر رقم (${c.orderNumber || c.order_number || '—'}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
+        status: 'مؤجل_للدورة_التالية',
+        description: `كتاب شكر رقم (${c.orderNumber || c.order_number || '—'}) بتاريخ (${orderDate}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
+      });
+    } else {
       commendationMonths += months;
       appliedCommendationsCount++;
     }
   });
 
-  // 4. Modifiers: Penalties delay since lastIncrementDate
+  // 5. Modifiers: Penalties delay since lastIncrementDate
   const penalties = context.penalties || [];
   const penaltyTypeMap = context.penaltyTypes || DEFAULT_PENALTY_DELAYS;
   let penaltyDelayMonths = 0;
@@ -589,15 +686,30 @@ export function calculateIncrementEligibility(
     const status = p.status || 'نافذ';
     if (status !== 'نافذ' && status !== 'active') return;
     const pDate = p.penaltyDate || p.penalty_date || p.orderDate || p.order_date;
-    if (pDate && isDateOnOrAfter(pDate, lastIncr)) {
-      const pType = p.penaltyType || p.penalty_type || '';
-      const delay = p.delayMonths !== undefined ? p.delayMonths : (p.delay_months !== undefined ? p.delay_months : (penaltyTypeMap[pType] || 0));
+    if (!pDate || !isDateOnOrAfter(pDate, lastIncr)) return;
+
+    const pType = p.penaltyType || p.penalty_type || '';
+    const delay = p.delayMonths !== undefined ? p.delayMonths : (p.delay_months !== undefined ? p.delay_months : (penaltyTypeMap[pType] || 0));
+    if (delay <= 0) return;
+
+    if (totalCreditMonths > 0 && isDateOnOrAfter(pDate, creditAdjustedDate)) {
+      deferredItems.push({
+        id: p.id,
+        type: 'penalty',
+        originalDate: pDate,
+        months: delay,
+        effect: `تأخير ${delay} شهر مؤجل لدورة الاستحقاق التالية`,
+        reason: `عقوبة (${pType}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
+        status: 'مؤجل_للدورة_التالية',
+        description: `عقوبة (${pType}) بتاريخ (${pDate}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
+      });
+    } else {
       penaltyDelayMonths += delay;
-      if (delay > 0) appliedPenaltiesCount++;
+      appliedPenaltiesCount++;
     }
   });
 
-  // 5. Modifiers: Attendance Absences since lastIncrementDate (exact days, not rounded)
+  // 6. Modifiers: Attendance Absences since lastIncrementDate (exact days, not rounded)
   const attendances = context.attendances || [];
   let absenceDays = 0;
 
@@ -609,20 +721,37 @@ export function calculateIncrementEligibility(
       status === 'غياب_بدون_عذر' ||
       status === 'غياب بدون عذر' ||
       status === 'absence';
-    if (isAbsence && a.date && isDateOnOrAfter(a.date, lastIncr)) {
-      const count = a.count !== undefined ? a.count : (a.days !== undefined ? a.days : (a.durationDays !== undefined ? a.durationDays : (a.duration_days !== undefined ? a.duration_days : 1)));
+    if (!isAbsence || !a.date || !isDateOnOrAfter(a.date, lastIncr)) return;
+
+    const count = a.count !== undefined ? a.count : (a.days !== undefined ? a.days : (a.durationDays !== undefined ? a.durationDays : (a.duration_days !== undefined ? a.duration_days : 1)));
+
+    if (totalCreditMonths > 0 && isDateOnOrAfter(a.date, creditAdjustedDate)) {
+      deferredItems.push({
+        id: a.id,
+        type: 'absence',
+        originalDate: a.date,
+        days: count,
+        effect: `${count} يوم غياب مؤجل لدورة الاستحقاق التالية`,
+        reason: `غياب (${count}) يوم مؤجل لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي بالخدمة المحتسبة.`,
+        status: 'مؤجل_للدورة_التالية',
+        description: `غياب (${count}) يوم بتاريخ (${a.date}) مؤجل لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي بالخدمة المحتسبة.`,
+      });
+    } else {
       absenceDays += count;
     }
   });
 
-  // 6. Calculate Final Next Increment Due Date
-  // Next Date = Base (12m) - Commendations (m) + Penalties (m) + Absences (exact days)
-  let computedDate = addMonthsToDate(lastIncr, 12 - commendationMonths + penaltyDelayMonths);
+  // 7. Calculate Final Next Increment Due Date
+  const effectiveNetMonths = Math.max(0, baseTotalMonths - totalCreditMonths - commendationMonths + penaltyDelayMonths);
+  let computedDate = addMonthsToDate(lastIncr, effectiveNetMonths);
+  if (creditDays > 0) {
+    computedDate = addDaysToDate(computedDate, -creditDays);
+  }
   if (absenceDays > 0) {
     computedDate = addDaysToDate(computedDate, absenceDays);
   }
 
-  // 7. Determine Increment Eligibility Status
+  // 8. Determine Increment Eligibility Status
   let eligibilityStatus: IncrementEligibilityResult['eligibilityStatus'] = 'مؤهل';
   let statusReason = '';
 
@@ -646,11 +775,18 @@ export function calculateIncrementEligibility(
     commendationMonthsDeducted: commendationMonths,
     penaltyMonthsAdded: penaltyDelayMonths,
     absenceDaysAdded: absenceDays,
+    serviceCreditDurationDeducted: {
+      years: creditYears,
+      months: creditMonths,
+      days: creditDays,
+    },
     modifiers: {
       commendationMonths,
       penaltyDelayMonths,
       absenceDays,
+      serviceCreditMonths: totalCreditMonths,
     },
+    deferredItems,
     isSupported: true,
     statusReason,
     appliedCommendationsCount,
@@ -805,10 +941,10 @@ export function calculatePromotionEligibility(
   const effectiveMonthsAfterCredit = Math.max(0, baseTotalMonths - totalCreditMonths);
   const creditAdjustedDate = addMonthsToDate(lastPromo, effectiveMonthsAfterCredit);
 
-  // 5. Track items and deferred items
+  // 5. Track items and deferred items for all 5 modifiers
   const deferredItems: DeferredImpactItem[] = [];
 
-  // 6. Evaluate Commendations for Promotion
+  // 6. Evaluate Commendations for Promotion (Modifier 1)
   const commendations = context.commendations || [];
   let commendationMonths = 0;
   let appliedCommendationsCount = 0;
@@ -829,7 +965,6 @@ export function calculatePromotionEligibility(
     }
     if (months <= 0) return;
 
-    // Check if this commendation falls within the shortened window (after creditAdjustedDate)
     if (totalCreditMonths > 0 && isDateOnOrAfter(orderDate, creditAdjustedDate)) {
       deferredItems.push({
         id: c.id,
@@ -848,7 +983,7 @@ export function calculatePromotionEligibility(
     }
   });
 
-  // 7. Evaluate Penalties for Promotion
+  // 7. Evaluate Penalties for Promotion (Modifier 2)
   const penalties = context.penalties || [];
   const penaltyTypeMap = context.penaltyTypes || DEFAULT_PENALTY_DELAYS;
   let penaltyDelayMonths = 0;
@@ -881,7 +1016,7 @@ export function calculatePromotionEligibility(
     }
   });
 
-  // 8. Evaluate Absences for Promotion
+  // 8. Evaluate Absences for Promotion (Modifier 3)
   const attendances = context.attendances || [];
   let absenceDays = 0;
 
@@ -924,8 +1059,9 @@ export function calculatePromotionEligibility(
     finalDueDate = addDaysToDate(finalDueDate, absenceDays);
   }
 
-  // 10. Gate Conditions (الشروط الحاكمة الإلزامية للترفيع)
-  const gateCheckResults = checkGateConditions(employee, context);
+  // 10. Gate Conditions (الشروط الحاكمة الإلزامية للترفيع) - with cutoffDate for Evaluations & Leaves (Modifiers 4 & 5)
+  const cutoffDate = totalCreditMonths > 0 ? creditAdjustedDate : undefined;
+  const gateCheckResults = checkGateConditions(employee, context, cutoffDate, deferredItems);
 
   // 11. Final Status Resolution
   const isTimeEligible = isDateOnOrAfter(today, finalDueDate);

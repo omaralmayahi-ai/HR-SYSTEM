@@ -547,4 +547,279 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
     expect(result.promotion.unsupportedReason).toContain('احتساب الشهادات أثناء الخدمة');
   });
 
+  // 12. اختبار تأثير احتساب الخدمة (service_credits) على العلاوة السنوية (next_increment_due_date) منفصلاً
+  it('12. تقصير موعد استحقاق العلاوة السنوية (next_increment_due_date) عند وجود خدمة محتسبة تشمل العلاوة', () => {
+    const employee = {
+      id: 12,
+      name: 'طارق عبد الله',
+      grade: 6,
+      step: 2,
+      lastPromotionDate: '2022-01-01',
+      lastIncrementDate: '2025-01-01'
+    };
+
+    const context: EngineContextData = {
+      commendations: [],
+      penalties: [],
+      attendances: [],
+      evaluations: [
+        { employeeId: 12, year: 2024, rating: 'امتياز' },
+        { employeeId: 12, year: 2025, rating: 'امتياز' }
+      ],
+      leaves: [],
+      serviceCredits: [
+        {
+          id: 1201,
+          employeeId: 12,
+          calculatedMonths: 6,
+          purpose: 'علاوة_وترفيع',
+          isCountedForPromotion: true
+        }
+      ],
+      qualifications: [{ employeeId: 12, qualificationType: 'تعيين', isActive: true }],
+      governingCourses: baseGoverningCourses,
+      governingAssignments: {
+        '12': { employeeId: '12', status: 'مشمول', courseProgress: { '1': { completed: true } } }
+      },
+      gradeRules: baseGradeRules
+    };
+
+    const result = recalculateEligibilitySync(employee, context);
+
+    // استحقاق العلاوة الأصلي: 2025-01-01 + 12 شهر = 2026-01-01
+    // باحتساب 6 أشهر خدمة: 2025-01-01 + (12 - 6) = 2025-07-01
+    expect(result.increment.nextIncrementDueDate).toBe('2025-07-01');
+    expect(result.increment.modifiers.serviceCreditMonths).toBe(6);
+    expect(result.increment.isIncrementEligible).toBe(true);
+  });
+
+  // 13. اختبار تأجيل العقوبة الواقعة بالفترة المختصرة بسبب احتساب الخدمة وعدم تأخير الدورة الحالية
+  it('13. عقوبة وقعت بالفترة المختصرة بسبب service_credit تُسجَّل بـ deferredItems ولا تؤخر الدورة الحالية', () => {
+    const employee = {
+      id: 13,
+      name: 'علي ناصر',
+      grade: 7,
+      step: 1,
+      lastPromotionDate: '2020-01-01',
+      lastIncrementDate: '2020-01-01'
+    };
+
+    const context: EngineContextData = {
+      commendations: [],
+      penalties: [
+        {
+          id: 1301,
+          employeeId: 13,
+          penaltyType: 'الإنذار',
+          orderDate: '2023-04-01', // يقع بعد الاستحقاق المختصر (2022-01-01) وقبل الأصلي (2024-01-01)
+          delayMonths: 6,
+          status: 'نافذ'
+        }
+      ],
+      attendances: [],
+      evaluations: [
+        { employeeId: 13, year: 2020, rating: 'امتياز' },
+        { employeeId: 13, year: 2021, rating: 'امتياز' }
+      ],
+      leaves: [],
+      serviceCredits: [
+        {
+          id: 1302,
+          employeeId: 13,
+          calculatedYears: 2, // تقديم سنتين
+          purpose: 'تقاعد_وترقية_وعلاوة',
+          isCountedForPromotion: true
+        }
+      ],
+      qualifications: [{ employeeId: 13, qualificationType: 'تعيين', isActive: true }],
+      governingCourses: baseGoverningCourses,
+      governingAssignments: {
+        '13': { employeeId: '13', status: 'مشمول', courseProgress: { '1': { completed: true } } }
+      },
+      gradeRules: baseGradeRules
+    };
+
+    const result = recalculateEligibilitySync(employee, context);
+
+    // 1. الاستحقاق يظل 2022-01-01 ولا يتأخر بالعقوبة
+    expect(result.promotion.nextPromotionDueDate).toBe('2022-01-01');
+    expect(result.promotion.modifiers.penaltyDelayMonths).toBe(0);
+
+    // 2. العقوبة سُجلت بـ deferredItems للدورة التالية
+    const deferredPenalty = result.promotion.deferredItems.find(d => d.type === 'penalty');
+    expect(deferredPenalty).toBeDefined();
+    expect(deferredPenalty?.months).toBe(6);
+    expect(deferredPenalty?.status).toBe('مؤجل_للدورة_التالية');
+  });
+
+  // 14. اختبار تأجيل الإجازة الموقفة الواقعة بالفترة المختصرة وعدم إيقاف الترفيع الحالي
+  it('14. إجازة موقفة بدأت بالفترة المختصرة بسبب service_credit تُسجَّل بـ deferredItems ولا توقف الترفيع الحالي', () => {
+    const employee = {
+      id: 14,
+      name: 'منى كامل',
+      grade: 7,
+      step: 1,
+      lastPromotionDate: '2020-01-01',
+      lastIncrementDate: '2020-01-01'
+    };
+
+    const context: EngineContextData = {
+      commendations: [],
+      penalties: [],
+      attendances: [],
+      evaluations: [
+        { employeeId: 14, year: 2020, rating: 'امتياز' },
+        { employeeId: 14, year: 2021, rating: 'امتياز' }
+      ],
+      leaves: [
+        {
+          id: 1401,
+          employeeId: 14,
+          leaveType: 'إجازة رعاية خاصة',
+          startDate: '2023-01-01', // بدأت بعد الاستحقاق المختصر (2022-01-01)
+          endDate: '2023-12-31',
+          administrativeEffect: 'يوقف_الترفيع',
+          status: 'موافق_عليها'
+        }
+      ],
+      serviceCredits: [
+        {
+          id: 1402,
+          employeeId: 14,
+          calculatedYears: 2,
+          purpose: 'علاوة_وترفيع',
+          isCountedForPromotion: true
+        }
+      ],
+      qualifications: [{ employeeId: 14, qualificationType: 'تعيين', isActive: true }],
+      governingCourses: baseGoverningCourses,
+      governingAssignments: {
+        '14': { employeeId: '14', status: 'مشمول', courseProgress: { '1': { completed: true } } }
+      },
+      gradeRules: baseGradeRules
+    };
+
+    const result = recalculateEligibilitySync(employee, context);
+
+    // 1. الترفيع لا يتوقف بالإجازة
+    expect(result.promotion.gateChecks.noActivePausingLeaves).toBe(true);
+    expect(result.promotion.eligibilityStatus).toBe('مستحق_للترفيع');
+    expect(result.promotion.nextPromotionDueDate).toBe('2022-01-01');
+
+    // 2. الإجازة سُجلت بـ deferredItems للدورة التالية
+    const deferredLeave = result.promotion.deferredItems.find(d => d.type === 'leave');
+    expect(deferredLeave).toBeDefined();
+    expect(deferredLeave?.status).toBe('مؤجل_للدورة_التالية');
+  });
+
+  // 15. اختبار تأجيل تقييم الأداء (مقبول/ضعيف) الواقع بالفترة المختصرة وعدم حجب الترفيع الحالي
+  it('15. تقييم أداء غير مستوفٍ (مقبول/ضعيف) لسنة تقع بالفترة المختصرة يُسجَّل بـ deferredItems ولا يحجب الترفيع الحالي', () => {
+    const employee = {
+      id: 15,
+      name: 'سامر خليل',
+      grade: 7,
+      step: 1,
+      lastPromotionDate: '2020-01-01',
+      lastIncrementDate: '2020-01-01'
+    };
+
+    const context: EngineContextData = {
+      commendations: [],
+      penalties: [],
+      attendances: [],
+      evaluations: [
+        { employeeId: 15, year: 2021, rating: 'امتياز' },
+        { employeeId: 15, year: 2020, rating: 'جيد جدا' },
+        { employeeId: 15, year: 2023, rating: 'مقبول' } // تقييم سنة 2023 بعد اكتمال الاستحقاق بالخدمة (2022)
+      ],
+      leaves: [],
+      serviceCredits: [
+        {
+          id: 1501,
+          employeeId: 15,
+          calculatedYears: 2,
+          purpose: 'علاوة_وترفيع',
+          isCountedForPromotion: true
+        }
+      ],
+      qualifications: [{ employeeId: 15, qualificationType: 'تعيين', isActive: true }],
+      governingCourses: baseGoverningCourses,
+      governingAssignments: {
+        '15': { employeeId: '15', status: 'مشمول', courseProgress: { '1': { completed: true } } }
+      },
+      gradeRules: baseGradeRules
+    };
+
+    const result = recalculateEligibilitySync(employee, context);
+
+    // 1. تقييم 2023 لا يحجب الدورة الحالية لأن استحقاقها اكتمل في 2022
+    expect(result.promotion.gateChecks.evaluationsSatisfied).toBe(true);
+    expect(result.promotion.eligibilityStatus).toBe('مستحق_للترفيع');
+    expect(result.promotion.nextPromotionDueDate).toBe('2022-01-01');
+
+    // 2. تقييم 2023 المقبول سُجّل بـ deferredItems للدورة التالية
+    const deferredEval = result.promotion.deferredItems.find(d => d.type === 'evaluation');
+    expect(deferredEval).toBeDefined();
+    expect(deferredEval?.year).toBe(2023);
+    expect(deferredEval?.status).toBe('مؤجل_للدورة_التالية');
+  });
+
+  // 16. اختبار تأجيل الغياب الواقع بالفترة المختصرة بدقة الأيام
+  it('16. غياب واقع بالفترة المختصرة بسبب service_credit يُسجَّل بـ deferredItems بدقة الأيام ولا يؤخر الدورة الحالية', () => {
+    const employee = {
+      id: 16,
+      name: 'فاطمة محمود',
+      grade: 7,
+      step: 1,
+      lastPromotionDate: '2020-01-01',
+      lastIncrementDate: '2020-01-01'
+    };
+
+    const context: EngineContextData = {
+      commendations: [],
+      penalties: [],
+      attendances: [
+        {
+          employeeId: 16,
+          date: '2023-02-10', // بعد استحقاق 2022-01-01
+          status: 'غائب',
+          count: 15 // 15 يوم غياب
+        }
+      ],
+      evaluations: [
+        { employeeId: 16, year: 2020, rating: 'امتياز' },
+        { employeeId: 16, year: 2021, rating: 'امتياز' }
+      ],
+      leaves: [],
+      serviceCredits: [
+        {
+          id: 1601,
+          employeeId: 16,
+          calculatedYears: 2,
+          purpose: 'علاوة_وترفيع',
+          isCountedForPromotion: true
+        }
+      ],
+      qualifications: [{ employeeId: 16, qualificationType: 'تعيين', isActive: true }],
+      governingCourses: baseGoverningCourses,
+      governingAssignments: {
+        '16': { employeeId: '16', status: 'مشمول', courseProgress: { '1': { completed: true } } }
+      },
+      gradeRules: baseGradeRules
+    };
+
+    const result = recalculateEligibilitySync(employee, context);
+
+    // 1. الاستحقاق يظل 2022-01-01 دون إضافة الـ 15 يوم غياب للدورة الحالية
+    expect(result.promotion.nextPromotionDueDate).toBe('2022-01-01');
+    expect(result.promotion.modifiers.absenceDays).toBe(0);
+
+    // 2. الـ 15 يوم غياب سُجلت بـ deferredItems للدورة التالية
+    const deferredAbsence = result.promotion.deferredItems.find(d => d.type === 'absence');
+    expect(deferredAbsence).toBeDefined();
+    expect(deferredAbsence?.days).toBe(15);
+    expect(deferredAbsence?.status).toBe('مؤجل_للدورة_التالية');
+  });
+
 });
+
