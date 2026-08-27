@@ -6517,6 +6517,9 @@ async function startServer() {
             console.log('[SECURITY] Upgrading legacy plain-text local_storage.json to AES-256-GCM encryption...');
             saveLocalDb();
           }
+        } catch (e) {
+          // not legacy raw json or already ciphertext
+        }
         if (Array.isArray(state.inMemoryEmployees) && state.inMemoryEmployees.length > 0) {
           inMemoryEmployees = state.inMemoryEmployees.map((emp: any) => {
             const baseDt = emp.gradeDate || emp.grade_date || emp.currentAppointmentDate || emp.current_appointment_date || emp.firstAppointmentDate || emp.first_appointment_date || emp.appointmentDate || emp.appointment_date || '';
