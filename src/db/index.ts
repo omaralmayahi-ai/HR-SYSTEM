@@ -88,6 +88,10 @@ export async function ensureSchema() {
         grade INTEGER,
         step INTEGER,
         grade_date TEXT,
+        last_promotion_date TEXT,
+        last_increment_date TEXT,
+        next_promotion_due_date TEXT,
+        next_increment_due_date TEXT,
         job_responsibility TEXT,
         deputy_status TEXT,
         primary_responsibility TEXT,
@@ -162,11 +166,23 @@ export async function ensureSchema() {
       `ALTER TABLE employees ADD COLUMN IF NOT EXISTS retirement_extension_note TEXT`,
       `ALTER TABLE employees ADD COLUMN IF NOT EXISTS spouse_names TEXT`,
       `ALTER TABLE employees ADD COLUMN IF NOT EXISTS spouses_data TEXT`,
-      `ALTER TABLE employees ADD COLUMN IF NOT EXISTS children_details TEXT`
+      `ALTER TABLE employees ADD COLUMN IF NOT EXISTS children_details TEXT`,
+      `ALTER TABLE employees ADD COLUMN IF NOT EXISTS last_promotion_date TEXT`,
+      `ALTER TABLE employees ADD COLUMN IF NOT EXISTS last_increment_date TEXT`,
+      `ALTER TABLE employees ADD COLUMN IF NOT EXISTS next_promotion_due_date TEXT`,
+      `ALTER TABLE employees ADD COLUMN IF NOT EXISTS next_increment_due_date TEXT`
     ];
     for (const q of employeeCols) {
       await safeQuery(q);
     }
+
+    // Backfill existing employee records: copy grade_date to last_promotion_date and last_increment_date as best baseline estimate
+    await safeQuery(`
+      UPDATE employees 
+      SET last_promotion_date = COALESCE(last_promotion_date, grade_date, current_appointment_date, first_appointment_date, appointment_date),
+          last_increment_date = COALESCE(last_increment_date, grade_date, current_appointment_date, first_appointment_date, appointment_date)
+      WHERE last_promotion_date IS NULL OR last_increment_date IS NULL;
+    `);
 
 
     await safeQuery(`

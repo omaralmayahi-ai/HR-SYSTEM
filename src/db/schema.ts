@@ -54,6 +54,10 @@ export const employees = pgTable('employees', {
   grade: integer('grade'),
   step: integer('step'),
   gradeDate: text('grade_date'),
+  lastPromotionDate: text('last_promotion_date'), // تاريخ آخر ترفيع فعلي للدرجة
+  lastIncrementDate: text('last_increment_date'), // تاريخ آخر علاوة سنوية للمرحلة
+  nextPromotionDueDate: text('next_promotion_due_date'), // تاريخ استحقاق الترفيع القادم (يحسب لاحقاً من محرك الاستحقاق)
+  nextIncrementDueDate: text('next_increment_due_date'), // تاريخ استحقاق العلاوة القادمة (يحسب لاحقاً من محرك الاستحقاق)
   jobResponsibility: text('job_responsibility'), // المسؤولية الوظيفية (قديمة، للإبقاء على التوافق)
   deputyStatus: text('deputy_status'), // صفة وكيل أول أو ثاني (قديمة)
   primaryResponsibility: text('primary_responsibility'), // المسؤولية الأساسية

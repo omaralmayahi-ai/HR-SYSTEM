@@ -773,6 +773,22 @@ async function startServer() {
     mapped.spousesData = mapped.spouses_data;
     mapped.childrenDetails = mapped.children_details;
 
+    // Ensure promotion & increment date fields are preserved and synced
+    const baseGradeDate = mapped.grade_date || emp.gradeDate || emp.grade_date || mapped.current_appointment_date || emp.currentAppointmentDate || '';
+    const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || mapped.last_promotion_date || mapped.lastPromotionDate || baseGradeDate || '';
+    const lastIncr = emp.lastIncrementDate || emp.last_increment_date || mapped.last_increment_date || mapped.lastIncrementDate || baseGradeDate || '';
+    const nextPromo = emp.nextPromotionDueDate || emp.next_promotion_due_date || mapped.next_promotion_due_date || mapped.nextPromotionDueDate || null;
+    const nextIncr = emp.nextIncrementDueDate || emp.next_increment_due_date || mapped.next_increment_due_date || mapped.nextIncrementDueDate || null;
+
+    mapped.last_promotion_date = lastPromo;
+    mapped.lastPromotionDate = lastPromo;
+    mapped.last_increment_date = lastIncr;
+    mapped.lastIncrementDate = lastIncr;
+    mapped.next_promotion_due_date = nextPromo;
+    mapped.nextPromotionDueDate = nextPromo;
+    mapped.next_increment_due_date = nextIncr;
+    mapped.nextIncrementDueDate = nextIncr;
+
     return mapped;
   }
 
@@ -944,6 +960,10 @@ async function startServer() {
       step: 4,
       gradeDate: '2025-12-20',
       grade_date: '2025-12-20',
+      lastPromotionDate: '2025-12-20',
+      last_promotion_date: '2025-12-20',
+      lastIncrementDate: '2025-12-20',
+      last_increment_date: '2025-12-20',
       jobResponsibility: 'بلا مسؤولية',
       job_responsibility: 'بلا مسؤولية',
       primaryResponsibility: 'بلا مسؤولية',
@@ -6019,8 +6039,24 @@ async function startServer() {
             console.log('[SECURITY] Upgrading legacy plain-text local_storage.json to AES-256-GCM encryption...');
             saveLocalDb();
           }
-        } catch (e) {}
-        if (Array.isArray(state.inMemoryEmployees) && state.inMemoryEmployees.length > 0) inMemoryEmployees = state.inMemoryEmployees;
+        if (Array.isArray(state.inMemoryEmployees) && state.inMemoryEmployees.length > 0) {
+          inMemoryEmployees = state.inMemoryEmployees.map((emp: any) => {
+            const baseDt = emp.gradeDate || emp.grade_date || emp.currentAppointmentDate || emp.current_appointment_date || emp.firstAppointmentDate || emp.first_appointment_date || emp.appointmentDate || emp.appointment_date || '';
+            const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || baseDt;
+            const lastIncr = emp.lastIncrementDate || emp.last_increment_date || baseDt;
+            return {
+              ...emp,
+              lastPromotionDate: lastPromo,
+              last_promotion_date: lastPromo,
+              lastIncrementDate: lastIncr,
+              last_increment_date: lastIncr,
+              nextPromotionDueDate: emp.nextPromotionDueDate || emp.next_promotion_due_date || null,
+              next_promotion_due_date: emp.next_promotion_due_date || emp.nextPromotionDueDate || null,
+              nextIncrementDueDate: emp.nextIncrementDueDate || emp.next_increment_due_date || null,
+              next_increment_due_date: emp.next_increment_due_date || emp.nextIncrementDueDate || null,
+            };
+          });
+        }
         if (state.genericMemoryStores && typeof state.genericMemoryStores === 'object') {
           for (const [k, v] of Object.entries(state.genericMemoryStores)) {
             if (Array.isArray(v)) {
