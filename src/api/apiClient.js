@@ -199,7 +199,16 @@ export const apiClient = {
     EvaluationForm: createEntityClient('evaluation-forms'),
     GoverningCourse: createEntityClient('governing-courses'),
     JobTitle: createEntityClient('job-titles'),
-    GradePromotionRule: createEntityClient('grade-promotion-rules')
+    GradePromotionRule: createEntityClient('grade-promotion-rules'),
+    CommendationType: createEntityClient('commendation-types'),
+    EmployeeCommendation: createEntityClient('employee-commendations'),
+    CommendationRulesSetting: {
+      get: async () => request('/api/commendation-rules-settings'),
+      update: async (data) => request('/api/commendation-rules-settings', {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      })
+    }
   },
   settings: {
     get: async () => request('/api/settings'),

@@ -877,3 +877,52 @@ export const gradePromotionRules = pgTable('grade_promotion_rules', {
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
+
+// 37. Commendation Types table (أنواع كتب الشكر والتقدير وشهور القدم)
+export const commendationTypes = pgTable('commendation_types', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull(), // اسم نوع كتاب الشكر (مثلاً: كتاب شكر وزاري، كتاب شكر رئاسي)
+  creditMonths: integer('credit_months').notNull().default(1), // عدد أشهر القدم الممنوحة (1 أو 6)
+  status: text('status').default('فعال'), // فعال / معطل
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// 38. Employee Commendations table (سجل كتب الشكر والتقدير الممنوحة لكل موظف)
+export const employeeCommendations = pgTable('employee_commendations', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id')
+    .references(() => employees.id, { onDelete: 'cascade' })
+    .notNull(),
+  commendationTypeId: integer('commendation_type_id')
+    .references(() => commendationTypes.id, { onDelete: 'set null' }),
+  creditMonthsSnapshot: integer('credit_months_snapshot').notNull().default(1), // لقطة جامدة لعدد شهور القدم وقت المنح
+  orderNumber: text('order_number'), // رقم الأمر الإداري
+  orderDate: text('order_date'), // تاريخ الأمر الإداري
+  issuer: text('issuer'), // الجهة المانحة (الوزير، المدير العام، رئيس مجلس الوزراء)
+  reason: text('reason'), // سبب منح كتاب الشكر
+  isHidden: boolean('is_hidden').default(false), // إخفاء من الاحتساب المباشر للترقية
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const employeeCommendationsRelations = relations(employeeCommendations, ({ one }) => ({
+  employee: one(employees, {
+    fields: [employeeCommendations.employeeId],
+    references: [employees.id],
+  }),
+  commendationType: one(commendationTypes, {
+    fields: [employeeCommendations.commendationTypeId],
+    references: [commendationTypes.id],
+  }),
+}));
+
+// 39. Commendation Rules Settings table (إعدادات وقيود كتب الشكر السنوية)
+export const commendationRulesSettings = pgTable('commendation_rules_settings', {
+  id: serial('id').primaryKey(),
+  configKey: text('config_key').notNull().unique().default('default_commendation_rules'),
+  maxPerYear: integer('max_per_year').default(3), // الحد الأقصى لعدد كتب الشكر المحتسبة سنوياً
+  allowedCombinations: text('allowed_combinations'), // JSON stringified array of permitted combinations
+  updatedAt: timestamp('updated_at').defaultNow(),
+});

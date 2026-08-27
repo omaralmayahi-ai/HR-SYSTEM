@@ -686,6 +686,65 @@ export async function ensureSchema() {
         (13, NULL, 'درجة خاصة / عليا ج')
       ON CONFLICT (grade) DO NOTHING;
     `);
+
+    // 9. Commendation Types Table (أنواع كتب الشكر والتقدير)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS commendation_types (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        credit_months INTEGER NOT NULL DEFAULT 1,
+        status TEXT DEFAULT 'فعال',
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await safeQuery(`
+      INSERT INTO commendation_types (name, credit_months, status, notes)
+      VALUES 
+        ('كتاب شكر وتقدير اعتيادي / مدير عام', 1, 'فعال', 'يمنح قدماً لمدة شهر واحد'),
+        ('كتاب شكر وتقدير وزاري', 1, 'فعال', 'يمنح قدماً لمدة شهر واحد'),
+        ('كتاب شكر وتقدير استثنائي (رئاسي / رئيس مجلس الوزراء)', 6, 'فعال', 'يمنح قدماً لمدة 6 أشهر')
+      ON CONFLICT DO NOTHING;
+    `);
+
+    // 10. Employee Commendations Table (سجل كتب الشكر الممنوحة للموظفين)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS employee_commendations (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER NOT NULL,
+        commendation_type_id INTEGER,
+        credit_months_snapshot INTEGER NOT NULL DEFAULT 1,
+        order_number TEXT,
+        order_date TEXT,
+        issuer TEXT,
+        reason TEXT,
+        is_hidden BOOLEAN DEFAULT FALSE,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 11. Commendation Rules Settings Table (إعدادات وضوابط كتب الشكر)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS commendation_rules_settings (
+        id SERIAL PRIMARY KEY,
+        config_key TEXT UNIQUE NOT NULL DEFAULT 'default_commendation_rules',
+        max_per_year INTEGER DEFAULT 3,
+        allowed_combinations TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await safeQuery(`
+      INSERT INTO commendation_rules_settings (config_key, max_per_year, allowed_combinations)
+      VALUES (
+        'default_commendation_rules',
+        3,
+        '[{"label":"3 كتب عادية (شهر واحد)","maxCount":3,"creditMonths":1},{"label":"كتابان عاديان + كتاب استثنائي (6 أشهر)","maxCount":3,"rules":[{"count":2,"creditMonths":1},{"count":1,"creditMonths":6}]},{"label":"كتابان استثنائيان (6 أشهر)","maxCount":2,"rules":[{"count":2,"creditMonths":6}]}]'
+      ) ON CONFLICT (config_key) DO NOTHING;
+    `);
   } catch (err) {
     console.error('Migration execution notice:', err);
   }

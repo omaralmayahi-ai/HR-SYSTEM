@@ -2670,6 +2670,32 @@ async function startServer() {
     { id: 13, grade: 13, promotion_years: null, promotionYears: null, notes: 'درجة خاصة / عليا ج' },
   ];
 
+  let inMemoryCommendationTypes: any[] = [
+    { id: 1, name: 'كتاب شكر وتقدير اعتيادي / مدير عام', credit_months: 1, creditMonths: 1, status: 'فعال', notes: 'يمنح قدماً لمدة شهر واحد' },
+    { id: 2, name: 'كتاب شكر وتقدير وزاري', credit_months: 1, creditMonths: 1, status: 'فعال', notes: 'يمنح قدماً لمدة شهر واحد' },
+    { id: 3, name: 'كتاب شكر وتقدير استثنائي (رئاسي / رئيس مجلس الوزراء)', credit_months: 6, creditMonths: 6, status: 'فعال', notes: 'يمنح قدماً لمدة 6 أشهر' }
+  ];
+
+  let inMemoryEmployeeCommendations: any[] = [];
+
+  let inMemoryCommendationRulesSettings: any = {
+    id: 1,
+    config_key: 'default_commendation_rules',
+    configKey: 'default_commendation_rules',
+    max_per_year: 3,
+    maxPerYear: 3,
+    allowed_combinations: JSON.stringify([
+      { label: "3 كتب عادية (شهر واحد)", maxCount: 3, creditMonths: 1 },
+      { label: "كتابان عاديان + كتاب استثنائي (6 أشهر)", maxCount: 3, rules: [{ count: 2, creditMonths: 1 }, { count: 1, creditMonths: 6 }] },
+      { label: "كتابان استثنائيان (6 أشهر)", maxCount: 2, rules: [{ count: 2, creditMonths: 6 }] }
+    ]),
+    allowedCombinations: JSON.stringify([
+      { label: "3 كتب عادية (شهر واحد)", maxCount: 3, creditMonths: 1 },
+      { label: "كتابان عاديان + كتاب استثنائي (6 أشهر)", maxCount: 3, rules: [{ count: 2, creditMonths: 1 }, { count: 1, creditMonths: 6 }] },
+      { label: "كتابان استثنائيان (6 أشهر)", maxCount: 2, rules: [{ count: 2, creditMonths: 6 }] }
+    ])
+  };
+
   let inMemoryAllowancesDeductions: any[] = [
     { id: 1, name: 'مخصصات شهادة دكتوراه', type: 'allowance', calcType: 'percentage', value: 100, status: 'فعال' },
     { id: 2, name: 'مخصصات شهادة ماجستير', type: 'allowance', calcType: 'percentage', value: 75, status: 'فعال' },
@@ -3104,6 +3130,242 @@ async function startServer() {
     });
     saveLocalDb();
     res.json({ success: true, count: items.length });
+  });
+
+  // --- Commendation Types API (أنواع كتب الشكر والتقدير) ---
+  app.get('/api/commendation-types', requireAuth, async (req, res) => {
+    try {
+      const records = await db.select().from(schema.commendationTypes).orderBy(asc(schema.commendationTypes.id));
+      if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
+    } catch (e) {
+      console.warn('Database fallback for commendation-types');
+    }
+    res.json(inMemoryCommendationTypes.map(r => mapKeys(r, camelToSnake)));
+  });
+
+  app.post('/api/commendation-types', requireAuth, async (req, res) => {
+    const { name, credit_months, creditMonths, status, notes } = req.body;
+    const cMonths = parseInt(credit_months ?? creditMonths ?? 1);
+    try {
+      const [inserted] = await db.insert(schema.commendationTypes).values({
+        name,
+        creditMonths: cMonths,
+        status: status || 'فعال',
+        notes: notes || '',
+      }).returning();
+      if (inserted) {
+        inMemoryCommendationTypes.push(mapKeys(inserted, camelToSnake));
+        saveLocalDb();
+        return res.status(201).json(mapKeys(inserted, camelToSnake));
+      }
+    } catch (e) {
+      console.warn('Database fallback for create commendation-type');
+    }
+    const newId = inMemoryCommendationTypes.length + 1;
+    const mem = { id: newId, name, credit_months: cMonths, creditMonths: cMonths, status: status || 'فعال', notes: notes || '' };
+    inMemoryCommendationTypes.push(mem);
+    saveLocalDb();
+    res.status(201).json(mem);
+  });
+
+  app.put('/api/commendation-types/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    const { name, credit_months, creditMonths, status, notes } = req.body;
+    const cMonths = credit_months !== undefined ? parseInt(credit_months) : (creditMonths !== undefined ? parseInt(creditMonths) : undefined);
+    try {
+      const updateData: any = { updatedAt: new Date() };
+      if (name !== undefined) updateData.name = name;
+      if (cMonths !== undefined) updateData.creditMonths = cMonths;
+      if (status !== undefined) updateData.status = status;
+      if (notes !== undefined) updateData.notes = notes;
+
+      const [updated] = await db.update(schema.commendationTypes)
+        .set(updateData)
+        .where(eq(schema.commendationTypes.id, id))
+        .returning();
+      if (updated) {
+        const idx = inMemoryCommendationTypes.findIndex(r => r.id === id);
+        if (idx !== -1) inMemoryCommendationTypes[idx] = { ...inMemoryCommendationTypes[idx], ...mapKeys(updated, camelToSnake) };
+        saveLocalDb();
+        return res.json(mapKeys(updated, camelToSnake));
+      }
+    } catch (e) {
+      console.warn('Database fallback for update commendation-type');
+    }
+    const idx = inMemoryCommendationTypes.findIndex(r => r.id === id);
+    if (idx !== -1) {
+      if (name !== undefined) inMemoryCommendationTypes[idx].name = name;
+      if (cMonths !== undefined) {
+        inMemoryCommendationTypes[idx].credit_months = cMonths;
+        inMemoryCommendationTypes[idx].creditMonths = cMonths;
+      }
+      if (status !== undefined) inMemoryCommendationTypes[idx].status = status;
+      if (notes !== undefined) inMemoryCommendationTypes[idx].notes = notes;
+      saveLocalDb();
+      return res.json(inMemoryCommendationTypes[idx]);
+    }
+    res.json({ id, name, status });
+  });
+
+  app.delete('/api/commendation-types/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    try {
+      await db.delete(schema.commendationTypes).where(eq(schema.commendationTypes.id, id));
+    } catch (e) {
+      console.warn('Database fallback for delete commendation-type');
+    }
+    inMemoryCommendationTypes = inMemoryCommendationTypes.filter(r => r.id !== id);
+    saveLocalDb();
+    res.json({ success: true });
+  });
+
+  // --- Employee Commendations API (سجل كتب الشكر الممنوحة للموظفين) ---
+  app.get('/api/employee-commendations', requireAuth, async (req, res) => {
+    const empIdParam = req.query.employeeId || req.query.employee_id;
+    const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
+    try {
+      let query = db.select().from(schema.employeeCommendations);
+      if (employeeId && !isNaN(employeeId)) {
+        query = db.select().from(schema.employeeCommendations).where(eq(schema.employeeCommendations.employeeId, employeeId)) as any;
+      }
+      const records = await query.orderBy(desc(schema.employeeCommendations.createdAt));
+      if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
+    } catch (e) {
+      console.warn('Database fallback for employee-commendations');
+    }
+    let list = inMemoryEmployeeCommendations;
+    if (employeeId) list = list.filter(r => r.employee_id === employeeId || r.employeeId === employeeId);
+    res.json(list);
+  });
+
+  app.post('/api/employee-commendations', requireAuth, async (req, res) => {
+    const data = req.body;
+    const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
+    if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
+
+    let creditMonthsSnapshot = data.credit_months_snapshot !== undefined ? parseInt(data.credit_months_snapshot) : (data.creditMonthsSnapshot !== undefined ? parseInt(data.creditMonthsSnapshot) : undefined);
+    if (creditMonthsSnapshot === undefined && (data.commendation_type_id || data.commendationTypeId)) {
+      const typeId = parseInt(data.commendation_type_id || data.commendationTypeId);
+      const foundType = inMemoryCommendationTypes.find(t => t.id === typeId);
+      creditMonthsSnapshot = foundType ? (foundType.credit_months || foundType.creditMonths || 1) : 1;
+    }
+    if (creditMonthsSnapshot === undefined) creditMonthsSnapshot = 1;
+
+    try {
+      const [inserted] = await db.insert(schema.employeeCommendations).values({
+        employeeId,
+        commendationTypeId: data.commendation_type_id ? parseInt(data.commendation_type_id) : (data.commendationTypeId ? parseInt(data.commendationTypeId) : null),
+        creditMonthsSnapshot,
+        orderNumber: data.order_number || data.orderNumber,
+        orderDate: data.order_date || data.orderDate,
+        issuer: data.issuer || 'الوزارة',
+        reason: data.reason || '',
+        isHidden: data.is_hidden === true || data.isHidden === true,
+        notes: data.notes || '',
+      }).returning();
+      if (inserted) {
+        inMemoryEmployeeCommendations.push(mapKeys(inserted, camelToSnake));
+        saveLocalDb();
+        return res.status(201).json(mapKeys(inserted, camelToSnake));
+      }
+    } catch (e) {
+      console.warn('Database fallback for create employee-commendation');
+    }
+    const newId = inMemoryEmployeeCommendations.length + 1;
+    const mem = { id: newId, employee_id: employeeId, ...data, credit_months_snapshot: creditMonthsSnapshot, creditMonthsSnapshot, created_at: new Date().toISOString() };
+    inMemoryEmployeeCommendations.push(mem);
+    saveLocalDb();
+    res.status(201).json(mem);
+  });
+
+  app.put('/api/employee-commendations/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    const data = req.body;
+    try {
+      const updateData: any = {};
+      if (data.order_number !== undefined || data.orderNumber !== undefined) updateData.orderNumber = data.order_number || data.orderNumber;
+      if (data.order_date !== undefined || data.orderDate !== undefined) updateData.orderDate = data.order_date || data.orderDate;
+      if (data.issuer !== undefined) updateData.issuer = data.issuer;
+      if (data.reason !== undefined) updateData.reason = data.reason;
+      if (data.is_hidden !== undefined || data.isHidden !== undefined) updateData.isHidden = data.is_hidden ?? data.isHidden;
+      if (data.notes !== undefined) updateData.notes = data.notes;
+      if (data.credit_months_snapshot !== undefined || data.creditMonthsSnapshot !== undefined) updateData.creditMonthsSnapshot = parseInt(data.credit_months_snapshot || data.creditMonthsSnapshot);
+
+      const [updated] = await db.update(schema.employeeCommendations)
+        .set(updateData)
+        .where(eq(schema.employeeCommendations.id, id))
+        .returning();
+      if (updated) {
+        const idx = inMemoryEmployeeCommendations.findIndex(r => r.id === id);
+        if (idx !== -1) inMemoryEmployeeCommendations[idx] = { ...inMemoryEmployeeCommendations[idx], ...mapKeys(updated, camelToSnake) };
+        saveLocalDb();
+        return res.json(mapKeys(updated, camelToSnake));
+      }
+    } catch (e) {
+      console.warn('Database fallback for update employee-commendation');
+    }
+    const idx = inMemoryEmployeeCommendations.findIndex(r => r.id === id);
+    if (idx !== -1) {
+      inMemoryEmployeeCommendations[idx] = { ...inMemoryEmployeeCommendations[idx], ...data };
+      saveLocalDb();
+      return res.json(inMemoryEmployeeCommendations[idx]);
+    }
+    res.json({ id, ...data });
+  });
+
+  app.delete('/api/employee-commendations/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    try {
+      await db.delete(schema.employeeCommendations).where(eq(schema.employeeCommendations.id, id));
+    } catch (e) {
+      console.warn('Database fallback for delete employee-commendation');
+    }
+    inMemoryEmployeeCommendations = inMemoryEmployeeCommendations.filter(r => r.id !== id);
+    saveLocalDb();
+    res.json({ success: true });
+  });
+
+  // --- Commendation Rules Settings API (إعدادات وضوابط كتب الشكر) ---
+  app.get('/api/commendation-rules-settings', requireAuth, async (req, res) => {
+    try {
+      const records = await db.select().from(schema.commendationRulesSettings).where(eq(schema.commendationRulesSettings.configKey, 'default_commendation_rules'));
+      if (records && records.length > 0) return res.json(mapKeys(records[0], camelToSnake));
+    } catch (e) {
+      console.warn('Database fallback for commendation-rules-settings');
+    }
+    res.json(inMemoryCommendationRulesSettings);
+  });
+
+  app.put('/api/commendation-rules-settings', requireAuth, async (req, res) => {
+    const { max_per_year, maxPerYear, allowed_combinations, allowedCombinations } = req.body;
+    const maxVal = max_per_year !== undefined ? parseInt(max_per_year) : (maxPerYear !== undefined ? parseInt(maxPerYear) : 3);
+    const combos = typeof (allowed_combinations || allowedCombinations) === 'object' ? JSON.stringify(allowed_combinations || allowedCombinations) : (allowed_combinations || allowedCombinations || '');
+
+    try {
+      await db.insert(schema.commendationRulesSettings).values({
+        configKey: 'default_commendation_rules',
+        maxPerYear: maxVal,
+        allowedCombinations: combos,
+      }).onConflictDoUpdate({
+        target: schema.commendationRulesSettings.configKey,
+        set: {
+          maxPerYear: maxVal,
+          allowedCombinations: combos,
+          updatedAt: new Date()
+        }
+      });
+    } catch (e) {
+      console.warn('Database fallback for update commendation-rules-settings');
+    }
+    inMemoryCommendationRulesSettings = {
+      ...inMemoryCommendationRulesSettings,
+      max_per_year: maxVal,
+      maxPerYear: maxVal,
+      allowed_combinations: combos,
+      allowedCombinations: combos
+    };
+    saveLocalDb();
+    res.json(inMemoryCommendationRulesSettings);
   });
 
   // --- Allowances and Deductions API ---
@@ -6167,6 +6429,9 @@ async function startServer() {
         inMemoryLeaveTypes,
         inMemorySalaryScale,
         inMemoryGradePromotionRules,
+        inMemoryCommendationTypes,
+        inMemoryEmployeeCommendations,
+        inMemoryCommendationRulesSettings,
         inMemoryJobTitles,
         systemSettingsStore,
         leaveAccrualLogs,
@@ -6287,6 +6552,9 @@ async function startServer() {
         if (Array.isArray(state.inMemoryLeaveTypes) && state.inMemoryLeaveTypes.length > 0) inMemoryLeaveTypes = state.inMemoryLeaveTypes;
         if (Array.isArray(state.inMemorySalaryScale) && state.inMemorySalaryScale.length > 0) inMemorySalaryScale = state.inMemorySalaryScale;
         if (Array.isArray(state.inMemoryGradePromotionRules) && state.inMemoryGradePromotionRules.length > 0) inMemoryGradePromotionRules = state.inMemoryGradePromotionRules;
+        if (Array.isArray(state.inMemoryCommendationTypes) && state.inMemoryCommendationTypes.length > 0) inMemoryCommendationTypes = state.inMemoryCommendationTypes;
+        if (Array.isArray(state.inMemoryEmployeeCommendations)) inMemoryEmployeeCommendations = state.inMemoryEmployeeCommendations;
+        if (state.inMemoryCommendationRulesSettings && typeof state.inMemoryCommendationRulesSettings === 'object') inMemoryCommendationRulesSettings = state.inMemoryCommendationRulesSettings;
         if (Array.isArray(state.inMemoryJobTitles) && state.inMemoryJobTitles.length > 0) inMemoryJobTitles = state.inMemoryJobTitles;
         if (state.systemSettingsStore && typeof state.systemSettingsStore === 'object') {
           systemSettingsStore = { ...systemSettingsStore, ...state.systemSettingsStore };
