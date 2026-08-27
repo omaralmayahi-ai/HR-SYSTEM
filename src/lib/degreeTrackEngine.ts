@@ -106,6 +106,7 @@ export interface DegreeTrackSimulationResult {
   lastSimulatedPromotionDate: string;
   hasDeficit: boolean;
   deficitCycles: number;
+  snapshotStatus: 'نشط' | 'مكتمل';
   realTimeNextPromotion: {
     fromGrade: number;
     toGrade: number;
@@ -238,12 +239,30 @@ export function calculateDegreeTrackSimulation(
   let currentSimGrade = baselineGrade;
   let currentDate = graduationDateUsed;
   let lastSimulatedPromotionDate = graduationDateUsed;
+  const penalties = context.penalties || [];
+  const penaltyTypeMap = context.penaltyTypes || DEFAULT_PENALTY_DELAYS;
 
   for (let cycle = 1; cycle <= possibleCycles; cycle++) {
     if (currentSimGrade <= 1) break; // Reached top of scale
 
     const nextSimGrade = currentSimGrade - 1;
-    const computedDate = addMonthsToDate(currentDate, 24);
+
+    // Check penalties occurring in this simulation cycle interval
+    let cyclePenaltyDelayMonths = 0;
+    const cycleBaseEndDate = addMonthsToDate(currentDate, 24);
+
+    penalties.forEach(p => {
+      const status = p.status || 'نافذ';
+      if (status !== 'نافذ' && status !== 'active') return;
+      const pDate = p.penaltyDate || p.penalty_date || p.orderDate || p.order_date;
+      if (pDate && isDateBetween(pDate, currentDate, cycleBaseEndDate)) {
+        const pType = p.penaltyType || p.penalty_type || '';
+        const delay = p.delayMonths !== undefined ? p.delayMonths : (p.delay_months !== undefined ? p.delay_months : (penaltyTypeMap[pType] || 0));
+        cyclePenaltyDelayMonths += delay;
+      }
+    });
+
+    const computedDate = addMonthsToDate(currentDate, 24 + cyclePenaltyDelayMonths);
 
     // Determine required training weeks for this step
     let requiredWeeks = 2; // General rule: 2 weeks per promotion
@@ -279,7 +298,9 @@ export function calculateDegreeTrackSimulation(
         status: 'ممنوح_بالمحاكاة',
         notes: isBundled
           ? (cycle === 1 ? 'ممنوح بالمحاكاة ضمن استثناء الـ 10 سنوات (الترفيع الأول والثاني بدورة واحدة)' : 'ممنوح بالمحاكاة ومدمج مع الترفيع السابق ضمن استثناء الـ 10 سنوات')
-          : `ممنوح بالمحاكاة باستهلاك ${requiredWeeks} أسابيع رصيد اختصاص`,
+          : (cyclePenaltyDelayMonths > 0
+            ? `ممنوح بالمحاكاة باستهلاك ${requiredWeeks} أسابيع رصيد اختصاص مع تأخير ${cyclePenaltyDelayMonths} شهر بسبب عقوبة نافذة أثناء الفترة المقضية`
+            : `ممنوح بالمحاكاة باستهلاك ${requiredWeeks} أسابيع رصيد اختصاص`),
       });
 
       currentSimGrade = nextSimGrade;
@@ -307,6 +328,7 @@ export function calculateDegreeTrackSimulation(
   // If actualGradeBefore is better/higher than simulatedGradeReached (e.g. 3 < 4)
   const hasDeficit = actualGradeBefore < simulatedGradeReached;
   const deficitCycles = hasDeficit ? (simulatedGradeReached - actualGradeBefore) : 0;
+  const snapshotStatus = hasDeficit ? 'نشط' : 'مكتمل';
 
   // The real-time promotion always advances from the employee's actual current grade
   const realFromGrade = actualGradeBefore;
@@ -314,12 +336,10 @@ export function calculateDegreeTrackSimulation(
 
   // The anchor date is fixed at the last simulated promotion date (e.g. date reaching grade 4)
   const anchorStartDate = lastSimulatedPromotionDate;
-  const baseDurationMonths = 24; // Standard 2 years for degree track deficit promotion
+  const baseDurationMonths = 24; // Standard 2 years for degree track promotion
 
   // 6. Evaluate Real-Time Modifiers since anchorStartDate
   // A. Penalties
-  const penalties = context.penalties || [];
-  const penaltyTypeMap = context.penaltyTypes || DEFAULT_PENALTY_DELAYS;
   let penaltiesDelayMonths = 0;
 
   penalties.forEach(p => {
@@ -426,6 +446,7 @@ export function calculateDegreeTrackSimulation(
     lastSimulatedPromotionDate,
     hasDeficit,
     deficitCycles,
+    snapshotStatus,
     realTimeNextPromotion: {
       fromGrade: realFromGrade,
       toGrade: realToGrade,
