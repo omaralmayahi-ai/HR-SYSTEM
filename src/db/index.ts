@@ -191,9 +191,14 @@ export async function ensureSchema() {
         grade INTEGER NOT NULL,
         step INTEGER NOT NULL,
         amount INTEGER NOT NULL,
+        effective_from TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    await safeQuery(`ALTER TABLE salary_scale ADD COLUMN IF NOT EXISTS effective_from TEXT;`);
+    // Backfill salary_scale: set effective_from to '2026-08-27' as initial tracking baseline date
+    await safeQuery(`UPDATE salary_scale SET effective_from = '2026-08-27' WHERE effective_from IS NULL;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS allowances_deductions (

@@ -690,6 +690,7 @@ export const salaryScale = pgTable('salary_scale', {
   grade: integer('grade').notNull(), // الدرجة
   step: integer('step').notNull(), // المرحلة
   amount: integer('amount').notNull(), // مبلغ الراتب الاسمي
+  effectiveFrom: text('effective_from'), // تاريخ بدء السريان (نقطة انطلاق التتبع - خط الأساس)
   createdAt: timestamp('created_at').defaultNow(),
 });
 

@@ -2645,6 +2645,8 @@ async function startServer() {
           grade: g,
           step: s,
           amount: (SALARY_TABLE as any)[g]?.[s] || 250000,
+          effectiveFrom: '2026-08-27', // تاريخ بداية التتبع (خط الأساس)
+          effective_from: '2026-08-27',
           createdAt: new Date().toISOString()
         });
       }
@@ -2894,12 +2896,14 @@ async function startServer() {
   });
 
   app.post('/api/salary-scale', requireAuth, async (req, res) => {
-    const { grade, step, amount } = req.body;
+    const { grade, step, amount, effective_from, effectiveFrom } = req.body;
+    const effDate = effective_from || effectiveFrom || '2026-08-27';
     try {
       const [newRecord] = await db.insert(schema.salaryScale).values({
         grade: parseInt(grade),
         step: parseInt(step),
         amount: parseInt(amount),
+        effectiveFrom: effDate,
       }).returning();
       if (newRecord) return res.status(201).json(newRecord);
     } catch (error: any) {
@@ -2910,6 +2914,8 @@ async function startServer() {
       grade: parseInt(grade),
       step: parseInt(step),
       amount: parseInt(amount),
+      effectiveFrom: effDate,
+      effective_from: effDate,
       createdAt: new Date().toISOString()
     };
     inMemorySalaryScale.push(memRecord);
@@ -2927,7 +2933,8 @@ async function startServer() {
       const toInsert = items.map(item => ({
         grade: parseInt(item.grade),
         step: parseInt(item.step),
-        amount: parseInt(item.amount)
+        amount: parseInt(item.amount),
+        effectiveFrom: item.effective_from || item.effectiveFrom || '2026-08-27',
       }));
       if (toInsert.length > 0) {
         await db.insert(schema.salaryScale).values(toInsert);
@@ -2940,6 +2947,8 @@ async function startServer() {
       grade: parseInt(item.grade),
       step: parseInt(item.step),
       amount: parseInt(item.amount),
+      effectiveFrom: item.effective_from || item.effectiveFrom || '2026-08-27',
+      effective_from: item.effective_from || item.effectiveFrom || '2026-08-27',
       createdAt: new Date().toISOString()
     }));
     saveLocalDb();
