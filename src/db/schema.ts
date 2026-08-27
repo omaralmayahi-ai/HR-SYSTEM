@@ -362,13 +362,6 @@ export const careerHistoriesRelations = relations(careerHistories, ({ one }) => 
   }),
 }));
 
-export const leaveRequestsRelations = relations(leaveRequests, ({ one }) => ({
-  employee: one(employees, {
-    fields: [leaveRequests.employeeId],
-    references: [employees.id],
-  }),
-}));
-
 export const penaltiesRelations = relations(penalties, ({ one }) => ({
   employee: one(employees, {
     fields: [penalties.employeeId],
