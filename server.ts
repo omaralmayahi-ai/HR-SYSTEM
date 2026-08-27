@@ -3896,52 +3896,86 @@ async function startServer() {
   app.get('/api/leave-types', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.leaveTypes).orderBy(asc(schema.leaveTypes.id));
-      if (records && records.length > 0) return res.json(records);
+      if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
       console.warn('Database fallback for leave types');
     }
-    res.json(inMemoryLeaveTypes);
+    res.json(inMemoryLeaveTypes.map(r => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/leave-types', requireAuth, async (req, res) => {
-    const { name, maxDays, description, status } = req.body;
+    const { name, maxDays, max_days, description, status, administrativeEffect, administrative_effect, financialEffect, financial_effect, financialDeductionPercentage, financial_deduction_percentage } = req.body;
+    const mDays = maxDays !== undefined ? (maxDays ? parseInt(maxDays) : null) : (max_days !== undefined ? (max_days ? parseInt(max_days) : null) : null);
+    const adminEff = administrativeEffect || administrative_effect || 'لا_يؤثر';
+    const finEff = financialEffect || financial_effect || 'براتب_كامل';
+    const finDedPct = parseInt(financialDeductionPercentage ?? financial_deduction_percentage ?? 0) || 0;
+
     try {
       const [newRecord] = await db.insert(schema.leaveTypes).values({
         name,
-        maxDays: maxDays ? parseInt(maxDays) : null,
+        maxDays: mDays,
+        administrativeEffect: adminEff,
+        financialEffect: finEff,
+        financialDeductionPercentage: finDedPct,
         description,
         status: status || 'فعال',
       }).returning();
-      if (newRecord) return res.status(201).json(newRecord);
+      if (newRecord) {
+        inMemoryLeaveTypes.push(mapKeys(newRecord, camelToSnake));
+        saveLocalDb();
+        return res.status(201).json(mapKeys(newRecord, camelToSnake));
+      }
     } catch (error: any) {
       console.warn('Database fallback for create leave type');
     }
     const memItem = {
       id: inMemoryLeaveTypes.length + 1,
       name,
-      max_days: maxDays ? parseInt(maxDays) : null,
+      max_days: mDays,
+      maxDays: mDays,
+      administrative_effect: adminEff,
+      administrativeEffect: adminEff,
+      financial_effect: finEff,
+      financialEffect: finEff,
+      financial_deduction_percentage: finDedPct,
+      financialDeductionPercentage: finDedPct,
       description,
       status: status || 'فعال',
       createdAt: new Date().toISOString()
     };
     inMemoryLeaveTypes.push(memItem);
+    saveLocalDb();
     res.status(201).json(memItem);
   });
 
   app.put('/api/leave-types/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, maxDays, description, status } = req.body;
+    const { name, maxDays, max_days, description, status, administrativeEffect, administrative_effect, financialEffect, financial_effect, financialDeductionPercentage, financial_deduction_percentage } = req.body;
+    const mDays = maxDays !== undefined ? (maxDays ? parseInt(maxDays) : null) : (max_days !== undefined ? (max_days ? parseInt(max_days) : null) : undefined);
+    const adminEff = administrativeEffect !== undefined ? administrativeEffect : administrative_effect;
+    const finEff = financialEffect !== undefined ? financialEffect : financial_effect;
+    const finDedPct = financialDeductionPercentage !== undefined ? parseInt(financialDeductionPercentage) : (financial_deduction_percentage !== undefined ? parseInt(financial_deduction_percentage) : undefined);
+
     try {
+      const updateData: any = { updatedAt: new Date() };
+      if (name !== undefined) updateData.name = name;
+      if (mDays !== undefined) updateData.maxDays = mDays;
+      if (adminEff !== undefined) updateData.administrativeEffect = adminEff;
+      if (finEff !== undefined) updateData.financialEffect = finEff;
+      if (finDedPct !== undefined) updateData.financialDeductionPercentage = finDedPct;
+      if (description !== undefined) updateData.description = description;
+      if (status !== undefined) updateData.status = status;
+
       const [updated] = await db.update(schema.leaveTypes)
-        .set({
-          name,
-          maxDays: maxDays !== undefined ? (maxDays ? parseInt(maxDays) : null) : undefined,
-          description,
-          status: status !== undefined ? status : undefined,
-        })
+        .set(updateData)
         .where(eq(schema.leaveTypes.id, id))
         .returning();
-      if (updated) return res.json(updated);
+      if (updated) {
+        const idx = inMemoryLeaveTypes.findIndex(r => r.id === id);
+        if (idx !== -1) inMemoryLeaveTypes[idx] = { ...inMemoryLeaveTypes[idx], ...mapKeys(updated, camelToSnake) };
+        saveLocalDb();
+        return res.json(mapKeys(updated, camelToSnake));
+      }
     } catch (error: any) {
       console.warn('Database fallback for update leave type');
     }
@@ -3949,14 +3983,22 @@ async function startServer() {
     if (idx !== -1) {
       inMemoryLeaveTypes[idx] = {
         ...inMemoryLeaveTypes[idx],
-        name: name || inMemoryLeaveTypes[idx].name,
-        max_days: maxDays !== undefined ? (maxDays ? parseInt(maxDays) : null) : inMemoryLeaveTypes[idx].max_days,
-        description: description || inMemoryLeaveTypes[idx].description,
-        status: status || inMemoryLeaveTypes[idx].status
+        name: name !== undefined ? name : inMemoryLeaveTypes[idx].name,
+        max_days: mDays !== undefined ? mDays : inMemoryLeaveTypes[idx].max_days,
+        maxDays: mDays !== undefined ? mDays : inMemoryLeaveTypes[idx].maxDays,
+        administrative_effect: adminEff !== undefined ? adminEff : inMemoryLeaveTypes[idx].administrative_effect,
+        administrativeEffect: adminEff !== undefined ? adminEff : inMemoryLeaveTypes[idx].administrativeEffect,
+        financial_effect: finEff !== undefined ? finEff : inMemoryLeaveTypes[idx].financial_effect,
+        financialEffect: finEff !== undefined ? finEff : inMemoryLeaveTypes[idx].financialEffect,
+        financial_deduction_percentage: finDedPct !== undefined ? finDedPct : inMemoryLeaveTypes[idx].financial_deduction_percentage,
+        financialDeductionPercentage: finDedPct !== undefined ? finDedPct : inMemoryLeaveTypes[idx].financialDeductionPercentage,
+        description: description !== undefined ? description : inMemoryLeaveTypes[idx].description,
+        status: status !== undefined ? status : inMemoryLeaveTypes[idx].status
       };
+      saveLocalDb();
       return res.json(inMemoryLeaveTypes[idx]);
     }
-    res.json({ id, name, maxDays, description, status });
+    res.json({ id, name, maxDays: mDays, description, status });
   });
 
   app.delete('/api/leave-types/:id', requireAuth, async (req, res) => {
@@ -3967,6 +4009,7 @@ async function startServer() {
       console.warn('Database fallback for delete leave type');
     }
     inMemoryLeaveTypes = inMemoryLeaveTypes.filter(r => r.id !== id);
+    saveLocalDb();
     res.json({ success: true });
   });
 

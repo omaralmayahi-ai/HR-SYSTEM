@@ -18,6 +18,9 @@ export default function LeaveTypesSettings() {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState('');
   const [newMaxDays, setNewMaxDays] = useState('');
+  const [newAdministrativeEffect, setNewAdministrativeEffect] = useState('لا_يؤثر');
+  const [newFinancialEffect, setNewFinancialEffect] = useState('براتب_كامل');
+  const [newFinancialDeductionPercentage, setNewFinancialDeductionPercentage] = useState(0);
   const [newDescription, setNewDescription] = useState('');
   const [newStatus, setNewStatus] = useState('فعال');
 
@@ -25,6 +28,9 @@ export default function LeaveTypesSettings() {
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editMaxDays, setEditMaxDays] = useState('');
+  const [editAdministrativeEffect, setEditAdministrativeEffect] = useState('لا_يؤثر');
+  const [editFinancialEffect, setEditFinancialEffect] = useState('براتب_كامل');
+  const [editFinancialDeductionPercentage, setEditFinancialDeductionPercentage] = useState(0);
   const [editDescription, setEditDescription] = useState('');
   const [editStatus, setEditStatus] = useState('فعال');
   const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, id: null, name: '' });
@@ -158,6 +164,12 @@ export default function LeaveTypesSettings() {
       const payload = {
         name: newName,
         maxDays: newMaxDays ? parseInt(newMaxDays) : null,
+        administrativeEffect: newAdministrativeEffect,
+        administrative_effect: newAdministrativeEffect,
+        financialEffect: newFinancialEffect,
+        financial_effect: newFinancialEffect,
+        financialDeductionPercentage: parseInt(newFinancialDeductionPercentage) || 0,
+        financial_deduction_percentage: parseInt(newFinancialDeductionPercentage) || 0,
         description: newDescription,
         status: newStatus,
       };
@@ -169,6 +181,9 @@ export default function LeaveTypesSettings() {
       });
       setNewName('');
       setNewMaxDays('');
+      setNewAdministrativeEffect('لا_يؤثر');
+      setNewFinancialEffect('براتب_كامل');
+      setNewFinancialDeductionPercentage(0);
       setNewDescription('');
       setNewStatus('فعال');
       setAdding(false);
@@ -176,7 +191,7 @@ export default function LeaveTypesSettings() {
 
       await apiClient.logs.create({
         action: 'تعديل أنواع الإجازات',
-        details: `إضافة نوع إجازة جديد (${newName} - الحد الأقصى: ${newMaxDays || 'غير محدد'} يوم، الحالة: ${newStatus})`
+        details: `إضافة نوع إجازة جديد (${newName} - الأثر الإداري: ${newAdministrativeEffect}، الأثر المالي: ${newFinancialEffect}، الحالة: ${newStatus})`
       }).catch(() => {});
     } catch (error) {
       toast({
@@ -190,7 +205,10 @@ export default function LeaveTypesSettings() {
   const handleStartEdit = (record) => {
     setEditingId(record.id);
     setEditName(record.name);
-    setEditMaxDays(record.maxDays || '');
+    setEditMaxDays(record.maxDays || record.max_days || '');
+    setEditAdministrativeEffect(record.administrativeEffect || record.administrative_effect || 'لا_يؤثر');
+    setEditFinancialEffect(record.financialEffect || record.financial_effect || 'براتب_كامل');
+    setEditFinancialDeductionPercentage(record.financialDeductionPercentage ?? record.financial_deduction_percentage ?? 0);
     setEditDescription(record.description || '');
     setEditStatus(record.status || 'فعال');
   };
@@ -200,6 +218,12 @@ export default function LeaveTypesSettings() {
       const payload = {
         name: editName,
         maxDays: editMaxDays ? parseInt(editMaxDays) : null,
+        administrativeEffect: editAdministrativeEffect,
+        administrative_effect: editAdministrativeEffect,
+        financialEffect: editFinancialEffect,
+        financial_effect: editFinancialEffect,
+        financialDeductionPercentage: parseInt(editFinancialDeductionPercentage) || 0,
+        financial_deduction_percentage: parseInt(editFinancialDeductionPercentage) || 0,
         description: editDescription,
         status: editStatus,
       };
@@ -214,7 +238,7 @@ export default function LeaveTypesSettings() {
 
       await apiClient.logs.create({
         action: 'تعديل أنواع الإجازات',
-        details: `تحديث نوع إجازة (${editName} - الحد الأقصى الجديد: ${editMaxDays || 'غير محدد'} يوم، الحالة: ${editStatus})`
+        details: `تحديث نوع إجازة (${editName} - الأثر الإداري: ${editAdministrativeEffect}، الأثر المالي: ${editFinancialEffect}، الحالة: ${editStatus})`
       }).catch(() => {});
     } catch (error) {
       toast({
@@ -284,12 +308,12 @@ export default function LeaveTypesSettings() {
     setLoading(true);
     try {
       const presets = [
-        { name: 'إجازة اعتيادية براتب تام', maxDays: 30, description: 'تُمنح للموظف براتب تام بمعدل يومين ونصف عن كل شهر خدمة فعلي متراكم.', status: 'فعال' },
-        { name: 'إجازة مرضية براتب تام', maxDays: 120, description: 'تُمنح للموظف بناءً على قرار من اللجان الطبية الرسمية بحد أقصى 120 يوماً.', status: 'فعال' },
-        { name: 'إجازة حج وعمرة براتب تام', maxDays: 30, description: 'تُمنح لتأدية فريضة الحج براتب تام لمرة واحدة طوال مدة الخدمة.', status: 'فعال' },
-        { name: 'إجازة أمومة وولادة براتب تام', maxDays: 72, description: 'تمنح للموظفات الحوامل لغرض الولادة والعناية بالطفل لمدة 72 يوماً.', status: 'فعال' },
-        { name: 'إجازة دراسية لتطوير الكفاءات', maxDays: null, description: 'تُمنح للموظفين المقبولين في الدراسات العليا للحصول على الماجستير أو الدكتوراه.', status: 'فعال' },
-        { name: 'إجازة بدون راتب (طارئة)', maxDays: 60, description: 'إجازة استثنائية اضطرارية تُمنح للموظف بحد أقصى 60 يوماً سنوياً.', status: 'فعال' },
+        { name: 'إجازة اعتيادية براتب تام', maxDays: 30, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تُمنح للموظف براتب تام بمعدل يومين ونصف عن كل شهر خدمة فعلي متراكم.', status: 'فعال' },
+        { name: 'إجازة مرضية براتب تام', maxDays: 120, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تُمنح للموظف بناءً على قرار من اللجان الطبية الرسمية بحد أقصى 120 يوماً.', status: 'فعال' },
+        { name: 'إجازة حج وعمرة براتب تام', maxDays: 30, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تُمنح لتأدية فريضة الحج براتب تام لمرة واحدة طوال مدة الخدمة.', status: 'فعال' },
+        { name: 'إجازة أمومة وولادة براتب تام', maxDays: 72, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تمنح للموظفات الحوامل لغرض الولادة والعناية بالطفل لمدة 72 يوماً.', status: 'فعال' },
+        { name: 'إجازة دراسية لتطوير الكفاءات', maxDays: null, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تُمنح للموظفين المقبولين في الدراسات العليا للحصول على الماجستير أو الدكتوراه.', status: 'فعال' },
+        { name: 'إجازة بدون راتب (طارئة)', maxDays: 60, administrativeEffect: 'يوقف_الترفيع', financialEffect: 'بدون_راتب', financialDeductionPercentage: 100, description: 'إجازة استثنائية اضطرارية تُمنح للموظف ولا تُحتسب خدمتها لأغراض الترقية أو التقاعد.', status: 'فعال' },
       ];
 
       for (const item of presets) {
@@ -588,6 +612,51 @@ export default function LeaveTypesSettings() {
                 </select>
               </div>
             </div>
+
+            {/* الأثر الإداري والمالي */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 block">الأثر الإداري على احتساب الخدمة والترقية *</label>
+                <select
+                  value={newAdministrativeEffect}
+                  onChange={(e) => setNewAdministrativeEffect(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-bold"
+                >
+                  <option value="لا_يؤثر">لا يؤثر (تُحتسب الخدمة كاملة للترقية والعلاوة)</option>
+                  <option value="يوقف_الترفيع">يوقف الترفيع واحتساب القدم خلال مدتها</option>
+                  <option value="يؤخر_العلاوة">يؤخر استحقاق العلاوة السنوية</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 block">الأثر المالي على الراتب والبدلات *</label>
+                <select
+                  value={newFinancialEffect}
+                  onChange={(e) => setNewFinancialEffect(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-bold"
+                >
+                  <option value="براتب_كامل">براتب كامل (تام)</option>
+                  <option value="بدون_راتب">بدون راتب (استقطاع تام 100%)</option>
+                  <option value="استقطاع_جزئي">استقطاع جزئي (نصف راتب أو نسبة محددة)</option>
+                </select>
+              </div>
+
+              {newFinancialEffect === 'استقطاع_جزئي' && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700 block">نسبة الاستقطاع من الراتب (%)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={newFinancialDeductionPercentage}
+                    onChange={(e) => setNewFinancialDeductionPercentage(e.target.value)}
+                    placeholder="مثال: 50%"
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-bold"
+                  />
+                </div>
+              )}
+            </div>
+
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-700 block">الوصف والشروط المرفقة بالتقديم</label>
               <textarea
@@ -633,7 +702,9 @@ export default function LeaveTypesSettings() {
               <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
                 <tr>
                   <th className="px-4 py-3">اسم نوع الإجازة</th>
-                  <th className="px-4 py-3">الحد الأقصى (سنوياً)</th>
+                  <th className="px-4 py-3">الحد الأقصى</th>
+                  <th className="px-4 py-3 text-center">الأثر الإداري</th>
+                  <th className="px-4 py-3 text-center">الأثر المالي</th>
                   <th className="px-4 py-3">الوصف والشروط المعتمدة</th>
                   <th className="px-4 py-3 text-center">الحالة</th>
                   <th className="px-4 py-3 text-left">التحكم</th>
@@ -643,6 +714,10 @@ export default function LeaveTypesSettings() {
                 {records.map((r) => {
                   const isEditing = editingId === r.id;
                   const isPaused = r.status === 'متوقف مؤقتاً';
+                  const adminEff = r.administrativeEffect || r.administrative_effect || 'لا_يؤثر';
+                  const finEff = r.financialEffect || r.financial_effect || 'براتب_كامل';
+                  const finDed = r.financialDeductionPercentage ?? r.financial_deduction_percentage ?? 0;
+
                   return (
                     <tr key={r.id} className={`hover:bg-slate-50/50 transition-colors ${isPaused ? 'bg-slate-50/40 text-slate-400' : ''}`}>
                       <td className="px-4 py-3 font-semibold text-slate-800">
@@ -667,7 +742,66 @@ export default function LeaveTypesSettings() {
                             className="bg-white border border-slate-200 rounded p-1 text-xs w-20 text-center"
                           />
                         ) : (
-                          r.maxDays ? `${r.maxDays} يوم` : 'مفتوح / غير محدد'
+                          r.maxDays || r.max_days ? `${r.maxDays || r.max_days} يوم` : 'مفتوح'
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {isEditing ? (
+                          <select
+                            value={editAdministrativeEffect}
+                            onChange={(e) => setEditAdministrativeEffect(e.target.value)}
+                            className="bg-white border border-slate-200 rounded p-1 text-xs font-semibold"
+                          >
+                            <option value="لا_يؤثر">لا يؤثر</option>
+                            <option value="يوقف_الترفيع">يوقف الترفيع</option>
+                            <option value="يؤخر_العلاوة">يؤخر العلاوة</option>
+                          </select>
+                        ) : (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            adminEff === 'يوقف_الترفيع'
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : adminEff === 'يؤخر_العلاوة'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-slate-50 text-slate-600 border-slate-200'
+                          }`}>
+                            {adminEff === 'يوقف_الترفيع' ? 'يوقف الترفيع' : adminEff === 'يؤخر_العلاوة' ? 'يؤخر العلاوة' : 'لا يؤثر'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {isEditing ? (
+                          <div className="flex flex-col gap-1 items-center">
+                            <select
+                              value={editFinancialEffect}
+                              onChange={(e) => setEditFinancialEffect(e.target.value)}
+                              className="bg-white border border-slate-200 rounded p-1 text-xs font-semibold"
+                            >
+                              <option value="براتب_كامل">براتب كامل</option>
+                              <option value="بدون_راتب">بدون راتب</option>
+                              <option value="استقطاع_جزئي">استقطاع جزئي</option>
+                            </select>
+                            {editFinancialEffect === 'استقطاع_جزئي' && (
+                              <input
+                                type="number"
+                                min="1"
+                                max="100"
+                                value={editFinancialDeductionPercentage}
+                                onChange={(e) => setEditFinancialDeductionPercentage(e.target.value)}
+                                placeholder="%"
+                                className="bg-white border border-slate-200 rounded p-0.5 text-xs w-14 text-center font-bold"
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            finEff === 'بدون_راتب'
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : finEff === 'استقطاع_جزئي'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          }`}>
+                            {finEff === 'بدون_راتب' ? 'بدون راتب' : finEff === 'استقطاع_جزئي' ? `استقطاع ${finDed}%` : 'براتب كامل'}
+                          </span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-slate-500 max-w-sm truncate" title={r.description}>

@@ -119,6 +119,8 @@ export const leaveRequests = pgTable('leave_requests', {
   employeeId: integer('employee_id')
     .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
+  leaveTypeId: integer('leave_type_id')
+    .references(() => leaveTypes.id, { onDelete: 'set null' }),
   leaveType: text('leave_type').notNull(),
   startDate: text('start_date').notNull(),
   endDate: text('end_date').notNull(),
@@ -129,6 +131,17 @@ export const leaveRequests = pgTable('leave_requests', {
   medicalAttachment: text('medical_attachment'), // المرفق الطبي
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+export const leaveRequestsRelations = relations(leaveRequests, ({ one }) => ({
+  employee: one(employees, {
+    fields: [leaveRequests.employeeId],
+    references: [employees.id],
+  }),
+  leaveTypeRef: one(leaveTypes, {
+    fields: [leaveRequests.leaveTypeId],
+    references: [leaveTypes.id],
+  }),
+}));
 
 // 5. Penalties table
 export const penalties = pgTable('penalties', {
@@ -713,9 +726,13 @@ export const leaveTypes = pgTable('leave_types', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم الإجازة (مثلاً: اعتيادية، مرضية، دراسية)
   maxDays: integer('max_days'), // الحد الأقصى للأيام المسموح بها في السنة (اختياري)
+  administrativeEffect: text('administrative_effect').default('لا_يؤثر'), // 'لا_يؤثر', 'يوقف_الترفيع', 'يؤخر_العلاوة'
+  financialEffect: text('financial_effect').default('براتب_كامل'), // 'براتب_كامل', 'بدون_راتب', 'استقطاع_جزئي'
+  financialDeductionPercentage: integer('financial_deduction_percentage').default(0), // نسبة الاستقطاع في حال استقطاع جزئي (0 - 100)
   description: text('description'), // وصف الإجازة أو الشروط
   status: text('status').default('فعال'), // فعال أو متوقف مؤقتاً
   createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // 25. Work Locations table (مواقع الشركة)

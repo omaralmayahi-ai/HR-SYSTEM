@@ -761,6 +761,21 @@ export async function ensureSchema() {
         '[{"label":"3 كتب عادية (شهر واحد)","maxCount":3,"creditMonths":1},{"label":"كتابان عاديان + كتاب استثنائي (6 أشهر)","maxCount":3,"rules":[{"count":2,"creditMonths":1},{"count":1,"creditMonths":6}]},{"label":"كتابان استثنائيان (6 أشهر)","maxCount":2,"rules":[{"count":2,"creditMonths":6}]}]'
       ) ON CONFLICT (config_key) DO NOTHING;
     `);
+
+    // 12. Leave Types & Leave Requests Effect & FK Migration
+    await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS administrative_effect TEXT DEFAULT 'لا_يؤثر';`);
+    await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS financial_effect TEXT DEFAULT 'براتب_كامل';`);
+    await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS financial_deduction_percentage INTEGER DEFAULT 0;`);
+    await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
+    await safeQuery(`ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS leave_type_id INTEGER;`);
+
+    // Backfill leave_type_id on matching name
+    await safeQuery(`
+      UPDATE leave_requests lr
+      SET leave_type_id = lt.id
+      FROM leave_types lt
+      WHERE lr.leave_type_id IS NULL AND TRIM(lr.leave_type) = TRIM(lt.name);
+    `);
   } catch (err) {
     console.error('Migration execution notice:', err);
   }
