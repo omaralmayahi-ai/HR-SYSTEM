@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Edit, Plus, Trash2, Calendar, FileText, GraduationCap, DollarSign, Clock, Briefcase, Heart, MapPin, ClipboardList, CheckCircle2, XCircle, Power, ShieldCheck, QrCode, Award, ShieldAlert, User, Baby } from 'lucide-react';
+import { Edit, Plus, Trash2, Calendar, FileText, GraduationCap, DollarSign, Clock, Briefcase, Heart, MapPin, ClipboardList, CheckCircle2, XCircle, Power, ShieldCheck, QrCode, Award, ShieldAlert, User, Baby, Eye, EyeOff, Bell, AlertTriangle } from 'lucide-react';
 import { formatCurrency, calculateSalary, getGradeLabel, getStepLabel, getActiveFinancialRates, checkEmployeeMatchesRule } from '@/lib/salaryTable';
 import { useToast } from '@/components/ui/use-toast';
 import EmployeeQuickAccessQR from '@/components/employee/EmployeeQuickAccessQR';
@@ -265,6 +265,13 @@ export default function EmployeeDetail() {
   const [serviceRecords, setServiceRecords] = useState([]);
   const [allowanceDeductionPresets, setAllowanceDeductionPresets] = useState([]);
   
+  // Promotion & Increment Delay Reasons & Reminders (Phase 4)
+  const [delayReasons, setDelayReasons] = useState([]);
+  const [loadingDelayReasons, setLoadingDelayReasons] = useState(false);
+  const [showHiddenReasons, setShowHiddenReasons] = useState(false);
+  const [editingReminderId, setEditingReminderId] = useState(null);
+  const [reminderInputDate, setReminderInputDate] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [showQRModal, setShowQRModal] = useState(false);
   
@@ -367,7 +374,7 @@ export default function EmployeeDetail() {
   const fetchData = async () => {
     try {
       const [
-        empRes, lvRes, penRes, apprRes, evRes, trRes, qualRes, jobRes, promRes, salRes, tcRes, transRes, retRes, docRes, sRecsRes, presetsRes
+        empRes, lvRes, penRes, apprRes, evRes, trRes, qualRes, jobRes, promRes, salRes, tcRes, transRes, retRes, docRes, sRecsRes, presetsRes, delayReasonsRes
       ] = await Promise.allSettled([
         apiClient.entities.Employee.get(id),
         apiClient.entities.LeaveRequest.filter({ employee_id: id }),
@@ -384,7 +391,8 @@ export default function EmployeeDetail() {
         apiClient.entities.Retirement.filter({ employee_id: id }),
         apiClient.entities.Document.filter({ employee_id: id }),
         apiClient.entities.ServiceRecord.filter({ employee_id: id }),
-        apiClient.entities.AllowanceDeduction.list()
+        apiClient.entities.AllowanceDeduction.list(),
+        apiClient.promotionDelayReasons.getByEmployee(id)
       ]);
 
       if (empRes.status === 'fulfilled' && empRes.value) setEmployee(empRes.value);
@@ -402,6 +410,7 @@ export default function EmployeeDetail() {
       if (retRes.status === 'fulfilled') setRetirements(retRes.value || []);
       if (docRes.status === 'fulfilled') setDocuments(docRes.value || []);
       if (sRecsRes.status === 'fulfilled') setServiceRecords(sRecsRes.value || []);
+      if (delayReasonsRes.status === 'fulfilled') setDelayReasons(delayReasonsRes.value || []);
       if (presetsRes.status === 'fulfilled') {
         setAllowanceDeductionPresets(presetsRes.value || []);
         if (presetsRes.value) {
@@ -412,6 +421,47 @@ export default function EmployeeDetail() {
       console.error('Error fetching employee data:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchDelayReasons = async () => {
+    try {
+      setLoadingDelayReasons(true);
+      const data = await apiClient.promotionDelayReasons.getByEmployee(id);
+      setDelayReasons(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Error fetching delay reasons:', err);
+    } finally {
+      setLoadingDelayReasons(false);
+    }
+  };
+
+  const handleToggleHideReason = async (reasonId, currentHidden) => {
+    try {
+      await apiClient.promotionDelayReasons.toggleHide(reasonId, !currentHidden);
+      toast({
+        title: !currentHidden ? 'تم إخفاء السبب' : 'تمت إعادة إظهار السبب',
+        description: !currentHidden ? 'تم إخفاء سبب التأخير من العرض الرئيسي بنجاح.' : 'تمت استعادة عرض سبب التأخير بنجاح.',
+        variant: 'success'
+      });
+      fetchDelayReasons();
+    } catch (err) {
+      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
+    }
+  };
+
+  const handleUpdateReminderDate = async (reasonId, newDate) => {
+    try {
+      await apiClient.promotionDelayReasons.updateReminder(reasonId, newDate);
+      toast({
+        title: 'تم تحديث موعد التذكير',
+        description: `تم تعيين موعد التذكير إلى (${newDate}) بنجاح.`,
+        variant: 'success'
+      });
+      setEditingReminderId(null);
+      fetchDelayReasons();
+    } catch (err) {
+      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
     }
   };
 
@@ -3141,6 +3191,201 @@ export default function EmployeeDetail() {
               </div>
             );
           })()}
+
+          {/* Phase 4: Promotion & Increment Delay Reasons & Follow-up Reminders */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-700 flex items-center justify-center font-bold">
+                  <Bell size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    موانع وأسباب تأخير الاستحقاق والتذكيرات المدارة
+                    {(() => {
+                      const activeCount = delayReasons.filter(r => !(r.is_hidden ?? r.isHidden) && !(r.is_resolved ?? r.isResolved)).length;
+                      if (activeCount === 0) return null;
+                      return (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-black bg-amber-100 text-amber-900 border border-amber-200">
+                          {activeCount} سبب قائم
+                        </span>
+                      );
+                    })()}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    أسباب الإيقاف والتأخير المكتشفة آلياً (دورات، عقوبات، إجازات، تقييم، غياب) مع إدارة تواريخ التذكير والمتابعة.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowHiddenReasons(!showHiddenReasons)}
+                  className="rounded-xl text-xs gap-1.5 h-8 border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+                >
+                  {showHiddenReasons ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showHiddenReasons ? 'إخفاء الأسباب المستبعدة' : 'عرض الأسباب المخفية'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Content Area */}
+            {(() => {
+              const visibleReasons = delayReasons.filter(r => {
+                const isHidden = r.is_hidden ?? r.isHidden ?? false;
+                const isResolved = r.is_resolved ?? r.isResolved ?? false;
+                if (showHiddenReasons) return true;
+                return !isHidden && !isResolved;
+              });
+
+              if (visibleReasons.length === 0) {
+                return (
+                  <div className="p-5 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl flex items-center gap-3 text-xs text-emerald-900 font-medium">
+                    <CheckCircle2 size={20} className="text-emerald-600 shrink-0" />
+                    <div>
+                      <strong className="font-bold block text-emerald-950">لا توجد موانع أو أسباب تأخير قائمة</strong>
+                      استحقاقات الموظف للترفيع والعلاوة تسير بصورة اعتيادية ومستوفية للشروط والضوابط القانونية.
+                    </div>
+                  </div>
+                );
+              }
+
+              const typeBadges = {
+                'دورة': { bg: 'bg-blue-100 text-blue-800 border-blue-200', dot: 'bg-blue-600', label: 'دورة تدريبية' },
+                'عقوبة': { bg: 'bg-rose-100 text-rose-800 border-rose-200', dot: 'bg-rose-600', label: 'عقوبة انضباطية' },
+                'اجازة': { bg: 'bg-amber-100 text-amber-900 border-amber-200', dot: 'bg-amber-600', label: 'إجازة موقفة' },
+                'تقييم': { bg: 'bg-purple-100 text-purple-900 border-purple-200', dot: 'bg-purple-600', label: 'تقييم أداء' },
+                'غياب': { bg: 'bg-orange-100 text-orange-900 border-orange-200', dot: 'bg-orange-600', label: 'غياب بدون عذر' },
+              };
+
+              return (
+                <div className="divide-y divide-slate-100 border border-slate-100 rounded-2xl overflow-hidden">
+                  {visibleReasons.map((reason) => {
+                    const rType = reason.reason_type || reason.reasonType || 'دورة';
+                    const badge = typeBadges[rType] || typeBadges['دورة'];
+                    const isHidden = reason.is_hidden ?? reason.isHidden ?? false;
+                    const isResolved = reason.is_resolved ?? reason.isResolved ?? false;
+                    const isAuto = reason.is_auto_reminder ?? reason.isAutoReminder ?? true;
+                    const rDate = reason.reminder_date || reason.reminderDate || '';
+
+                    return (
+                      <div
+                        key={reason.id}
+                        className={`p-4 transition-colors ${
+                          isHidden ? 'bg-slate-50/70 opacity-70' : isResolved ? 'bg-emerald-50/30' : 'bg-white hover:bg-slate-50/40'
+                        }`}
+                      >
+                        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+                          
+                          <div className="space-y-1.5 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold border flex items-center gap-1.5 ${badge.bg}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${badge.dot}`}></span>
+                                {badge.label}
+                              </span>
+
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                                يؤثر على: {reason.affects || 'كلاهما'}
+                              </span>
+
+                              {isHidden && (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-200 text-slate-700">
+                                  مخفي من العرض
+                                </span>
+                              )}
+
+                              {isResolved && (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                  تمت المعالجة
+                                </span>
+                              )}
+                            </div>
+
+                            <p className="text-xs font-semibold text-slate-800 leading-relaxed">
+                              {reason.description}
+                            </p>
+                          </div>
+
+                          {/* Reminder & Actions */}
+                          <div className="flex items-center gap-3 shrink-0 self-end md:self-center">
+                            {/* Reminder Box */}
+                            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
+                              <Calendar size={14} className="text-slate-500" />
+                              <div className="flex flex-col">
+                                <span className="text-[9px] text-slate-400 font-bold leading-tight">
+                                  تاريخ التذكير ({isAuto ? 'تلقائي' : 'محدد يدوياً'})
+                                </span>
+                                {editingReminderId === reason.id ? (
+                                  <div className="flex items-center gap-1 mt-0.5">
+                                    <input
+                                      type="date"
+                                      value={reminderInputDate}
+                                      onChange={(e) => setReminderInputDate(e.target.value)}
+                                      className="text-xs font-bold text-[#1B3A6B] bg-white border border-slate-300 rounded px-1.5 py-0.5"
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1.5 text-emerald-600 hover:bg-emerald-50 text-[10px] font-bold"
+                                      onClick={() => handleUpdateReminderDate(reason.id, reminderInputDate)}
+                                    >
+                                      حفظ
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1.5 text-slate-400 hover:bg-slate-100 text-[10px]"
+                                      onClick={() => setEditingReminderId(null)}
+                                    >
+                                      إلغاء
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono font-bold text-slate-800">
+                                      {rDate || 'غير محدد'}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      title="تعديل موعد التذكير"
+                                      onClick={() => {
+                                        setEditingReminderId(reason.id);
+                                        setReminderInputDate(rDate || '');
+                                      }}
+                                      className="text-blue-600 hover:text-blue-800 text-[10px] font-bold underline mr-1"
+                                    >
+                                      تعديل
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Toggle Hide Button */}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleToggleHideReason(reason.id, isHidden)}
+                              className={`rounded-xl text-xs h-9 px-3 gap-1 ${
+                                isHidden ? 'text-blue-600 hover:bg-blue-50' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                              }`}
+                              title={isHidden ? 'إعادة إظهار السبب بالملف' : 'إخفاء هذا السبب من العرض دون التأثير على الحساب'}
+                            >
+                              {isHidden ? <Eye size={14} /> : <EyeOff size={14} />}
+                              {isHidden ? 'إظهار' : 'إخفاء'}
+                            </Button>
+
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
 
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">

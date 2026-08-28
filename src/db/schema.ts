@@ -944,6 +944,11 @@ export const commendationRulesSettings = pgTable('commendation_rules_settings', 
   maxPerYear: integer('max_per_year').default(3), // الحد الأقصى لعدد كتب الشكر المحتسبة سنوياً
   allowedCombinations: text('allowed_combinations'), // JSON stringified array of permitted combinations
   degreeTrackAutoSettlement: boolean('degree_track_auto_settlement').default(false), // تفعيل التسوية التلقائية لمسار احتساب الشهادات
+  reminderDaysCourse: integer('reminder_days_course').default(30), // عدد أيام التذكير الافتراضي للدورات الحاكمة
+  reminderDaysPenalty: integer('reminder_days_penalty').default(15), // عدد أيام التذكير الافتراضي للعقوبات
+  reminderDaysLeave: integer('reminder_days_leave').default(30), // عدد أيام التذكير الافتراضي للإجازات الموقفة
+  reminderDaysEvaluation: integer('reminder_days_evaluation').default(30), // عدد أيام التذكير الافتراضي لتقييم الأداء
+  reminderDaysAbsence: integer('reminder_days_absence').default(10), // عدد أيام التذكير الافتراضي للغياب
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
@@ -1061,3 +1066,30 @@ export const specializationCourseCreditsRelations = relations(specializationCour
     references: [degreeTrackSnapshots.id],
   }),
 }));
+
+// 44. Promotion Delay Reasons table (أسباب تأخير وتوقف الترقية والعلاوة والتذكيرات المدارة)
+export const promotionDelayReasons = pgTable('promotion_delay_reasons', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id')
+    .references(() => employees.id, { onDelete: 'cascade' })
+    .notNull(),
+  reasonType: text('reason_type').notNull(), // 'دورة' | 'عقوبة' | 'اجازة' | 'تقييم' | 'غياب'
+  description: text('description').notNull(), // نص توضيحي مولد من المحرك
+  affects: text('affects').notNull().default('كلاهما'), // 'ترفيع' | 'علاوة' | 'كلاهما'
+  isHidden: boolean('is_hidden').default(false), // إخفاء من واجهة العرض
+  reminderDate: text('reminder_date'), // تاريخ التذكير (YYYY-MM-DD)
+  isAutoReminder: boolean('is_auto_reminder').default(true), // هل التذكير محسوب تلقائياً
+  isResolved: boolean('is_resolved').default(false), // هل زال المانع بعد إعادة الحساب
+  resolvedAt: text('resolved_at'), // تاريخ زوال السبب
+  sourceReferenceId: text('source_reference_id'), // معرّف السجل المصدر للتتبع
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const promotionDelayReasonsRelations = relations(promotionDelayReasons, ({ one }) => ({
+  employee: one(employees, {
+    fields: [promotionDelayReasons.employeeId],
+    references: [employees.id],
+  }),
+}));
+

@@ -209,7 +209,8 @@ export const apiClient = {
         method: 'PUT',
         body: JSON.stringify(data)
       })
-    }
+    },
+    PromotionDelayReason: createEntityClient('promotion-delay-reasons')
   },
   settings: {
     get: async () => request('/api/settings'),
@@ -238,6 +239,18 @@ export const apiClient = {
       method: 'POST',
       body: JSON.stringify(data)
     })
+  },
+  promotionDelayReasons: {
+    getByEmployee: (empId) => request(`/api/promotion-delay-reasons/employee/${empId}`),
+    toggleHide: (id, isHidden) => request(`/api/promotion-delay-reasons/${id}/hide`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isHidden })
+    }),
+    updateReminder: (id, reminderDate) => request(`/api/promotion-delay-reasons/${id}/reminder`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reminderDate })
+    }),
+    getDueReminders: () => request('/api/promotion-delay-reasons/due-reminders')
   }
 };
 

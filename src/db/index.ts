@@ -804,6 +804,11 @@ export async function ensureSchema() {
     await safeQuery(`ALTER TABLE education_degrees ADD COLUMN IF NOT EXISTS baseline_grade INTEGER DEFAULT 7;`);
     await safeQuery(`ALTER TABLE education_degrees ADD COLUMN IF NOT EXISTS baseline_step INTEGER DEFAULT 1;`);
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
+    await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_course INTEGER DEFAULT 30;`);
+    await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_penalty INTEGER DEFAULT 15;`);
+    await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_leave INTEGER DEFAULT 30;`);
+    await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_evaluation INTEGER DEFAULT 30;`);
+    await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_absence INTEGER DEFAULT 10;`);
     await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
     await safeQuery(`ALTER TABLE promotions_increments ADD COLUMN IF NOT EXISTS approved_by TEXT;`);
     await safeQuery(`ALTER TABLE promotions_increments ADD COLUMN IF NOT EXISTS notes TEXT;`);
@@ -856,6 +861,25 @@ export async function ensureSchema() {
         provider TEXT,
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 19. Promotion Delay Reasons Table (أسباب تأخير وتوقف الترقية والعلاوة والتذكيرات المدارة)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS promotion_delay_reasons (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        reason_type TEXT NOT NULL,
+        description TEXT NOT NULL,
+        affects TEXT NOT NULL DEFAULT 'كلاهما',
+        is_hidden BOOLEAN DEFAULT FALSE,
+        reminder_date TEXT,
+        is_auto_reminder BOOLEAN DEFAULT TRUE,
+        is_resolved BOOLEAN DEFAULT FALSE,
+        resolved_at TEXT,
+        source_reference_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
   } catch (err) {

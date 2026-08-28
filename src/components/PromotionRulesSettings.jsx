@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   TrendingUp, Award, Clock, Save, Plus, Edit2, Trash2, CheckCircle2, 
-  RotateCcw, Sparkles, AlertCircle, Check, X, Layers, ShieldCheck
+  RotateCcw, Sparkles, AlertCircle, Check, X, Layers, ShieldCheck,
+  Bell, Calendar
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -64,7 +65,12 @@ export default function PromotionRulesSettings() {
   const [rulesSettings, setRulesSettings] = useState({ 
     max_per_year: 3, 
     allowed_combinations: '[]',
-    degree_track_auto_settlement: false 
+    degree_track_auto_settlement: false,
+    reminder_days_course: 30,
+    reminder_days_penalty: 15,
+    reminder_days_leave: 30,
+    reminder_days_evaluation: 30,
+    reminder_days_absence: 10
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -118,7 +124,12 @@ export default function PromotionRulesSettings() {
             : (data.allowedCombinations || '[]'),
           degree_track_auto_settlement: Boolean(
             data.degree_track_auto_settlement ?? data.degreeTrackAutoSettlement
-          )
+          ),
+          reminder_days_course: data.reminder_days_course ?? data.reminderDaysCourse ?? 30,
+          reminder_days_penalty: data.reminder_days_penalty ?? data.reminderDaysPenalty ?? 15,
+          reminder_days_leave: data.reminder_days_leave ?? data.reminderDaysLeave ?? 30,
+          reminder_days_evaluation: data.reminder_days_evaluation ?? data.reminderDaysEvaluation ?? 30,
+          reminder_days_absence: data.reminder_days_absence ?? data.reminderDaysAbsence ?? 10,
         });
       }
     } catch (err) {
@@ -233,11 +244,17 @@ export default function PromotionRulesSettings() {
       setSavingSettings(true);
       await apiClient.entities.CommendationRulesSetting.update({
         max_per_year: parseInt(rulesSettings.max_per_year) || 3,
-        allowed_combinations: rulesSettings.allowed_combinations
+        allowed_combinations: rulesSettings.allowed_combinations,
+        degree_track_auto_settlement: rulesSettings.degree_track_auto_settlement,
+        reminder_days_course: parseInt(rulesSettings.reminder_days_course) || 30,
+        reminder_days_penalty: parseInt(rulesSettings.reminder_days_penalty) || 15,
+        reminder_days_leave: parseInt(rulesSettings.reminder_days_leave) || 30,
+        reminder_days_evaluation: parseInt(rulesSettings.reminder_days_evaluation) || 30,
+        reminder_days_absence: parseInt(rulesSettings.reminder_days_absence) || 10,
       });
       toast({
-        title: 'تم حفظ ضوابط الشكر والتقدير',
-        description: 'تم تحديث سقف وقيود احتساب كتب الشكر السنوية بنجاح.',
+        title: 'تم حفظ ضوابط الترقية والتذكيرات',
+        description: 'تم تحديث سقف كتب الشكر ومدد التذكير الافتراضية بنجاح.',
         variant: 'success'
       });
     } catch (err) {
@@ -609,6 +626,153 @@ export default function PromotionRulesSettings() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 5. قسم مدد التذكير الافتراضية لموانع وأسباب التأخير (المرحلة 4: الشفافية والتذكيرات) */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-4">
+          <div>
+            <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+              <Bell className="text-[#1B3A6B]" size={18} />
+              فترات التذكير الافتراضية لموانع الترقية والعلاوة (Blocker Reminders)
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              تحديد عدد الأيام الافتراضية لتوليد تاريخ التذكير التلقائي لكل نوع من أسباب التأخير أو الإيقاف (دورة، عقوبة، إجازة، تقييم، غياب).
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSaveRulesSettings} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            
+            {/* دورة حاكمة */}
+            <div className="p-4 bg-blue-50/50 rounded-xl border border-blue-100 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold text-blue-950 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                  الدورات التدريبية الحاكمة
+                </Label>
+                <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-md">دورة</span>
+              </div>
+              <div className="relative">
+                <Input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={rulesSettings.reminder_days_course}
+                  onChange={(e) => setRulesSettings(prev => ({ ...prev, reminder_days_course: e.target.value }))}
+                  className="bg-white border-blue-200 font-bold text-[#1B3A6B] text-xs pr-3 pl-12"
+                />
+                <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم</span>
+              </div>
+              <p className="text-[10px] text-slate-500">فترة التذكير لمتابعة تسجيل أو اجتياز الدورة (افتراضي: 30 يوم).</p>
+            </div>
+
+            {/* عقوبة انضباطية */}
+            <div className="p-4 bg-rose-50/50 rounded-xl border border-rose-100 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold text-rose-950 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-600"></span>
+                  العقوبات الانضباطية النافذة
+                </Label>
+                <span className="text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-md">عقوبة</span>
+              </div>
+              <div className="relative">
+                <Input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={rulesSettings.reminder_days_penalty}
+                  onChange={(e) => setRulesSettings(prev => ({ ...prev, reminder_days_penalty: e.target.value }))}
+                  className="bg-white border-rose-200 font-bold text-rose-900 text-xs pr-3 pl-12"
+                />
+                <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم</span>
+              </div>
+              <p className="text-[10px] text-slate-500">فترة التذكير لمراجعة انقضاء أثر العقوبة (افتراضي: 15 يوم).</p>
+            </div>
+
+            {/* إجازة موقفة */}
+            <div className="p-4 bg-amber-50/50 rounded-xl border border-amber-100 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-600"></span>
+                  الإجازات الموقفة للخدمة
+                </Label>
+                <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">إجازة</span>
+              </div>
+              <div className="relative">
+                <Input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={rulesSettings.reminder_days_leave}
+                  onChange={(e) => setRulesSettings(prev => ({ ...prev, reminder_days_leave: e.target.value }))}
+                  className="bg-white border-amber-200 font-bold text-amber-900 text-xs pr-3 pl-12"
+                />
+                <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم</span>
+              </div>
+              <p className="text-[10px] text-slate-500">فترة التذكير لمتابعة انفكاك أو مباشرة الموظف بعد الإجازة (افتراضي: 30 يوم).</p>
+            </div>
+
+            {/* تقييم أداء */}
+            <div className="p-4 bg-purple-50/50 rounded-xl border border-purple-100 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-purple-600"></span>
+                  تقييم الأداء السنوي
+                </Label>
+                <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-md">تقييم</span>
+              </div>
+              <div className="relative">
+                <Input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={rulesSettings.reminder_days_evaluation}
+                  onChange={(e) => setRulesSettings(prev => ({ ...prev, reminder_days_evaluation: e.target.value }))}
+                  className="bg-white border-purple-200 font-bold text-purple-900 text-xs pr-3 pl-12"
+                />
+                <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم</span>
+              </div>
+              <p className="text-[10px] text-slate-500">فترة التذكير لاعتماد أو مراجعة استمارة التقييم السنوية (افتراضي: 30 يوم).</p>
+            </div>
+
+            {/* غياب بدون عذر */}
+            <div className="p-4 bg-orange-50/50 rounded-xl border border-orange-100 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold text-orange-950 flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-orange-600"></span>
+                  الغياب بدون عذر
+                </Label>
+                <span className="text-[10px] font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded-md">غياب</span>
+              </div>
+              <div className="relative">
+                <Input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={rulesSettings.reminder_days_absence}
+                  onChange={(e) => setRulesSettings(prev => ({ ...prev, reminder_days_absence: e.target.value }))}
+                  className="bg-white border-orange-200 font-bold text-orange-900 text-xs pr-3 pl-12"
+                />
+                <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم</span>
+              </div>
+              <p className="text-[10px] text-slate-500">فترة التذكير لتسوية أيام الغياب أو تقديم المبررات (افتراضي: 10 أيام).</p>
+            </div>
+
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button
+              type="submit"
+              disabled={savingSettings}
+              className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-xl text-xs font-bold gap-1.5 shadow-xs px-5"
+            >
+              <Save size={14} />
+              {savingSettings ? 'جاري الحفظ...' : 'حفظ مدد التذكيرات'}
+            </Button>
+          </div>
+        </form>
       </div>
 
       {/* Add / Edit Commendation Type Dialog */}

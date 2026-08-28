@@ -592,6 +592,7 @@ async function startServer() {
   let inMemoryPenalties: any[] = [];
   let inMemoryAppreciations: any[] = [];
   let inMemoryPerformanceEvaluations: any[] = [];
+  let inMemoryPromotionDelayReasons: any[] = [];
 
   async function syncEmployeeQualificationFromEmployee(employeeId: number, mappedData: any) {
     if (!employeeId || isNaN(employeeId)) return;
@@ -2696,7 +2697,17 @@ async function startServer() {
       { label: "كتابان استثنائيان (6 أشهر)", maxCount: 2, rules: [{ count: 2, creditMonths: 6 }] }
     ]),
     degreeTrackAutoSettlement: false,
-    degree_track_auto_settlement: false
+    degree_track_auto_settlement: false,
+    reminderDaysCourse: 30,
+    reminder_days_course: 30,
+    reminderDaysPenalty: 15,
+    reminder_days_penalty: 15,
+    reminderDaysLeave: 30,
+    reminder_days_leave: 30,
+    reminderDaysEvaluation: 30,
+    reminder_days_evaluation: 30,
+    reminderDaysAbsence: 10,
+    reminder_days_absence: 10
   };
 
   let inMemoryAllowancesDeductions: any[] = [
@@ -3373,7 +3384,17 @@ async function startServer() {
           ...inMemoryCommendationRulesSettings,
           ...mapKeys(item, camelToSnake),
           degreeTrackAutoSettlement: Boolean(item.degreeTrackAutoSettlement),
-          degree_track_auto_settlement: Boolean(item.degreeTrackAutoSettlement)
+          degree_track_auto_settlement: Boolean(item.degreeTrackAutoSettlement),
+          reminderDaysCourse: item.reminderDaysCourse ?? 30,
+          reminder_days_course: item.reminderDaysCourse ?? 30,
+          reminderDaysPenalty: item.reminderDaysPenalty ?? 15,
+          reminder_days_penalty: item.reminderDaysPenalty ?? 15,
+          reminderDaysLeave: item.reminderDaysLeave ?? 30,
+          reminder_days_leave: item.reminderDaysLeave ?? 30,
+          reminderDaysEvaluation: item.reminderDaysEvaluation ?? 30,
+          reminder_days_evaluation: item.reminderDaysEvaluation ?? 30,
+          reminderDaysAbsence: item.reminderDaysAbsence ?? 10,
+          reminder_days_absence: item.reminderDaysAbsence ?? 10
         };
         return res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
       }
@@ -3384,10 +3405,26 @@ async function startServer() {
   });
 
   app.put('/api/commendation-rules-settings', requireAuth, async (req, res) => {
-    const { max_per_year, maxPerYear, allowed_combinations, allowedCombinations, degree_track_auto_settlement, degreeTrackAutoSettlement } = req.body;
+    const {
+      max_per_year, maxPerYear,
+      allowed_combinations, allowedCombinations,
+      degree_track_auto_settlement, degreeTrackAutoSettlement,
+      reminder_days_course, reminderDaysCourse,
+      reminder_days_penalty, reminderDaysPenalty,
+      reminder_days_leave, reminderDaysLeave,
+      reminder_days_evaluation, reminderDaysEvaluation,
+      reminder_days_absence, reminderDaysAbsence
+    } = req.body;
+
     const maxVal = max_per_year !== undefined ? parseInt(max_per_year) : (maxPerYear !== undefined ? parseInt(maxPerYear) : 3);
     const combos = typeof (allowed_combinations || allowedCombinations) === 'object' ? JSON.stringify(allowed_combinations || allowedCombinations) : (allowed_combinations || allowedCombinations || '');
     const autoSettlementVal = Boolean(degree_track_auto_settlement ?? degreeTrackAutoSettlement);
+
+    const rCourse = parseInt(reminder_days_course ?? reminderDaysCourse ?? inMemoryCommendationRulesSettings.reminderDaysCourse ?? 30);
+    const rPenalty = parseInt(reminder_days_penalty ?? reminderDaysPenalty ?? inMemoryCommendationRulesSettings.reminderDaysPenalty ?? 15);
+    const rLeave = parseInt(reminder_days_leave ?? reminderDaysLeave ?? inMemoryCommendationRulesSettings.reminderDaysLeave ?? 30);
+    const rEval = parseInt(reminder_days_evaluation ?? reminderDaysEvaluation ?? inMemoryCommendationRulesSettings.reminderDaysEvaluation ?? 30);
+    const rAbs = parseInt(reminder_days_absence ?? reminderDaysAbsence ?? inMemoryCommendationRulesSettings.reminderDaysAbsence ?? 10);
 
     try {
       await db.insert(schema.commendationRulesSettings).values({
@@ -3395,12 +3432,22 @@ async function startServer() {
         maxPerYear: maxVal,
         allowedCombinations: combos,
         degreeTrackAutoSettlement: autoSettlementVal,
+        reminderDaysCourse: rCourse,
+        reminderDaysPenalty: rPenalty,
+        reminderDaysLeave: rLeave,
+        reminderDaysEvaluation: rEval,
+        reminderDaysAbsence: rAbs,
       }).onConflictDoUpdate({
         target: schema.commendationRulesSettings.configKey,
         set: {
           maxPerYear: maxVal,
           allowedCombinations: combos,
           degreeTrackAutoSettlement: autoSettlementVal,
+          reminderDaysCourse: rCourse,
+          reminderDaysPenalty: rPenalty,
+          reminderDaysLeave: rLeave,
+          reminderDaysEvaluation: rEval,
+          reminderDaysAbsence: rAbs,
           updatedAt: new Date()
         }
       });
@@ -3414,7 +3461,17 @@ async function startServer() {
       allowed_combinations: combos,
       allowedCombinations: combos,
       degree_track_auto_settlement: autoSettlementVal,
-      degreeTrackAutoSettlement: autoSettlementVal
+      degreeTrackAutoSettlement: autoSettlementVal,
+      reminder_days_course: rCourse,
+      reminderDaysCourse: rCourse,
+      reminder_days_penalty: rPenalty,
+      reminderDaysPenalty: rPenalty,
+      reminder_days_leave: rLeave,
+      reminderDaysLeave: rLeave,
+      reminder_days_evaluation: rEval,
+      reminderDaysEvaluation: rEval,
+      reminder_days_absence: rAbs,
+      reminderDaysAbsence: rAbs
     };
     saveLocalDb();
     res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
@@ -6474,7 +6531,9 @@ async function startServer() {
     'performance': 'performanceEvaluations',
     'degree-track-snapshots': 'degreeTrackSnapshots',
     'degree-track-simulation-steps': 'degreeTrackSimulationSteps',
-    'specialization-credits': 'specializationCourseCredits'
+    'specialization-credits': 'specializationCourseCredits',
+    'promotion-delay-reasons': 'promotionDelayReasons',
+    'promotion_delay_reasons': 'promotionDelayReasons'
   };
 
   const genericMemoryStores: Record<string, any[]> = {
@@ -6496,7 +6555,9 @@ async function startServer() {
     'performance': inMemoryPerformanceEvaluations,
     'degree-track-snapshots': inMemoryDegreeTrackSnapshots,
     'degree-track-simulation-steps': inMemoryDegreeTrackSimulationSteps,
-    'specialization-credits': inMemorySpecializationCredits
+    'specialization-credits': inMemorySpecializationCredits,
+    'promotion-delay-reasons': inMemoryPromotionDelayReasons,
+    'promotion_delay_reasons': inMemoryPromotionDelayReasons
   };
 
   // --- Local Disk Persistence Engine ---
@@ -6535,6 +6596,7 @@ async function startServer() {
         inMemoryDegreeTrackSnapshots: genericMemoryStores['degree-track-snapshots'] || inMemoryDegreeTrackSnapshots,
         inMemoryDegreeTrackSimulationSteps: genericMemoryStores['degree-track-simulation-steps'] || inMemoryDegreeTrackSimulationSteps,
         inMemorySpecializationCredits: genericMemoryStores['specialization-credits'] || inMemorySpecializationCredits,
+        inMemoryPromotionDelayReasons: genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons,
         inMemoryAllowancesDeductions,
         inMemoryEducationDegrees,
         inMemoryResponsibilityAllowances,
@@ -6687,6 +6749,11 @@ async function startServer() {
           inMemorySpecializationCredits = state.inMemorySpecializationCredits;
           genericMemoryStores['specialization-credits'] = state.inMemorySpecializationCredits;
         }
+        if (Array.isArray(state.inMemoryPromotionDelayReasons)) {
+          inMemoryPromotionDelayReasons = state.inMemoryPromotionDelayReasons;
+          genericMemoryStores['promotion-delay-reasons'] = state.inMemoryPromotionDelayReasons;
+          genericMemoryStores['promotion_delay_reasons'] = state.inMemoryPromotionDelayReasons;
+        }
         if (Array.isArray(state.inMemoryAllowancesDeductions) && state.inMemoryAllowancesDeductions.length > 0) inMemoryAllowancesDeductions = state.inMemoryAllowancesDeductions;
         if (Array.isArray(state.inMemoryEducationDegrees) && state.inMemoryEducationDegrees.length > 0) inMemoryEducationDegrees = state.inMemoryEducationDegrees;
         if (Array.isArray(state.inMemoryResponsibilityAllowances) && state.inMemoryResponsibilityAllowances.length > 0) inMemoryResponsibilityAllowances = state.inMemoryResponsibilityAllowances;
@@ -6786,6 +6853,8 @@ async function startServer() {
       s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum && (s.status === 'نشط' || !s.status)
     );
 
+    let activeDegreeSimResult: any = undefined;
+
     if (activeDegreeSnapshot) {
       try {
         const { calculateDegreeTrackSimulation, processDegreeTrackSettlement } = require('./src/lib/degreeTrackEngine');
@@ -6795,6 +6864,7 @@ async function startServer() {
           leaves,
           attendances
         });
+        activeDegreeSimResult = simResult;
 
         const isAutoSettlementEnabled = inMemoryCommendationRulesSettings.degreeTrackAutoSettlement === true ||
           inMemoryCommendationRulesSettings.degree_track_auto_settlement === true;
@@ -6914,6 +6984,54 @@ async function startServer() {
         })
         .where(eq(schema.employees.id, empIdNum));
     } catch (e) {}
+
+    // Sync Promotion Delay Reasons (Phase 4: Transparency & Reminders)
+    try {
+      const { extractDelayReasonsFromContext, syncPromotionDelayReasons } = require('./src/lib/promotionDelayReasonsEngine');
+      const rawReasons = extractDelayReasonsFromContext(emp, fullResult, context, activeDegreeSimResult);
+      const currentReasonsStore = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
+      const delaySyncRes = syncPromotionDelayReasons(
+        empIdNum,
+        rawReasons,
+        currentReasonsStore,
+        inMemoryCommendationRulesSettings
+      );
+
+      genericMemoryStores['promotion-delay-reasons'] = delaySyncRes.updatedStore;
+      genericMemoryStores['promotion_delay_reasons'] = delaySyncRes.updatedStore;
+      inMemoryPromotionDelayReasons = delaySyncRes.updatedStore;
+
+      // DB sync with safe isolation
+      try {
+        for (const addedItem of delaySyncRes.added) {
+          await db.insert(schema.promotionDelayReasons).values({
+            employeeId: addedItem.employeeId,
+            reasonType: addedItem.reasonType,
+            description: addedItem.description,
+            affects: addedItem.affects,
+            isHidden: addedItem.isHidden,
+            reminderDate: addedItem.reminderDate,
+            isAutoReminder: addedItem.isAutoReminder,
+            isResolved: addedItem.isResolved,
+            resolvedAt: addedItem.resolvedAt,
+            sourceReferenceId: addedItem.sourceReferenceId
+          });
+        }
+        for (const updatedItem of [...delaySyncRes.updated, ...delaySyncRes.resolved]) {
+          if (updatedItem.id) {
+            await db.update(schema.promotionDelayReasons).set({
+              description: updatedItem.description,
+              affects: updatedItem.affects,
+              isResolved: updatedItem.isResolved,
+              resolvedAt: updatedItem.resolvedAt,
+              updatedAt: new Date()
+            }).where(eq(schema.promotionDelayReasons.id, updatedItem.id));
+          }
+        }
+      } catch (e) {}
+    } catch (delayErr: any) {
+      console.warn(`[DELAY_REASONS_SYNC_WARN] Employee #${empIdNum}:`, delayErr?.message || delayErr);
+    }
 
     saveLocalDb();
     return fullResult;
@@ -7989,6 +8107,176 @@ async function startServer() {
       res.json(batchResult);
     } catch (err: any) {
       console.error('Error in batch auto settlement:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- Promotion Delay Reasons & Reminders API (Phase 4: Transparency & Reminders) ---
+
+  // 1. Get Delay Reasons for Employee
+  app.get('/api/promotion-delay-reasons/employee/:id', requireAuth, async (req, res) => {
+    try {
+      const empId = parseInt(req.params.id);
+      if (isNaN(empId)) return res.status(400).json({ error: 'معرّف الموظف غير صالح' });
+
+      // Always trigger a fresh recalculation to ensure delay reasons match latest status
+      await triggerRecalculateEligibility(empId);
+
+      const store = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
+      const employeeReasons = store
+        .filter(item => parseInt(String(item.employeeId || item.employee_id)) === empId)
+        .map(item => ({
+          ...mapKeys(item, camelToSnake),
+          ...item,
+          id: item.id,
+          employeeId: parseInt(String(item.employeeId || item.employee_id)),
+          employee_id: parseInt(String(item.employeeId || item.employee_id)),
+          reasonType: item.reasonType || item.reason_type,
+          reason_type: item.reasonType || item.reason_type,
+          description: item.description,
+          affects: item.affects,
+          isHidden: Boolean(item.isHidden ?? item.is_hidden),
+          is_hidden: Boolean(item.isHidden ?? item.is_hidden),
+          reminderDate: item.reminderDate || item.reminder_date || null,
+          reminder_date: item.reminderDate || item.reminder_date || null,
+          isAutoReminder: Boolean(item.isAutoReminder ?? item.is_auto_reminder),
+          is_auto_reminder: Boolean(item.isAutoReminder ?? item.is_auto_reminder),
+          isResolved: Boolean(item.isResolved ?? item.is_resolved),
+          is_resolved: Boolean(item.isResolved ?? item.is_resolved),
+          resolvedAt: item.resolvedAt || item.resolved_at || null,
+          resolved_at: item.resolvedAt || item.resolved_at || null,
+          sourceReferenceId: item.sourceReferenceId || item.source_reference_id || null,
+          source_reference_id: item.sourceReferenceId || item.source_reference_id || null,
+        }));
+
+      res.json(employeeReasons);
+    } catch (err: any) {
+      console.error('Error fetching employee delay reasons:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 2. Toggle or set isHidden for a delay reason
+  app.patch('/api/promotion-delay-reasons/:id/hide', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'معرّف السجل غير صالح' });
+
+      const isHidden = req.body.is_hidden !== undefined
+        ? Boolean(req.body.is_hidden)
+        : (req.body.isHidden !== undefined ? Boolean(req.body.isHidden) : true);
+
+      const store = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
+      const idx = store.findIndex(item => parseInt(String(item.id)) === id);
+      if (idx !== -1) {
+        store[idx].isHidden = isHidden;
+        store[idx].is_hidden = isHidden;
+        store[idx].updatedAt = new Date().toISOString();
+        store[idx].updated_at = new Date().toISOString();
+      }
+
+      try {
+        await db.update(schema.promotionDelayReasons).set({
+          isHidden,
+          updatedAt: new Date()
+        }).where(eq(schema.promotionDelayReasons.id, id));
+      } catch (e) {}
+
+      saveLocalDb();
+      res.json({ success: true, isHidden, id });
+    } catch (err: any) {
+      console.error('Error updating delay reason visibility:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 3. Update reminderDate manually
+  app.patch('/api/promotion-delay-reasons/:id/reminder', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'معرّف السجل غير صالح' });
+
+      const reminderDate = String(req.body.reminder_date || req.body.reminderDate || '').trim() || null;
+
+      const store = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
+      const idx = store.findIndex(item => parseInt(String(item.id)) === id);
+      if (idx !== -1) {
+        store[idx].reminderDate = reminderDate;
+        store[idx].reminder_date = reminderDate;
+        store[idx].isAutoReminder = false;
+        store[idx].is_auto_reminder = false;
+        store[idx].updatedAt = new Date().toISOString();
+        store[idx].updated_at = new Date().toISOString();
+      }
+
+      try {
+        await db.update(schema.promotionDelayReasons).set({
+          reminderDate,
+          isAutoReminder: false,
+          updatedAt: new Date()
+        }).where(eq(schema.promotionDelayReasons.id, id));
+      } catch (e) {}
+
+      saveLocalDb();
+      res.json({ success: true, reminderDate, isAutoReminder: false, id });
+    } catch (err: any) {
+      console.error('Error updating delay reason reminder date:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 4. Get Due Reminders for Dashboard (reminderDate <= today and isResolved = false and isHidden = false)
+  app.get('/api/promotion-delay-reasons/due-reminders', requireAuth, async (req, res) => {
+    try {
+      const { formatDateString, isDateOnOrAfter } = require('./src/lib/promotionEngine');
+      const today = formatDateString(new Date());
+      const store = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
+
+      const dueItems = store.filter(item => {
+        const isHidden = item.isHidden === true || item.is_hidden === true;
+        const isResolved = item.isResolved === true || item.is_resolved === true;
+        const rDate = item.reminderDate || item.reminder_date;
+        if (isHidden || isResolved || !rDate) return false;
+        return isDateOnOrAfter(today, rDate); // today >= reminderDate (due)
+      }).map(item => {
+        const empId = parseInt(String(item.employeeId || item.employee_id));
+        const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empId);
+        return {
+          ...item,
+          id: item.id,
+          employeeId: empId,
+          employee_id: empId,
+          employeeName: emp?.fullName || emp?.full_name || emp?.name || `موظف #${empId}`,
+          jobTitle: emp?.jobTitle || emp?.job_title || '—',
+          department: emp?.department || '—',
+          grade: emp?.grade || '—',
+          step: emp?.step || '—',
+          reasonType: item.reasonType || item.reason_type,
+          reason_type: item.reasonType || item.reason_type,
+          description: item.description,
+          affects: item.affects,
+          reminderDate: item.reminderDate || item.reminder_date,
+          reminder_date: item.reminderDate || item.reminder_date,
+          isAutoReminder: item.isAutoReminder ?? item.is_auto_reminder,
+          is_auto_reminder: item.isAutoReminder ?? item.is_auto_reminder,
+        };
+      });
+
+      const summaryByType = {
+        'دورة': dueItems.filter(i => (i.reasonType || i.reason_type) === 'دورة').length,
+        'عقوبة': dueItems.filter(i => (i.reasonType || i.reason_type) === 'عقوبة').length,
+        'اجازة': dueItems.filter(i => (i.reasonType || i.reason_type) === 'اجازة').length,
+        'تقييم': dueItems.filter(i => (i.reasonType || i.reason_type) === 'تقييم').length,
+        'غياب': dueItems.filter(i => (i.reasonType || i.reason_type) === 'غياب').length,
+      };
+
+      res.json({
+        reminders: dueItems,
+        totalDue: dueItems.length,
+        summaryByType
+      });
+    } catch (err: any) {
+      console.error('Error fetching due reminders:', err);
       res.status(500).json({ error: err.message });
     }
   });
