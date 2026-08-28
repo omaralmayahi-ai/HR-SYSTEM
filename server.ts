@@ -13,8 +13,9 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { SALARY_TABLE } from './src/lib/salaryTable.js';
 import { encryptData, decryptData } from './src/lib/cryptoStorage.ts';
-import { checkReferentialUsage, validateEmployeeImportRow, isDbConnectionFailure } from './src/lib/referentialIntegrity.ts';
 import { recalculateEligibilitySync, EngineContextData } from './src/lib/promotionEngine.ts';
+import { calculateDegreeTrackSimulation, processDegreeTrackSettlement } from './src/lib/degreeTrackEngine.ts';
+import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src/lib/promotionDelayReasonsEngine.ts';
 
 
 const currentFilename = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' && import.meta.url ? fileURLToPath(import.meta.url) : '');
@@ -6857,7 +6858,6 @@ async function startServer() {
 
     if (activeDegreeSnapshot) {
       try {
-        const { calculateDegreeTrackSimulation, processDegreeTrackSettlement } = require('./src/lib/degreeTrackEngine');
         const simResult = calculateDegreeTrackSimulation(activeDegreeSnapshot, {
           specializationCredits,
           penalties,
@@ -6987,7 +6987,6 @@ async function startServer() {
 
     // Sync Promotion Delay Reasons (Phase 4: Transparency & Reminders)
     try {
-      const { extractDelayReasonsFromContext, syncPromotionDelayReasons } = require('./src/lib/promotionDelayReasonsEngine');
       const rawReasons = extractDelayReasonsFromContext(emp, fullResult, context, activeDegreeSimResult);
       const currentReasonsStore = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
       const delaySyncRes = syncPromotionDelayReasons(
@@ -7457,7 +7456,6 @@ async function startServer() {
       genericMemoryStores['degree-track-snapshots'].push(mapKeys(createdSnapshot, camelToSnake));
 
       // Run simulation engine & save steps
-      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
       const specializationCredits = (genericMemoryStores['specialization-credits'] || []).filter(
         c => parseInt(String(c.employee_id || c.employeeId)) === empId
       );
@@ -7542,7 +7540,6 @@ async function startServer() {
       const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empId);
       const attendances = (genericMemoryStores['attendance'] || []).filter(a => parseInt(String(a.employee_id || a.employeeId)) === empId);
 
-      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
       const simResult = calculateDegreeTrackSimulation(snapshot, {
         specializationCredits,
         penalties,
@@ -7577,7 +7574,6 @@ async function startServer() {
       const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empId);
       const attendances = (genericMemoryStores['attendance'] || []).filter(a => parseInt(String(a.employee_id || a.employeeId)) === empId);
 
-      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
       const simResult = calculateDegreeTrackSimulation(snapshot, {
         specializationCredits,
         penalties,
@@ -7599,7 +7595,6 @@ async function startServer() {
   // 4. Promotions, Increments & Degree Recognition Due List (قوائم المستحقين الثلاث)
   app.get('/api/promotions/due-list', requireAuth, async (req, res) => {
     try {
-      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
       const dueForIncrement: any[] = [];
       const dueForPromotion: any[] = [];
       const dueForSettlement: any[] = [];
@@ -7767,7 +7762,6 @@ async function startServer() {
         return res.status(400).json({ error: 'قائمة المعاملات المحددة للاعتماد فارغة' });
       }
 
-      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
       const approverName = req.user?.fullName || req.user?.name || req.user?.email || 'مسؤول الموارد البشرية';
 
       // Phase 1: Pre-validation (Atomic verification - any invalid item rejects the whole batch)
