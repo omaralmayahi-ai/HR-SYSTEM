@@ -324,7 +324,7 @@ export default function ResponsibilitySettings() {
                   
                   return (
                     <tr 
-                      key={rec.id} 
+                      key={rec.id ?? `responsibility-${idx}-${rec.name || idx}`} 
                       draggable
                       onDragStart={(e) => handleDragStart(e, idx)}
                       onDragOver={(e) => handleDragOver(e, idx)}

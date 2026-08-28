@@ -1110,7 +1110,7 @@ export default function FixedCustomDeductionsSettings() {
                     const displayValue = r.value || 0;
 
                     return (
-                      <Fragment key={r.id}>
+                      <Fragment key={r.id ?? `fixed-deduction-${idx}-${r.name || idx}`}>
                         <tr 
                           draggable
                           onDragStart={(e) => handleDragStart(e, idx)}
@@ -2375,7 +2375,7 @@ export default function FixedCustomDeductionsSettings() {
                           const meta = getTempMeta(rec.id);
                           const isExpanded = expandedRuleId === rec.id;
                           return (
-                            <Fragment key={rec.id}>
+                            <Fragment key={rec.id ?? `temp-deduction-${rec.name}`}>
                               <tr className="hover:bg-slate-50/50 transition-colors">
                                 <td className="px-5 py-3.5 text-[#1B3A6B] font-bold">{rec.name}</td>
                                 <td className="px-5 py-3.5 font-mono">

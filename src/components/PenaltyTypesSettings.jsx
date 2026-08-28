@@ -519,7 +519,7 @@ export default function PenaltyTypesSettings() {
 
                   return (
                     <tr
-                      key={record.id}
+                      key={record.id ?? `penalty-type-${index}-${record.name || record.penalty_name || index}`}
                       draggable={!isEditing}
                       onDragStart={(e) => handleDragStart(e, index)}
                       onDragOver={(e) => handleDragOver(e, index)}

@@ -633,7 +633,7 @@ export default function AllowancesSettings() {
                 const isPaused = r.status === 'متوقف مؤقتاً';
                 return (
                   <tr 
-                    key={r.id} 
+                    key={r.id ?? `allowance-${idx}-${r.name || idx}`} 
                     draggable
                     onDragStart={(e) => handleDragStart(e, idx)}
                     onDragOver={(e) => handleDragOver(e, idx)}

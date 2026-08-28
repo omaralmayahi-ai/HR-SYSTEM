@@ -622,7 +622,7 @@ export default function EducationDegreesSettings() {
                 
                 return (
                   <tr 
-                    key={r.id} 
+                    key={r.id ?? `degree-${idx}-${r.name || idx}`} 
                     draggable
                     onDragStart={(e) => handleDragStart(e, idx)}
                     onDragOver={(e) => handleDragOver(e, idx)}

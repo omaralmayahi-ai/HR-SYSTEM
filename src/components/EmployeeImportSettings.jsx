@@ -1124,7 +1124,7 @@ export default function EmployeeImportSettings() {
                     
                     return (
                       <tr 
-                        key={item.rowIndex} 
+                        key={item.rowIndex ?? `import-row-${item.excelRowNumber}`} 
                         className={`hover:bg-slate-50/80 transition-colors ${
                           item.status === 'invalid' ? 'bg-red-50/30' : item.status === 'duplicate' ? 'bg-amber-50/20' : ''
                         }`}

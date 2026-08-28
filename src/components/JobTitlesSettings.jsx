@@ -413,7 +413,7 @@ export default function JobTitlesSettings() {
 
                   return (
                     <tr 
-                      key={item.id || index}
+                      key={item.id ?? `job-title-${index}-${item.title || index}`}
                       className={`hover:bg-slate-50/70 transition-colors ${!isActive ? 'bg-slate-50/40 opacity-75' : ''}`}
                     >
                       <td className="px-4 py-3.5 text-center font-bold text-slate-400">
