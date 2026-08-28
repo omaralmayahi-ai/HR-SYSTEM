@@ -323,23 +323,34 @@ export interface FullEligibilityResponse {
 // Helper Date Functions (Pure & High-Precision)
 // ============================================================================
 
-export function parseDateString(dateStr: string): Date {
+export function parseDateString(dateStr: any): Date {
   if (!dateStr) return new Date();
-  const clean = dateStr.trim().split('T')[0];
-  const parts = clean.split('-');
+  if (dateStr instanceof Date) return isNaN(dateStr.getTime()) ? new Date() : dateStr;
+  const str = String(dateStr).trim().split('T')[0];
+  const parts = str.split('-');
   if (parts.length === 3) {
     const y = parseInt(parts[0], 10);
     const m = parseInt(parts[1], 10) - 1;
     const d = parseInt(parts[2], 10);
-    return new Date(Date.UTC(y, m, d));
+    if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+      return new Date(Date.UTC(y, m, d));
+    }
   }
-  return new Date(dateStr);
+  const dt = new Date(str);
+  return isNaN(dt.getTime()) ? new Date() : dt;
 }
 
-export function formatDateString(date: Date): string {
-  const y = date.getUTCFullYear();
-  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const d = String(date.getUTCDate()).padStart(2, '0');
+export function formatDateString(date: any): string {
+  if (!date) return '';
+  if (typeof date === 'string') {
+    const clean = date.trim().split('T')[0];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+  }
+  const dt = date instanceof Date ? date : new Date(date);
+  if (isNaN(dt.getTime())) return '';
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(dt.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
 
@@ -366,7 +377,8 @@ export function addDaysToDate(dateStr: string, daysToAdd: number): string {
   return formatDateString(dt);
 }
 
-export function isDateOnOrAfter(dateStr: string, refDateStr: string): boolean {
+export function isDateOnOrAfter(dateStr: any, refDateStr: any): boolean {
+  if (!dateStr || !refDateStr) return false;
   return parseDateString(dateStr).getTime() >= parseDateString(refDateStr).getTime();
 }
 

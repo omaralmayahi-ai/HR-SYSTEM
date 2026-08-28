@@ -7599,129 +7599,133 @@ async function startServer() {
       const dueForPromotion: any[] = [];
       const dueForSettlement: any[] = [];
 
-      for (const emp of inMemoryEmployees) {
-        const empId = parseInt(String(emp.id));
-        if (!empId) continue;
+      for (const emp of (inMemoryEmployees || [])) {
+        try {
+          const empId = parseInt(String(emp.id));
+          if (!empId) continue;
 
-        // Skip inactive or separated employees
-        const empStatus = emp.status || 'نشط';
-        if (['منتهية_خدمته', 'متقاعد', 'مفصول', 'مستقيل', 'متوفى'].includes(empStatus)) {
-          continue;
-        }
+          // Skip inactive or separated employees
+          const empStatus = emp.status || 'نشط';
+          if (['منتهية_خدمته', 'متقاعد', 'مفصول', 'مستقيل', 'متوفى'].includes(empStatus)) {
+            continue;
+          }
 
-        // Recalculate standard eligibility
-        const eligibility = await triggerRecalculateEligibility(empId);
+          // Recalculate standard eligibility
+          const eligibility = await triggerRecalculateEligibility(empId);
 
-        // 1. Check Increment Eligibility (علاوة سنوية)
-        if (
-          eligibility?.increment?.eligibilityStatus === 'مستحق_للعلاوة' &&
-          eligibility?.increment?.isIncrementEligible
-        ) {
-          const currentStep = parseInt(String(emp.step)) || 1;
-          const targetStep = Math.min(11, currentStep + 1);
-          dueForIncrement.push({
-            employeeId: empId,
-            employee_id: empId,
-            name: emp.fullName || emp.full_name || emp.name,
-            fullName: emp.fullName || emp.full_name || emp.name,
-            department: emp.department || 'عام',
-            jobTitle: emp.jobTitle || emp.job_title || 'موظف',
-            currentGrade: emp.grade,
-            current_grade: emp.grade,
-            currentStep: currentStep,
-            current_step: currentStep,
-            targetGrade: emp.grade,
-            target_grade: emp.grade,
-            targetStep: targetStep,
-            target_step: targetStep,
-            dueDate: eligibility.increment.nextIncrementDueDate,
-            due_date: eligibility.increment.nextIncrementDueDate,
-            trackType: 'المسار_الاعتيادي',
-            track_type: 'المسار_الاعتيادي',
-            actionType: 'علاوة',
-            action_type: 'علاوة',
-            noGradeChange: true,
-            no_grade_change: true,
-            reasons: [eligibility.increment.statusReason || 'استوفى الموظف المدة الزمنية وشروط استحقاق العلاوة السنوية']
-          });
-        }
+          // 1. Check Increment Eligibility (علاوة سنوية)
+          if (
+            eligibility?.increment?.eligibilityStatus === 'مستحق_للعلاوة' &&
+            eligibility?.increment?.isIncrementEligible
+          ) {
+            const currentStep = parseInt(String(emp.step)) || 1;
+            const targetStep = Math.min(11, currentStep + 1);
+            dueForIncrement.push({
+              employeeId: empId,
+              employee_id: empId,
+              name: emp.fullName || emp.full_name || emp.name,
+              fullName: emp.fullName || emp.full_name || emp.name,
+              department: emp.department || 'عام',
+              jobTitle: emp.jobTitle || emp.job_title || 'موظف',
+              currentGrade: emp.grade,
+              current_grade: emp.grade,
+              currentStep: currentStep,
+              current_step: currentStep,
+              targetGrade: emp.grade,
+              target_grade: emp.grade,
+              targetStep: targetStep,
+              target_step: targetStep,
+              dueDate: eligibility.increment.nextIncrementDueDate,
+              due_date: eligibility.increment.nextIncrementDueDate,
+              trackType: 'المسار_الاعتيادي',
+              track_type: 'المسار_الاعتيادي',
+              actionType: 'علاوة',
+              action_type: 'علاوة',
+              noGradeChange: true,
+              no_grade_change: true,
+              reasons: [eligibility.increment.statusReason || 'استوفى الموظف المدة الزمنية وشروط استحقاق العلاوة السنوية']
+            });
+          }
 
-        // 2. Check Degree Track Snapshot Deficit Settlement
-        const activeSnap = (genericMemoryStores['degree-track-snapshots'] || []).find(
-          s => parseInt(String(s.employee_id || s.employeeId)) === empId && (s.status === 'نشط' || !s.status)
-        );
+          // 2. Check Degree Track Snapshot Deficit Settlement
+          const activeSnap = (genericMemoryStores['degree-track-snapshots'] || []).find(
+            s => parseInt(String(s.employee_id || s.employeeId)) === empId && (s.status === 'نشط' || !s.status)
+          );
 
-        let hasHandledDegreeTrack = false;
-        if (activeSnap) {
-          const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
-          const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-          const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-          const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+          let hasHandledDegreeTrack = false;
+          if (activeSnap) {
+            const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
+            const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+            const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+            const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
 
-          const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
-          if (sim.hasDeficit) {
-            hasHandledDegreeTrack = true;
-            if (sim.realTimeNextPromotion?.isEligible && sim.realTimeNextPromotion?.eligibilityStatus === 'مستحق_للترفيع') {
-              dueForSettlement.push({
-                employeeId: empId,
-                employee_id: empId,
-                name: emp.fullName || emp.full_name || emp.name,
-                fullName: emp.fullName || emp.full_name || emp.name,
-                department: emp.department || 'عام',
-                jobTitle: emp.jobTitle || emp.job_title || 'موظف',
-                currentGrade: emp.grade || activeSnap.actualGradeBefore,
-                current_grade: emp.grade || activeSnap.actualGradeBefore,
-                currentStep: emp.step || activeSnap.actualStepBefore,
-                current_step: emp.step || activeSnap.actualStepBefore,
-                targetGrade: emp.grade || activeSnap.actualGradeBefore,
-                target_grade: emp.grade || activeSnap.actualGradeBefore,
-                targetStep: emp.step || activeSnap.actualStepBefore,
-                target_step: emp.step || activeSnap.actualStepBefore,
-                dueDate: sim.realTimeNextPromotion.nextPromotionDueDate,
-                due_date: sim.realTimeNextPromotion.nextPromotionDueDate,
-                trackType: 'مسار_احتساب_الشهادات',
-                track_type: 'مسار_احتساب_الشهادات',
-                actionType: 'تسوية',
-                action_type: 'تسوية',
-                noGradeChange: true,
-                no_grade_change: true,
-                snapshotId: activeSnap.id,
-                snapshot_id: activeSnap.id,
-                reasons: [sim.realTimeNextPromotion.statusReason || 'استوفى الموظف شروط تسوية العجز وتثبيت الاستحقاق بدرجته الحالية']
-              });
+            const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
+            if (sim.hasDeficit) {
+              hasHandledDegreeTrack = true;
+              if (sim.realTimeNextPromotion?.isEligible && sim.realTimeNextPromotion?.eligibilityStatus === 'مستحق_للترفيع') {
+                dueForSettlement.push({
+                  employeeId: empId,
+                  employee_id: empId,
+                  name: emp.fullName || emp.full_name || emp.name,
+                  fullName: emp.fullName || emp.full_name || emp.name,
+                  department: emp.department || 'عام',
+                  jobTitle: emp.jobTitle || emp.job_title || 'موظف',
+                  currentGrade: emp.grade || activeSnap.actualGradeBefore,
+                  current_grade: emp.grade || activeSnap.actualGradeBefore,
+                  currentStep: emp.step || activeSnap.actualStepBefore,
+                  current_step: emp.step || activeSnap.actualStepBefore,
+                  targetGrade: emp.grade || activeSnap.actualGradeBefore,
+                  target_grade: emp.grade || activeSnap.actualGradeBefore,
+                  targetStep: emp.step || activeSnap.actualStepBefore,
+                  target_step: emp.step || activeSnap.actualStepBefore,
+                  dueDate: sim.realTimeNextPromotion.nextPromotionDueDate,
+                  due_date: sim.realTimeNextPromotion.nextPromotionDueDate,
+                  trackType: 'مسار_احتساب_الشهادات',
+                  track_type: 'مسار_احتساب_الشهادات',
+                  actionType: 'تسوية',
+                  action_type: 'تسوية',
+                  noGradeChange: true,
+                  no_grade_change: true,
+                  snapshotId: activeSnap.id,
+                  snapshot_id: activeSnap.id,
+                  reasons: [sim.realTimeNextPromotion.statusReason || 'استوفى الموظف شروط تسوية العجز وتثبيت الاستحقاق بدرجته الحالية']
+                });
+              }
             }
           }
-        }
 
-        // 3. Check Standard Promotion Eligibility (ترفيع درجة) - only if not in active degree track deficit
-        if (!hasHandledDegreeTrack && eligibility?.promotion?.eligibilityStatus === 'مستحق_للترفيع' && eligibility?.promotion?.isPromotionEligible) {
-          const currentGrade = parseInt(String(emp.grade)) || 10;
-          const targetGrade = Math.max(1, currentGrade - 1);
-          dueForPromotion.push({
-            employeeId: empId,
-            employee_id: empId,
-            name: emp.fullName || emp.full_name || emp.name,
-            fullName: emp.fullName || emp.full_name || emp.name,
-            department: emp.department || 'عام',
-            jobTitle: emp.jobTitle || emp.job_title || 'موظف',
-            currentGrade: currentGrade,
-            current_grade: currentGrade,
-            currentStep: emp.step || 1,
-            current_step: emp.step || 1,
-            targetGrade: targetGrade,
-            target_grade: targetGrade,
-            targetStep: 1,
-            target_step: 1,
-            dueDate: eligibility.promotion.nextPromotionDueDate,
-            due_date: eligibility.promotion.nextPromotionDueDate,
-            trackType: 'المسار_الاعتيادي',
-            track_type: 'المسار_الاعتيادي',
-            actionType: 'ترفيع',
-            action_type: 'ترفيع',
-            noGradeChange: false,
-            no_grade_change: false,
-            reasons: [eligibility.promotion.statusReason || 'استوفى الموظف المدة القانونية والدورات الحاكمة وتقييم الأداء']
-          });
+          // 3. Check Standard Promotion Eligibility (ترفيع درجة) - only if not in active degree track deficit
+          if (!hasHandledDegreeTrack && eligibility?.promotion?.eligibilityStatus === 'مستحق_للترفيع' && eligibility?.promotion?.isPromotionEligible) {
+            const currentGrade = parseInt(String(emp.grade)) || 10;
+            const targetGrade = Math.max(1, currentGrade - 1);
+            dueForPromotion.push({
+              employeeId: empId,
+              employee_id: empId,
+              name: emp.fullName || emp.full_name || emp.name,
+              fullName: emp.fullName || emp.full_name || emp.name,
+              department: emp.department || 'عام',
+              jobTitle: emp.jobTitle || emp.job_title || 'موظف',
+              currentGrade: currentGrade,
+              current_grade: currentGrade,
+              currentStep: emp.step || 1,
+              current_step: emp.step || 1,
+              targetGrade: targetGrade,
+              target_grade: targetGrade,
+              targetStep: 1,
+              target_step: 1,
+              dueDate: eligibility.promotion.nextPromotionDueDate,
+              due_date: eligibility.promotion.nextPromotionDueDate,
+              trackType: 'المسار_الاعتيادي',
+              track_type: 'المسار_الاعتيادي',
+              actionType: 'ترفيع',
+              action_type: 'ترفيع',
+              noGradeChange: false,
+              no_grade_change: false,
+              reasons: [eligibility.promotion.statusReason || 'استوفى الموظف المدة القانونية والدورات الحاكمة وتقييم الأداء']
+            });
+          }
+        } catch (empErr: any) {
+          console.warn(`[DUE_LIST_WARN] Could not process eligibility for employee ${emp.id}:`, empErr?.message || empErr);
         }
       }
 
@@ -7743,7 +7747,20 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error fetching promotion due list:', err);
-      res.status(500).json({ error: err.message });
+      res.json({
+        dueForIncrement: [],
+        dueForPromotion: [],
+        dueForSettlement: [],
+        due_for_increment: [],
+        due_for_promotion: [],
+        due_for_settlement: [],
+        summary: {
+          totalIncrement: 0,
+          totalPromotion: 0,
+          totalSettlement: 0,
+          totalDue: 0
+        }
+      });
     }
   });
 
@@ -8223,37 +8240,47 @@ async function startServer() {
   app.get('/api/promotion-delay-reasons/due-reminders', requireAuth, async (req, res) => {
     try {
       const today = formatDateString(new Date());
-      const store = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
+      const store = Array.isArray(genericMemoryStores['promotion-delay-reasons'])
+        ? genericMemoryStores['promotion-delay-reasons']
+        : (Array.isArray(inMemoryPromotionDelayReasons) ? inMemoryPromotionDelayReasons : []);
 
-      const dueItems = store.filter(item => {
-        const isHidden = item.isHidden === true || item.is_hidden === true;
-        const isResolved = item.isResolved === true || item.is_resolved === true;
-        const rDate = item.reminderDate || item.reminder_date;
-        if (isHidden || isResolved || !rDate) return false;
-        return isDateOnOrAfter(today, rDate); // today >= reminderDate (due)
-      }).map(item => {
-        const empId = parseInt(String(item.employeeId || item.employee_id));
-        const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empId);
-        return {
-          ...item,
-          id: item.id,
-          employeeId: empId,
-          employee_id: empId,
-          employeeName: emp?.fullName || emp?.full_name || emp?.name || `موظف #${empId}`,
-          jobTitle: emp?.jobTitle || emp?.job_title || '—',
-          department: emp?.department || '—',
-          grade: emp?.grade || '—',
-          step: emp?.step || '—',
-          reasonType: item.reasonType || item.reason_type,
-          reason_type: item.reasonType || item.reason_type,
-          description: item.description,
-          affects: item.affects,
-          reminderDate: item.reminderDate || item.reminder_date,
-          reminder_date: item.reminderDate || item.reminder_date,
-          isAutoReminder: item.isAutoReminder ?? item.is_auto_reminder,
-          is_auto_reminder: item.isAutoReminder ?? item.is_auto_reminder,
-        };
-      });
+      const dueItems: any[] = [];
+
+      for (const item of store) {
+        try {
+          if (!item) continue;
+          const isHidden = item.isHidden === true || item.is_hidden === true;
+          const isResolved = item.isResolved === true || item.is_resolved === true;
+          const rDate = item.reminderDate || item.reminder_date;
+          if (isHidden || isResolved || !rDate) continue;
+          if (!isDateOnOrAfter(today, rDate)) continue;
+
+          const empId = parseInt(String(item.employeeId || item.employee_id));
+          const emp = (inMemoryEmployees || []).find(e => parseInt(String(e.id)) === empId);
+
+          dueItems.push({
+            ...item,
+            id: item.id,
+            employeeId: empId,
+            employee_id: empId,
+            employeeName: emp?.fullName || emp?.full_name || emp?.name || `موظف #${empId}`,
+            jobTitle: emp?.jobTitle || emp?.job_title || '—',
+            department: emp?.department || '—',
+            grade: emp?.grade || '—',
+            step: emp?.step || '—',
+            reasonType: item.reasonType || item.reason_type,
+            reason_type: item.reasonType || item.reason_type,
+            description: item.description || '',
+            affects: item.affects || 'ترقية',
+            reminderDate: item.reminderDate || item.reminder_date,
+            reminder_date: item.reminderDate || item.reminder_date,
+            isAutoReminder: item.isAutoReminder ?? item.is_auto_reminder ?? true,
+            is_auto_reminder: item.isAutoReminder ?? item.is_auto_reminder ?? true,
+          });
+        } catch (itemErr) {
+          console.warn('[DUE_REMINDERS_WARN] Error processing item:', itemErr);
+        }
+      }
 
       const summaryByType = {
         'دورة': dueItems.filter(i => (i.reasonType || i.reason_type) === 'دورة').length,
@@ -8270,7 +8297,11 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error fetching due reminders:', err);
-      res.status(500).json({ error: err.message });
+      res.json({
+        reminders: [],
+        totalDue: 0,
+        summaryByType: { 'دورة': 0, 'عقوبة': 0, 'اجازة': 0, 'تقييم': 0, 'غياب': 0 }
+      });
     }
   });
 
