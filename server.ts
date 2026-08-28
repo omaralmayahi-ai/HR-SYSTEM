@@ -13,7 +13,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { SALARY_TABLE } from './src/lib/salaryTable.js';
 import { encryptData, decryptData } from './src/lib/cryptoStorage.ts';
-import { recalculateEligibilitySync, EngineContextData } from './src/lib/promotionEngine.ts';
+import { recalculateEligibilitySync, EngineContextData, formatDateString, isDateOnOrAfter } from './src/lib/promotionEngine.ts';
 import { calculateDegreeTrackSimulation, processDegreeTrackSettlement } from './src/lib/degreeTrackEngine.ts';
 import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src/lib/promotionDelayReasonsEngine.ts';
 
@@ -8222,7 +8222,6 @@ async function startServer() {
   // 4. Get Due Reminders for Dashboard (reminderDate <= today and isResolved = false and isHidden = false)
   app.get('/api/promotion-delay-reasons/due-reminders', requireAuth, async (req, res) => {
     try {
-      const { formatDateString, isDateOnOrAfter } = require('./src/lib/promotionEngine');
       const today = formatDateString(new Date());
       const store = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
 
