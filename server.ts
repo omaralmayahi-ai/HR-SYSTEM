@@ -13,7 +13,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { SALARY_TABLE } from './src/lib/salaryTable.js';
 import { encryptData, decryptData } from './src/lib/cryptoStorage.ts';
-import { checkReferentialUsage, validateEmployeeImportRow } from './src/lib/referentialIntegrity.ts';
+import { checkReferentialUsage, validateEmployeeImportRow, isDbConnectionFailure } from './src/lib/referentialIntegrity.ts';
 import { recalculateEligibilitySync, EngineContextData } from './src/lib/promotionEngine.ts';
 
 
@@ -7765,6 +7765,8 @@ async function startServer() {
       }
 
       // Phase 2: Transactional Execution (Apply DB + Memory updates atomically)
+      let dbOffline = false;
+
       try {
         await db.transaction(async (tx) => {
           for (const item of validatedBatch) {
@@ -7806,11 +7808,22 @@ async function startServer() {
             });
           }
         });
-      } catch (dbErr) {
-        console.warn('Database transaction fallback / running in dual mode:', dbErr);
+      } catch (dbErr: any) {
+        if (isDbConnectionFailure(dbErr)) {
+          console.warn('Database offline / connection failure during batch approval. Falling back to local encrypted storage:', dbErr?.message);
+          dbOffline = true;
+        } else {
+          // Case B: Real transaction execution failure (Constraint violation, schema error, invalid data)
+          console.error('CRITICAL: Batch promotion approval database transaction failed (Transaction Rolled Back):', dbErr);
+          return res.status(500).json({
+            error: 'فشلت عملية الاعتماد بالكامل في قاعدة البيانات، وتم التراجع عن كافة التغييرات (Rollback)',
+            details: dbErr?.message || String(dbErr),
+            code: dbErr?.code
+          });
+        }
       }
 
-      // Phase 3: Mirror in In-Memory Stores
+      // Phase 3: Mirror in In-Memory Stores ONLY IF DB succeeded or DB is offline
       for (const item of validatedBatch) {
         const empIdx = inMemoryEmployees.findIndex(e => parseInt(String(e.id)) === item.empId);
         if (empIdx !== -1) {
@@ -7870,10 +7883,13 @@ async function startServer() {
 
       return res.json({
         success: true,
+        storageMode: dbOffline ? 'local_encrypted' : 'database_and_local',
         approvedCount: validatedBatch.length,
         orderNumber: finalOrderNumber,
         orderDate: finalOrderDate,
-        message: `تم اعتماد ${validatedBatch.length} معاملة بنجاح بموجب الأمر الإداري رقم (${finalOrderNumber}) بتاريخ (${finalOrderDate})`
+        message: dbOffline
+          ? `تم اعتماد ${validatedBatch.length} معاملة بنجاح وحفظها بالتخزين الاحتياطي المحلي المشفر (قاعدة البيانات المركزية غير متصلة) بموجب الأمر الإداري رقم (${finalOrderNumber}) بتاريخ (${finalOrderDate})`
+          : `تم اعتماد ${validatedBatch.length} معاملة بنجاح وتحديث قاعدة البيانات المركزية بموجب الأمر الإداري رقم (${finalOrderNumber}) بتاريخ (${finalOrderDate})`
       });
     } catch (err: any) {
       console.error('Error in batch promotion approval:', err);

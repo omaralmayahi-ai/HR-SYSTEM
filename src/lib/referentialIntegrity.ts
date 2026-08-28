@@ -437,3 +437,45 @@ export function validateEmployeeImportRow(
     warnings
   };
 }
+
+/**
+ * Distinguishes between database connection/offline failures (Case A)
+ * and active transaction/execution errors (Case B: constraints, invalid data, schema violations).
+ */
+export function isDbConnectionFailure(err: any): boolean {
+  if (!err) return false;
+
+  // Node.js network / connection error codes
+  const networkCodes = ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'EAI_AGAIN', 'ECONNRESET', 'ENETUNREACH'];
+  if (err.code && networkCodes.includes(err.code)) {
+    return true;
+  }
+
+  // PostgreSQL Connection Exception Class codes (Class 08 and Class 57P)
+  const pgConnectionCodes = ['08000', '08001', '08003', '08004', '08006', '08007', '57P01', '57P02', '57P03'];
+  if (err.code && pgConnectionCodes.includes(err.code)) {
+    return true;
+  }
+
+  const msg = String(err.message || err).toLowerCase();
+  const connectionKeywords = [
+    'econnrefused',
+    'enotfound',
+    'etimedout',
+    'connection refused',
+    'failed to connect',
+    'connection terminated',
+    'connection lost',
+    'could not connect',
+    'unable to connect',
+    'terminating connection',
+    'client has already been connected',
+    'no pg connection',
+    'connection closed',
+    'database system is starting up',
+    'database system is in recovery'
+  ];
+
+  return connectionKeywords.some(keyword => msg.includes(keyword));
+}
+

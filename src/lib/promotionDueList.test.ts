@@ -284,9 +284,9 @@ describe('Phase 3: Promotions & Increments Due Lists & Batch Approvals (قوائ
   });
 
   // ============================================================================
-  // الاختبار 5: فشل مفتعل بمنتصف الدفعة -> تراجع كامل للعملية (Atomic Rollback)
+  // الاختبار 5-أ: فشل في مرحلة التحقق المسبق (Pre-validation Pass) -> تراجع فوري
   // ============================================================================
-  it('5. فشل مفتعل بمنتصف الدفعة: وجود عنصر غير صالح أو موظف غير مستحق يلغي الدفعة بالكامل دون أي تعديل جزئي', () => {
+  it('5-أ. فشل في مرحلة التحقق المسبق: وجود عنصر غير صالح أو موظف غير مستحق يلغي الدفعة بالكامل قبل بدء أي عملية', () => {
     const rawBatch = [
       { employeeId: 301, type: 'علاوة', isEligible: true },
       { employeeId: 302, type: 'ترفيع', isEligible: false, reason: 'الموظف في إجازة بدون راتب موقفة' }, // غير صالح
@@ -302,15 +302,122 @@ describe('Phase 3: Promotions & Increments Due Lists & Batch Approvals (قوائ
           throw new Error(`تعذر اعتماد الدفعة: الموظف #${item.employeeId} غير مستحق (${item.reason})`);
         }
       }
-      // إذا نجح التحقق الكامل
       transactionState.committed = true;
       transactionState.modifiedEmployees = items.map(i => i.employeeId);
     };
 
     expect(() => validateBatch(rawBatch)).toThrow(/تعذر اعتماد الدفعة/);
-    // التحقق من عدم تطبيق أي تغيير جزئي
     expect(transactionState.committed).toBe(false);
     expect(transactionState.modifiedEmployees.length).toBe(0);
+  });
+
+  // ============================================================================
+  // الاختبار 5-ب: فشل حقيقي بمنتصف الـ transaction بقاعدة البيانات (الحالة ب)
+  // ============================================================================
+  it('5-ب. فشل حقيقي بمنتصف الـ Transaction بقاعدة البيانات (خطأ قيد/بيانات): يرجع 500 صريح وتتوقف العملية بالكامل دون تحديث الذاكرة لأي عنصر', async () => {
+    const { isDbConnectionFailure } = await import('./referentialIntegrity');
+
+    // 1. بيانات موظفين أولية بالذاكرة
+    const inMemoryEmployees = [
+      { id: 501, name: 'موظف 1', grade: 4, step: 2, lastIncrementDate: '2024-01-01' },
+      { id: 502, name: 'موظف 2', grade: 5, step: 4, lastPromotionDate: '2020-01-01' },
+      { id: 503, name: 'موظف 3', grade: 3, step: 1, lastPromotionDate: '2023-01-01' }
+    ];
+    const initialEmployeesSnapshot = JSON.parse(JSON.stringify(inMemoryEmployees));
+    const promotionsStore: any[] = [];
+
+    const validatedBatch = [
+      { empId: 501, type: 'علاوة', stepAfter: 3, dueDate: '2026-01-01' },
+      { empId: 502, type: 'ترفيع', gradeAfter: 4, stepAfter: 1, dueDate: '2026-01-01' },
+      { empId: 503, type: 'تسوية', gradeAfter: 3, stepAfter: 1, dueDate: '2028-01-01' }
+    ];
+
+    // 2. محاكاة دالة المعالجة كما هي مطبقة بـ server.ts
+    const simulateApproveBatch = async (mockDbTransaction: () => Promise<void>) => {
+      let dbOffline = false;
+      try {
+        await mockDbTransaction();
+      } catch (dbErr: any) {
+        if (isDbConnectionFailure(dbErr)) {
+          dbOffline = true;
+        } else {
+          // الحالة ب: خطأ حقيقي بقاعدة البيانات -> إرجاع 500 فوراً دون لمس الذاكرة
+          return {
+            status: 500,
+            body: {
+              error: 'فشلت عملية الاعتماد بالكامل في قاعدة البيانات، وتم التراجع عن كافة التغييرات (Rollback)',
+              details: dbErr?.message,
+              code: dbErr?.code
+            }
+          };
+        }
+      }
+
+      // Phase 3: Mirror in Memory (تحدث فقط إذا نجحت DB أو إذا كانت DB أوفلاين)
+      for (const item of validatedBatch) {
+        const emp = inMemoryEmployees.find(e => e.id === item.empId);
+        if (emp) {
+          if (item.type === 'علاوة') {
+            emp.step = item.stepAfter;
+            emp.lastIncrementDate = item.dueDate;
+          } else if (item.type === 'ترفيع') {
+            emp.grade = item.gradeAfter;
+            emp.step = item.stepAfter;
+            emp.lastPromotionDate = item.dueDate;
+          } else if (item.type === 'تسوية') {
+            emp.lastPromotionDate = item.dueDate;
+          }
+        }
+        promotionsStore.push({ employeeId: item.empId, type: item.type });
+      }
+
+      return {
+        status: 200,
+        body: { success: true, storageMode: dbOffline ? 'local_encrypted' : 'database_and_local' }
+      };
+    };
+
+    // 3. اختبار الحالة ب: خطأ قيد قاعدة بيانات (Unique / Foreign Key Constraint Violation)
+    const constraintError = new Error('duplicate key value violates unique constraint "promotions_order_idx"');
+    (constraintError as any).code = '23505'; // PostgreSQL unique violation code
+
+    const result = await simulateApproveBatch(async () => {
+      // نفترض أن أول موظف تم تحديثه، ولكن عند الموظف الثاني حصل خطأ قيد
+      throw constraintError;
+    });
+
+    // 4. التحقق الحاسم:
+    // أ. الاستجابة 500 صريحة مع رسالة الفشل والتراجع
+    expect(result.status).toBe(500);
+    expect(result.body.error).toContain('فشلت عملية الاعتماد بالكامل في قاعدة البيانات');
+    expect(result.body.code).toBe('23505');
+
+    // ب. الذاكرة لم تتحدث إطلاقاً لأي موظف بالدفعة (لا الأول ولا الثاني ولا الثالث)
+    expect(inMemoryEmployees).toEqual(initialEmployeesSnapshot);
+    expect(promotionsStore.length).toBe(0);
+  });
+
+  // ============================================================================
+  // الاختبار 5-ج: التمييز الدقيق بين انقطاع الاتصال (Case A) وخطأ الـ Transaction (Case B)
+  // ============================================================================
+  it('5-ج. التمييز الدقيق عبر isDbConnectionFailure بين انقطاع الاتصال (Case A) وأخطاء البيانات والـ Transaction الحقيقية (Case B)', async () => {
+    const { isDbConnectionFailure } = await import('./referentialIntegrity');
+
+    // Case A: أخطاء انقطاع الاتصال بالشبكة أو إغلاق الخادم
+    expect(isDbConnectionFailure({ code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:5432' })).toBe(true);
+    expect(isDbConnectionFailure({ code: 'ENOTFOUND', message: 'getaddrinfo ENOTFOUND localhost' })).toBe(true);
+    expect(isDbConnectionFailure({ code: 'ETIMEDOUT', message: 'Connection timeout' })).toBe(true);
+    expect(isDbConnectionFailure({ code: '57P01', message: 'terminating connection due to administrator command' })).toBe(true);
+    expect(isDbConnectionFailure({ code: '08006', message: 'connection_failure' })).toBe(true);
+    expect(isDbConnectionFailure(new Error('Connection terminated unexpectedly'))).toBe(true);
+
+    // Case B: أخطاء المعاملات والبيانات والقواعد داخل قاعدة البيانات المتصلة
+    expect(isDbConnectionFailure({ code: '23505', message: 'duplicate key value violates unique constraint' })).toBe(false);
+    expect(isDbConnectionFailure({ code: '23502', message: 'null value in column "employee_id" violates not-null constraint' })).toBe(false);
+    expect(isDbConnectionFailure({ code: '23503', message: 'foreign key constraint violation' })).toBe(false);
+    expect(isDbConnectionFailure({ code: '23514', message: 'check constraint "salary_check" violated' })).toBe(false);
+    expect(isDbConnectionFailure({ code: '42P01', message: 'relation "unknown_table" does not exist' })).toBe(false);
+    expect(isDbConnectionFailure(new Error('Syntax error at or near SELECT'))).toBe(false);
   });
 
   // ============================================================================
@@ -359,3 +466,4 @@ describe('Phase 3: Promotions & Increments Due Lists & Batch Approvals (قوائ
   });
 
 });
+
