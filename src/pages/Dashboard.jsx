@@ -1,16 +1,22 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '@/api/apiClient';
-import { Users, CalendarDays, GraduationCap, Star, Hourglass, AlertTriangle, ShieldAlert, Bell, Clock } from 'lucide-react';
+import { Users, CalendarDays, GraduationCap, Star, Hourglass, AlertTriangle, ShieldAlert, Bell, Clock, Award } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-function StatCard({ title, value, icon: Icon, color, bg, link, subtitle }) {
+function StatCard({ title, value, icon: Icon, color, bg, link, subtitle, loading }) {
   const card = (
     <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 hover:shadow-md transition-all">
       <div className="flex items-start justify-between">
-        <div>
+        <div className="flex-1 min-w-0 pr-1">
           <p className="text-slate-500 text-xs font-semibold mb-1">{title}</p>
-          <p className={`text-2xl font-black ${color}`}>{value}</p>
-          {subtitle && <p className="text-[10px] text-slate-400 mt-1 font-medium">{subtitle}</p>}
+          {loading ? (
+            <div className="h-8 w-16 bg-slate-200/80 animate-pulse rounded-lg mt-1" />
+          ) : (
+            <p className={`text-2xl font-black ${color}`}>{value}</p>
+          )}
+          {subtitle && (
+            <p className="text-[10px] text-slate-400 mt-1 font-medium truncate">{subtitle}</p>
+          )}
         </div>
         <div className={`w-11 h-11 rounded-xl ${bg} flex items-center justify-center shrink-0`}>
           <Icon size={20} className={color} />
@@ -39,83 +45,108 @@ export default function Dashboard() {
   const [dueDelayReminders, setDueDelayReminders] = useState({ reminders: [], totalDue: 0, summaryByType: {} });
 
   useEffect(() => {
-    Promise.all([
-      apiClient.entities.Employee.list(),
-      apiClient.entities.LeaveRequest.filter({ status: 'معلق' }),
-      apiClient.entities.PerformanceEvaluation.filter({ status: 'مرفوع للاعتماد' }),
-      apiClient.entities.Training.filter({ status: 'جاري' }),
-      apiClient.entities.ServiceRecord.list().catch(() => []),
-      apiClient.settings.get().catch(() => null),
-      apiClient.promotionDelayReasons.getDueReminders().catch(() => ({ reminders: [], totalDue: 0, summaryByType: {} })),
-    ]).then(([employees, leaves, evals, trainings, serviceRecords, settingsRes, dueRemindersRes]) => {
-      const active = employees.filter(e => e.status === 'فعال' || e.status === 'مستمر' || e.status === 'متقاعد مع تمديد').length;
-      
-      const retirementAge = settingsRes?.retirementAge || settingsRes?.retirement_age || 60;
-      const notificationDays = settingsRes?.retirementNotificationDays || settingsRes?.retirement_notification_days || 180;
-      const today = new Date();
+    let isMounted = true;
 
-      let approachingCount = 0;
-      let reachedNoExtCount = 0;
-      const approachingList = [];
+    async function loadDashboardData() {
+      try {
+        const [
+          employeesRes,
+          leavesRes,
+          evalsRes,
+          trainingsRes,
+          serviceRecordsRes,
+          settingsRes,
+          dueRemindersRes,
+          promotionsDueRes
+        ] = await Promise.all([
+          apiClient.entities.Employee.list().catch(() => []),
+          apiClient.entities.LeaveRequest.filter({ status: 'معلق' }).catch(() => []),
+          apiClient.entities.PerformanceEvaluation.filter({ status: 'مرفوع للاعتماد' }).catch(() => []),
+          apiClient.entities.Training.filter({ status: 'جاري' }).catch(() => []),
+          apiClient.entities.ServiceRecord.list().catch(() => []),
+          apiClient.settings.get().catch(() => null),
+          apiClient.promotionDelayReasons.getDueReminders().catch(() => ({ reminders: [], totalDue: 0, summaryByType: {} })),
+          apiClient.promotionsDue.getDueList().catch(() => ({ summary: { totalDue: 0 } }))
+        ]);
 
-      employees.forEach(emp => {
-        if (!emp.birth_date && !emp.birthDate) return;
-        const birthDate = new Date(emp.birth_date || emp.birthDate);
-        if (isNaN(birthDate.getTime())) return;
+        if (!isMounted) return;
 
-        let age = today.getFullYear() - birthDate.getFullYear();
-        const m = today.getMonth() - birthDate.getMonth();
-        if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) age--;
+        const employees = Array.isArray(employeesRes) ? employeesRes : [];
+        const leaves = Array.isArray(leavesRes) ? leavesRes : [];
+        const evals = Array.isArray(evalsRes) ? evalsRes : [];
+        const trainings = Array.isArray(trainingsRes) ? trainingsRes : [];
+        const serviceRecords = Array.isArray(serviceRecordsRes) ? serviceRecordsRes : [];
+        const totalDuePromotions = promotionsDueRes?.summary?.totalDue || 0;
 
-        const retDate = new Date(birthDate);
-        retDate.setFullYear(birthDate.getFullYear() + retirementAge);
-        const daysToRetirement = Math.ceil((retDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+        const active = employees.filter(e => e.status === 'فعال' || e.status === 'مستمر' || e.status === 'متقاعد مع تمديد').length;
+        
+        const retirementAge = settingsRes?.retirementAge || settingsRes?.retirement_age || 60;
+        const notificationDays = settingsRes?.retirementNotificationDays || settingsRes?.retirement_notification_days || 180;
+        const today = new Date();
 
-        const hasExtension = Boolean(
-          (emp.retirement_extension_years > 0 || emp.retirementExtensionYears > 0) ||
-          (emp.retirement_extension_order_number || emp.retirementExtensionOrderNumber)
-        );
-        const isRetired = emp.status === 'متقاعد';
+        let approachingCount = 0;
+        let reachedNoExtCount = 0;
+        const approachingList = [];
 
-        if (age >= retirementAge) {
-          if (!hasExtension && !isRetired) {
-            reachedNoExtCount++;
-            approachingList.push({ ...emp, age, daysToRetirement, statusBadge: 'بلغ السن التقاعدي' });
+        employees.forEach(emp => {
+          if (!emp.birth_date && !emp.birthDate) return;
+          const birthDate = new Date(emp.birth_date || emp.birthDate);
+          if (isNaN(birthDate.getTime())) return;
+
+          let age = today.getFullYear() - birthDate.getFullYear();
+          const m = today.getMonth() - birthDate.getMonth();
+          if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) age--;
+
+          const retDate = new Date(birthDate);
+          retDate.setFullYear(birthDate.getFullYear() + retirementAge);
+          const daysToRetirement = Math.ceil((retDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+
+          const hasExtension = Boolean(
+            (emp.retirement_extension_years > 0 || emp.retirementExtensionYears > 0) ||
+            (emp.retirement_extension_order_number || emp.retirementExtensionOrderNumber)
+          );
+          const isRetired = emp.status === 'متقاعد';
+
+          if (age >= retirementAge) {
+            if (!hasExtension && !isRetired) {
+              reachedNoExtCount++;
+              approachingList.push({ ...emp, age, daysToRetirement, statusBadge: 'بلغ السن التقاعدي' });
+            }
+          } else if (daysToRetirement > 0 && daysToRetirement <= notificationDays && !isRetired) {
+            approachingCount++;
+            approachingList.push({ ...emp, age, daysToRetirement, statusBadge: `باقي ${daysToRetirement} يوم` });
           }
-        } else if (daysToRetirement > 0 && daysToRetirement <= notificationDays && !isRetired) {
-          approachingCount++;
-          approachingList.push({ ...emp, age, daysToRetirement, statusBadge: `باقي ${daysToRetirement} يوم` });
+        });
+
+        setStats({
+          total: employees.length,
+          active,
+          pending_leaves: leaves.length,
+          due_promotions: totalDuePromotions,
+          pending_evals: evals.length,
+          ongoing_trainings: trainings.length,
+          service_records_count: serviceRecords.length,
+          approaching_retirement_count: approachingCount,
+          reached_retirement_no_extension: reachedNoExtCount,
+        });
+        setRecentEmployees(employees.slice(0, 5));
+        setApproachingEmployeesList(approachingList.slice(0, 5));
+        if (dueRemindersRes) {
+          setDueDelayReminders(dueRemindersRes);
         }
-      });
-
-      setStats({
-        total: employees.length,
-        active,
-        pending_leaves: leaves.length,
-        due_promotions: 0,
-        pending_evals: evals.length,
-        ongoing_trainings: trainings.length,
-        service_records_count: serviceRecords.length,
-        approaching_retirement_count: approachingCount,
-        reached_retirement_no_extension: reachedNoExtCount,
-      });
-      setRecentEmployees(employees.slice(0, 5));
-      setApproachingEmployeesList(approachingList.slice(0, 5));
-      if (dueRemindersRes) {
-        setDueDelayReminders(dueRemindersRes);
+      } catch (err) {
+        console.error('Error loading dashboard data:', err);
+      } finally {
+        if (isMounted) setLoading(false);
       }
-      setLoading(false);
-    }).catch((err) => {
-      console.error(err);
-      setLoading(false);
-    });
-  }, []);
+    }
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-10 h-10 border-4 border-[#1B3A6B]/20 border-t-[#1B3A6B] rounded-full animate-spin" />
-    </div>
-  );
+    loadDashboardData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <div className="space-y-6" dir="rtl">
@@ -131,18 +162,18 @@ export default function Dashboard() {
 
       {/* Primary Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="إجمالي الموظفين" value={stats.total} icon={Users} color="text-[#1B3A6B]" bg="bg-blue-50" link="/employees" />
-        <StatCard title="الموظفون الفعالون" value={stats.active} icon={Users} color="text-emerald-600" bg="bg-emerald-50" link="/employees" />
-        <StatCard title="سجلات الخدمة والتمديد" value={stats.service_records_count} icon={Hourglass} color="text-indigo-600" bg="bg-indigo-50" link="/service-management" />
-        <StatCard title="بلغوا السن دون تمديد" value={stats.reached_retirement_no_extension} icon={AlertTriangle} color="text-amber-700" bg="bg-amber-50" link="/service-management" subtitle="يتطلب اتخاذ إجراء تمديد أو إحالة" />
+        <StatCard title="إجمالي الموظفين" value={stats.total} icon={Users} color="text-[#1B3A6B]" bg="bg-blue-50" link="/employees" loading={loading} />
+        <StatCard title="الموظفون الفعالون" value={stats.active} icon={Users} color="text-emerald-600" bg="bg-emerald-50" link="/employees" loading={loading} />
+        <StatCard title="مستحقو الترفيع والعلاوة" value={stats.due_promotions} icon={Award} color="text-purple-700" bg="bg-purple-50" link="/promotions-due" subtitle="علاوات وترفيعات مستحقة" loading={loading} />
+        <StatCard title="سجلات الخدمة والتمديد" value={stats.service_records_count} icon={Hourglass} color="text-indigo-600" bg="bg-indigo-50" link="/service-management" loading={loading} />
       </div>
 
       {/* Secondary Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="طلبات إجازة معلقة" value={stats.pending_leaves} icon={CalendarDays} color="text-orange-600" bg="bg-orange-50" link="/leaves" />
-        <StatCard title="تقييمات بانتظار الاعتماد" value={stats.pending_evals} icon={Star} color="text-purple-600" bg="bg-purple-50" link="/performance" />
-        <StatCard title="الدورات التدريبية الجارية" value={stats.ongoing_trainings} icon={GraduationCap} color="text-teal-600" bg="bg-teal-50" link="/training" />
-        <StatCard title="مقتربون من التقاعد" value={stats.approaching_retirement_count} icon={ShieldAlert} color="text-rose-600" bg="bg-rose-50" link="/service-management" />
+        <StatCard title="بلغوا السن دون تمديد" value={stats.reached_retirement_no_extension} icon={AlertTriangle} color="text-amber-700" bg="bg-amber-50" link="/service-management" subtitle="يتطلب اتخاذ إجراء تمديد أو إحالة" loading={loading} />
+        <StatCard title="طلبات إجازة معلقة" value={stats.pending_leaves} icon={CalendarDays} color="text-orange-600" bg="bg-orange-50" link="/leaves" loading={loading} />
+        <StatCard title="تقييمات بانتظار الاعتماد" value={stats.pending_evals} icon={Star} color="text-purple-600" bg="bg-purple-50" link="/performance" loading={loading} />
+        <StatCard title="مقتربون من التقاعد" value={stats.approaching_retirement_count} icon={ShieldAlert} color="text-rose-600" bg="bg-rose-50" link="/service-management" loading={loading} />
       </div>
 
       {/* Tables Grid */}
