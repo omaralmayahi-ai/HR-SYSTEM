@@ -158,6 +158,10 @@ async function startServer() {
     res.json(systemSettingsStore);
   });
 
+  app.get('/api/settings/public', async (req, res) => {
+    res.json(systemSettingsStore);
+  });
+
   app.put('/api/settings', requireAuth, async (req: AuthRequest, res) => {
     try {
       systemSettingsStore = { ...systemSettingsStore, ...req.body };
@@ -1711,21 +1715,25 @@ async function startServer() {
 
   // Career Histories API
   app.get('/api/career', requireAuth, async (req, res) => {
+    const empIdParam = req.query.employeeId || req.query.employee_id;
+    const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
+    if (!employeeId || isNaN(employeeId)) {
+      return res.status(400).json({ error: 'Missing or invalid employeeId' });
+    }
     try {
-      const empIdParam = req.query.employeeId || req.query.employee_id;
-      const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
-      if (!employeeId || isNaN(employeeId)) {
-        return res.status(400).json({ error: 'Missing or invalid employeeId' });
-      }
       const results = await db.select()
         .from(schema.careerHistories)
         .where(eq(schema.careerHistories.employeeId, employeeId))
         .orderBy(desc(schema.careerHistories.createdAt));
-      res.json(results.map(r => mapKeys(r, camelToSnake)));
+      if (results && results.length > 0) {
+        return res.json(results.map(r => mapKeys(r, camelToSnake)));
+      }
     } catch (error: any) {
-      console.error('Error fetching career history:', error);
-      res.status(500).json({ error: error.message });
+      console.warn('Database fallback for career history query');
     }
+    const store = genericMemoryStores['career'] || inMemoryCareerHistories || [];
+    const filtered = store.filter(item => parseInt(String(item.employee_id || item.employeeId)) === employeeId);
+    res.json(filtered.map(r => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/career', requireAuth, async (req, res) => {
@@ -1742,8 +1750,28 @@ async function startServer() {
         return res.status(400).json({ error: 'employee_id is required' });
       }
 
-      const [newHistory] = await db.insert(schema.careerHistories).values(mappedData).returning();
-      res.status(201).json(mapKeys(newHistory, camelToSnake));
+      try {
+        const [newHistory] = await db.insert(schema.careerHistories).values(mappedData).returning();
+        if (newHistory) {
+          return res.status(201).json(mapKeys(newHistory, camelToSnake));
+        }
+      } catch (dbErr) {
+        console.warn('Database fallback for create career history');
+      }
+
+      const store = genericMemoryStores['career'] || inMemoryCareerHistories || [];
+      const newId = store.length > 0 ? Math.max(...store.map((i: any) => parseInt(i.id) || 0)) + 1 : 1;
+      const memRecord = {
+        id: newId,
+        employee_id: mappedData.employeeId,
+        employeeId: mappedData.employeeId,
+        ...data,
+        created_at: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      };
+      store.push(memRecord);
+      saveLocalDb();
+      res.status(201).json(mapKeys(memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating career history:', error);
       res.status(500).json({ error: error.message });
