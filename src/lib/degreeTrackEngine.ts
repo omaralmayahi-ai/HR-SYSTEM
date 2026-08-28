@@ -109,10 +109,10 @@ export interface DegreeTrackSimulationResult {
   lastSimulatedPromotionDate: string;
   hasDeficit: boolean;
   deficitCycles: number;
-  snapshotStatus: 'نشط' | 'مكتمل';
   realTimeNextPromotion: {
-    fromGrade: number;
-    toGrade: number;
+    settlementGrade: number;
+    fromGrade?: number;
+    toGrade?: number;
     anchorStartDate: string;
     baseDurationMonths: number;
     nextPromotionDueDate: string;
@@ -338,9 +338,8 @@ export function calculateDegreeTrackSimulation(
   const deficitCycles = hasDeficit ? (simulatedGradeReached - actualGradeBefore) : 0;
   const snapshotStatus = hasDeficit ? 'نشط' : 'مكتمل';
 
-  // The real-time promotion always advances from the employee's actual current grade
-  const realFromGrade = actualGradeBefore;
-  const realToGrade = Math.max(1, actualGradeBefore - 1);
+  // The settlement grade is the employee's actual current grade (no grade change!)
+  const settlementGrade = actualGradeBefore;
 
   // The anchor date is fixed at the last simulated promotion date (e.g. date reaching grade 4)
   const anchorStartDate = lastSimulatedPromotionDate;
@@ -418,19 +417,19 @@ export function calculateDegreeTrackSimulation(
 
   if (activePausingLeave) {
     eligibilityStatus = 'موقوف_بإجازة';
-    statusReason = `الترفيع الحقيقي موقوف لوجود الموظف في (${pausingLeaveTitle})`;
+    statusReason = `تثبيت استحقاق الموظف بدرجته الحالية (${settlementGrade}) ضمن مسار احتساب الشهادة موقوف لوجود الموظف في (${pausingLeaveTitle})`;
     isEligible = false;
   } else if (!specializationPrerequisiteSatisfied) {
     eligibilityStatus = 'معلق_لعدم_استيفاء_دورة_الاختصاص';
-    statusReason = `الترفيع الحقيقي من الدرجة (${realFromGrade}) إلى (${realToGrade}) معلق لعدم استيفاء دورة الاختصاص المطلوبة (المتاح: ${remainingWeeks} أسابيع، المطلوب: 2 أسبوع)`;
+    statusReason = `تثبيت استحقاق الموظف بدرجته الحالية (${settlementGrade}) ضمن مسار احتساب الشهادة معلق لعدم استيفاء دورة الاختصاص المطلوبة (المتاح: ${remainingWeeks} أسابيع، المطلوب: 2 أسبوع)`;
     isEligible = false;
   } else if (isTimeReached) {
     eligibilityStatus = 'مستحق_للترفيع';
-    statusReason = `استوفى الموظف المدة الزمنية الحقيقية (سنتين من ${anchorStartDate}) مع استيفاء دورة الاختصاص`;
+    statusReason = `استوفى الموظف شروط تثبيت الاستحقاق بدرجته الحالية (${settlementGrade}) مع استيفاء دورة الاختصاص ضمن مسار احتساب الشهادة`;
     isEligible = true;
   } else {
     eligibilityStatus = 'مؤهل';
-    statusReason = `الموظف مؤهل للترفيع الحقيقي بتاريخ الاستحقاق (${nextPromotionDueDate}) بعد استيفاء مدة السنتين`;
+    statusReason = `الموظف مؤهل لتثبيت استحقاقه بدرجته الحالية (${settlementGrade}) بتاريخ (${nextPromotionDueDate}) ضمن مسار احتساب الشهادة`;
     isEligible = true;
   }
 
@@ -457,8 +456,9 @@ export function calculateDegreeTrackSimulation(
     deficitCycles,
     snapshotStatus,
     realTimeNextPromotion: {
-      fromGrade: realFromGrade,
-      toGrade: realToGrade,
+      settlementGrade,
+      fromGrade: settlementGrade,
+      toGrade: settlementGrade,
       anchorStartDate,
       baseDurationMonths,
       nextPromotionDueDate,

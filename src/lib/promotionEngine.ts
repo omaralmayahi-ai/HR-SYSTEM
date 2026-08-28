@@ -755,18 +755,43 @@ export function calculateIncrementEligibility(
   }
 
   // 8. Determine Increment Eligibility Status
+  const leaves = context.leaves || [];
+  let activePausingLeave = false;
+  let pausingLeaveTitle = '';
+  leaves.forEach(lv => {
+    const adminEffect = lv.administrativeEffect || lv.administrative_effect || '';
+    const isPausing = adminEffect === 'يوقف_الترفيع' || adminEffect === 'pause_promotion' || adminEffect === 'يوقف_العلاوة_والترفيع';
+    if (!isPausing) return;
+    const sDate = lv.startDate || lv.start_date || '';
+    const eDate = lv.endDate || lv.end_date || '';
+    const isApproved = lv.status === 'موافق_عليها' || lv.status === 'ساري' || lv.status === 'نشط' || lv.status === 'approved' || !lv.status;
+    const isInDateRange = sDate && eDate ? isDateBetween(today, sDate, eDate) : true;
+    if (isApproved && isInDateRange) {
+      activePausingLeave = true;
+      pausingLeaveTitle = lv.leaveType || lv.leave_type || 'إجازة موقفة';
+    }
+  });
+
   let eligibilityStatus: IncrementEligibilityResult['eligibilityStatus'] = 'مؤهل';
   let statusReason = '';
+  let isIncrementEligible = false;
 
-  if (penaltyDelayMonths > 0 && !isDateOnOrAfter(today, computedDate)) {
+  if (activePausingLeave) {
+    eligibilityStatus = 'موقوف_بإجازة';
+    statusReason = `العلاوة موقوفة لوجود الموظف في (${pausingLeaveTitle})`;
+    isIncrementEligible = false;
+  } else if (penaltyDelayMonths > 0 && !isDateOnOrAfter(today, computedDate)) {
     eligibilityStatus = 'متوقف_بعقوبة';
     statusReason = `العلاوة مؤخرة لمدة ${penaltyDelayMonths} شهر بسبب عقوبة إدارية نافذة`;
+    isIncrementEligible = false;
   } else if (isDateOnOrAfter(today, computedDate)) {
     eligibilityStatus = 'مستحق_للعلاوة';
     statusReason = 'استوفى الموظف المدة الزمنية المستحقة للعلاوة السنوية';
+    isIncrementEligible = true;
   } else {
     eligibilityStatus = 'مؤهل';
     statusReason = 'الموظف مستوفٍ للشروط ومؤهل لاستحقاق العلاوة بتاريخ الاستحقاق';
+    isIncrementEligible = true;
   }
 
   return {
@@ -774,7 +799,7 @@ export function calculateIncrementEligibility(
     baseDueDate,
     lastIncrementDate: lastIncr,
     eligibilityStatus,
-    isIncrementEligible: true,
+    isIncrementEligible,
     commendationMonthsDeducted: commendationMonths,
     penaltyMonthsAdded: penaltyDelayMonths,
     absenceDaysAdded: absenceDays,

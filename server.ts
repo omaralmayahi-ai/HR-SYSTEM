@@ -7478,21 +7478,67 @@ async function startServer() {
     }
   });
 
-  // 4. Promotions & Degree Recognition Due List (قائمة المستحقين للترقية والتسوية اليدوية)
+  // 4. Promotions, Increments & Degree Recognition Due List (قوائم المستحقين الثلاث)
   app.get('/api/promotions/due-list', requireAuth, async (req, res) => {
     try {
       const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
-      const dueList: any[] = [];
+      const dueForIncrement: any[] = [];
+      const dueForPromotion: any[] = [];
+      const dueForSettlement: any[] = [];
 
       for (const emp of inMemoryEmployees) {
         const empId = parseInt(String(emp.id));
         if (!empId) continue;
 
-        // Check degree track snapshot
+        // Skip inactive or separated employees
+        const empStatus = emp.status || 'نشط';
+        if (['منتهية_خدمته', 'متقاعد', 'مفصول', 'مستقيل', 'متوفى'].includes(empStatus)) {
+          continue;
+        }
+
+        // Recalculate standard eligibility
+        const eligibility = await triggerRecalculateEligibility(empId);
+
+        // 1. Check Increment Eligibility (علاوة سنوية)
+        if (
+          eligibility?.increment?.eligibilityStatus === 'مستحق_للعلاوة' &&
+          eligibility?.increment?.isIncrementEligible
+        ) {
+          const currentStep = parseInt(String(emp.step)) || 1;
+          const targetStep = Math.min(11, currentStep + 1);
+          dueForIncrement.push({
+            employeeId: empId,
+            employee_id: empId,
+            name: emp.fullName || emp.full_name || emp.name,
+            fullName: emp.fullName || emp.full_name || emp.name,
+            department: emp.department || 'عام',
+            jobTitle: emp.jobTitle || emp.job_title || 'موظف',
+            currentGrade: emp.grade,
+            current_grade: emp.grade,
+            currentStep: currentStep,
+            current_step: currentStep,
+            targetGrade: emp.grade,
+            target_grade: emp.grade,
+            targetStep: targetStep,
+            target_step: targetStep,
+            dueDate: eligibility.increment.nextIncrementDueDate,
+            due_date: eligibility.increment.nextIncrementDueDate,
+            trackType: 'المسار_الاعتيادي',
+            track_type: 'المسار_الاعتيادي',
+            actionType: 'علاوة',
+            action_type: 'علاوة',
+            noGradeChange: true,
+            no_grade_change: true,
+            reasons: [eligibility.increment.statusReason || 'استوفى الموظف المدة الزمنية وشروط استحقاق العلاوة السنوية']
+          });
+        }
+
+        // 2. Check Degree Track Snapshot Deficit Settlement
         const activeSnap = (genericMemoryStores['degree-track-snapshots'] || []).find(
           s => parseInt(String(s.employee_id || s.employeeId)) === empId && (s.status === 'نشط' || !s.status)
         );
 
+        let hasHandledDegreeTrack = false;
         if (activeSnap) {
           const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
           const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
@@ -7500,45 +7546,337 @@ async function startServer() {
           const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
 
           const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
-          if (sim.hasDeficit && sim.realTimeNextPromotion?.isEligible) {
-            dueList.push({
-              employeeId: empId,
-              employeeName: emp.fullName || emp.full_name || emp.name,
-              trackType: 'مسار_احتساب_الشهادات',
-              currentGrade: emp.grade || activeSnap.actualGradeBefore,
-              currentStep: emp.step || activeSnap.actualStepBefore,
-              nextGrade: sim.realTimeNextPromotion.toGrade,
-              dueDate: sim.realTimeNextPromotion.nextPromotionDueDate,
-              eligibilityStatus: 'مستحق_للترفيع',
-              settlementType: 'تسوية_عجز_تثبيت_استحقاق',
-              snapshotId: activeSnap.id,
-              notes: sim.realTimeNextPromotion.statusReason
-            });
-            continue;
+          if (sim.hasDeficit) {
+            hasHandledDegreeTrack = true;
+            if (sim.realTimeNextPromotion?.isEligible && sim.realTimeNextPromotion?.eligibilityStatus === 'مستحق_للترفيع') {
+              dueForSettlement.push({
+                employeeId: empId,
+                employee_id: empId,
+                name: emp.fullName || emp.full_name || emp.name,
+                fullName: emp.fullName || emp.full_name || emp.name,
+                department: emp.department || 'عام',
+                jobTitle: emp.jobTitle || emp.job_title || 'موظف',
+                currentGrade: emp.grade || activeSnap.actualGradeBefore,
+                current_grade: emp.grade || activeSnap.actualGradeBefore,
+                currentStep: emp.step || activeSnap.actualStepBefore,
+                current_step: emp.step || activeSnap.actualStepBefore,
+                targetGrade: emp.grade || activeSnap.actualGradeBefore,
+                target_grade: emp.grade || activeSnap.actualGradeBefore,
+                targetStep: emp.step || activeSnap.actualStepBefore,
+                target_step: emp.step || activeSnap.actualStepBefore,
+                dueDate: sim.realTimeNextPromotion.nextPromotionDueDate,
+                due_date: sim.realTimeNextPromotion.nextPromotionDueDate,
+                trackType: 'مسار_احتساب_الشهادات',
+                track_type: 'مسار_احتساب_الشهادات',
+                actionType: 'تسوية',
+                action_type: 'تسوية',
+                noGradeChange: true,
+                no_grade_change: true,
+                snapshotId: activeSnap.id,
+                snapshot_id: activeSnap.id,
+                reasons: [sim.realTimeNextPromotion.statusReason || 'استوفى الموظف شروط تسوية العجز وتثبيت الاستحقاق بدرجته الحالية']
+              });
+            }
           }
         }
 
-        // Standard track check
-        const eligibility = await triggerRecalculateEligibility(empId);
-        if (eligibility?.promotion?.eligibilityStatus === 'مستحق_للترفيع') {
-          dueList.push({
+        // 3. Check Standard Promotion Eligibility (ترفيع درجة) - only if not in active degree track deficit
+        if (!hasHandledDegreeTrack && eligibility?.promotion?.eligibilityStatus === 'مستحق_للترفيع' && eligibility?.promotion?.isPromotionEligible) {
+          const currentGrade = parseInt(String(emp.grade)) || 10;
+          const targetGrade = Math.max(1, currentGrade - 1);
+          dueForPromotion.push({
             employeeId: empId,
-            employeeName: emp.fullName || emp.full_name || emp.name,
-            trackType: 'المسار_الاعتيادي',
-            currentGrade: emp.grade,
-            currentStep: emp.step,
-            nextGrade: Math.max(1, (parseInt(String(emp.grade)) || 10) - 1),
+            employee_id: empId,
+            name: emp.fullName || emp.full_name || emp.name,
+            fullName: emp.fullName || emp.full_name || emp.name,
+            department: emp.department || 'عام',
+            jobTitle: emp.jobTitle || emp.job_title || 'موظف',
+            currentGrade: currentGrade,
+            current_grade: currentGrade,
+            currentStep: emp.step || 1,
+            current_step: emp.step || 1,
+            targetGrade: targetGrade,
+            target_grade: targetGrade,
+            targetStep: 1,
+            target_step: 1,
             dueDate: eligibility.promotion.nextPromotionDueDate,
-            eligibilityStatus: eligibility.promotion.eligibilityStatus,
-            settlementType: 'ترفيع_اعتيادي',
-            notes: eligibility.promotion.statusReason
+            due_date: eligibility.promotion.nextPromotionDueDate,
+            trackType: 'المسار_الاعتيادي',
+            track_type: 'المسار_الاعتيادي',
+            actionType: 'ترفيع',
+            action_type: 'ترفيع',
+            noGradeChange: false,
+            no_grade_change: false,
+            reasons: [eligibility.promotion.statusReason || 'استوفى الموظف المدة القانونية والدورات الحاكمة وتقييم الأداء']
           });
         }
       }
 
-      res.json(dueList);
+      const summary = {
+        totalIncrement: dueForIncrement.length,
+        totalPromotion: dueForPromotion.length,
+        totalSettlement: dueForSettlement.length,
+        totalDue: dueForIncrement.length + dueForPromotion.length + dueForSettlement.length
+      };
+
+      res.json({
+        dueForIncrement,
+        dueForPromotion,
+        dueForSettlement,
+        due_for_increment: dueForIncrement,
+        due_for_promotion: dueForPromotion,
+        due_for_settlement: dueForSettlement,
+        summary
+      });
     } catch (err: any) {
       console.error('Error fetching promotion due list:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 5. Batch Approval API (مسار الاعتماد الدفعي Transactional)
+  app.post('/api/promotions/approve-batch', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const { items, order_number, orderNumber, order_date, orderDate } = req.body;
+      const finalOrderNumber = String(order_number || orderNumber || '').trim();
+      const finalOrderDate = String(order_date || orderDate || '').trim();
+
+      if (!finalOrderNumber || !finalOrderDate) {
+        return res.status(400).json({ error: 'رقم الأمر الإداري وتاريخ الأمر الإداري مطلوبان لإتمام الاعتماد' });
+      }
+
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'قائمة المعاملات المحددة للاعتماد فارغة' });
+      }
+
+      const { calculateDegreeTrackSimulation } = require('./src/lib/degreeTrackEngine');
+      const approverName = req.user?.fullName || req.user?.name || req.user?.email || 'مسؤول الموارد البشرية';
+
+      // Phase 1: Pre-validation (Atomic verification - any invalid item rejects the whole batch)
+      const validatedBatch: Array<{
+        empId: number;
+        emp: any;
+        type: 'علاوة' | 'ترفيع' | 'تسوية';
+        gradeBefore: number;
+        gradeAfter: number;
+        stepBefore: number;
+        stepAfter: number;
+        movementType: string;
+        dueDate: string;
+        activeSnapshot?: any;
+      }> = [];
+
+      for (const item of items) {
+        const empId = parseInt(String(item.employee_id || item.employeeId));
+        const rawType = String(item.type || item.actionType || item.action_type || '').trim();
+        const type: 'علاوة' | 'ترفيع' | 'تسوية' = rawType.includes('علاوة') ? 'علاوة' : (rawType.includes('تسوية') ? 'تسوية' : 'ترفيع');
+
+        if (isNaN(empId)) {
+          return res.status(400).json({ error: `معرف الموظف غير صالح: ${item.employee_id}` });
+        }
+
+        const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empId);
+        if (!emp) {
+          return res.status(404).json({ error: `الموظف رقم (${empId}) غير موجود بالنظام` });
+        }
+
+        const empName = emp.fullName || emp.full_name || emp.name || `موظف #${empId}`;
+        const curGrade = parseInt(String(emp.grade)) || 10;
+        const curStep = parseInt(String(emp.step)) || 1;
+
+        if (type === 'علاوة') {
+          const eligibility = await triggerRecalculateEligibility(empId);
+          if (eligibility?.increment?.eligibilityStatus !== 'مستحق_للعلاوة' || !eligibility?.increment?.isIncrementEligible) {
+            return res.status(400).json({
+              error: `الموظف (${empName}) غير مستحق للعلاوة السنوية حالياً: ${eligibility?.increment?.statusReason || 'شروط غير مستوفاة'}`
+            });
+          }
+          const targetStep = Math.min(11, curStep + 1);
+          const calculatedDueDate = eligibility.increment.nextIncrementDueDate || finalOrderDate;
+
+          validatedBatch.push({
+            empId,
+            emp,
+            type: 'علاوة',
+            gradeBefore: curGrade,
+            gradeAfter: curGrade,
+            stepBefore: curStep,
+            stepAfter: targetStep,
+            movementType: 'علاوة سنوية',
+            dueDate: calculatedDueDate
+          });
+        } else if (type === 'ترفيع') {
+          const eligibility = await triggerRecalculateEligibility(empId);
+          if (eligibility?.promotion?.eligibilityStatus !== 'مستحق_للترفيع' || !eligibility?.promotion?.isPromotionEligible) {
+            return res.status(400).json({
+              error: `الموظف (${empName}) غير مستحق للترفيع الوظيفي حالياً: ${eligibility?.promotion?.statusReason || 'شروط غير مستوفاة'}`
+            });
+          }
+          const targetGrade = Math.max(1, curGrade - 1);
+          const targetStep = 1;
+          const calculatedDueDate = eligibility.promotion.nextPromotionDueDate || finalOrderDate;
+
+          validatedBatch.push({
+            empId,
+            emp,
+            type: 'ترفيع',
+            gradeBefore: curGrade,
+            gradeAfter: targetGrade,
+            stepBefore: curStep,
+            stepAfter: targetStep,
+            movementType: 'ترفيع درجة',
+            dueDate: calculatedDueDate
+          });
+        } else if (type === 'تسوية') {
+          const activeSnap = (genericMemoryStores['degree-track-snapshots'] || []).find(
+            s => parseInt(String(s.employee_id || s.employeeId)) === empId && (s.status === 'نشط' || !s.status)
+          );
+          if (!activeSnap) {
+            return res.status(400).json({ error: `الموظف (${empName}) ليس لديه مسار احتساب شهادة نشط للتسوية` });
+          }
+
+          const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
+          const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+          const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+          const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+
+          const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
+          if (!sim.hasDeficit || !sim.realTimeNextPromotion?.isEligible || sim.realTimeNextPromotion?.eligibilityStatus !== 'مستحق_للترفيع') {
+            return res.status(400).json({
+              error: `الموظف (${empName}) غير مستحق لتسوية مسار الشهادة حالياً: ${sim?.realTimeNextPromotion?.statusReason || 'شروط غير مستوفاة'}`
+            });
+          }
+
+          const calculatedDueDate = sim.realTimeNextPromotion.nextPromotionDueDate || finalOrderDate;
+
+          validatedBatch.push({
+            empId,
+            emp,
+            type: 'تسوية',
+            gradeBefore: curGrade,
+            gradeAfter: curGrade, // No grade change!
+            stepBefore: curStep,
+            stepAfter: curStep,   // No step change!
+            movementType: 'تسوية مسار الشهادات',
+            dueDate: calculatedDueDate,
+            activeSnapshot: activeSnap
+          });
+        }
+      }
+
+      // Phase 2: Transactional Execution (Apply DB + Memory updates atomically)
+      try {
+        await db.transaction(async (tx) => {
+          for (const item of validatedBatch) {
+            if (item.type === 'علاوة') {
+              await tx.update(schema.employees).set({
+                step: item.stepAfter,
+                lastIncrementDate: item.dueDate
+              }).where(eq(schema.employees.id, item.empId));
+            } else if (item.type === 'ترفيع') {
+              await tx.update(schema.employees).set({
+                grade: item.gradeAfter,
+                step: item.stepAfter,
+                lastPromotionDate: item.dueDate
+              }).where(eq(schema.employees.id, item.empId));
+            } else if (item.type === 'تسوية') {
+              await tx.update(schema.employees).set({
+                lastPromotionDate: item.dueDate
+              }).where(eq(schema.employees.id, item.empId));
+
+              if (item.activeSnapshot?.id) {
+                await tx.update(schema.degreeTrackSnapshots).set({
+                  status: 'مكتمل'
+                }).where(eq(schema.degreeTrackSnapshots.id, item.activeSnapshot.id));
+              }
+            }
+
+            await tx.insert(schema.promotionsIncrements).values({
+              employeeId: item.empId,
+              movementType: item.movementType,
+              gradeBefore: String(item.gradeBefore),
+              gradeAfter: String(item.gradeAfter),
+              stepBefore: item.stepBefore,
+              stepAfter: item.stepAfter,
+              dueDate: item.dueDate,
+              orderNumber: finalOrderNumber,
+              orderDate: finalOrderDate,
+              approvedBy: approverName,
+              notes: item.type === 'تسوية' ? 'اعتماد يدوي لتسوية مسار الشهادات (تثبيت دون تغيير درجة)' : 'اعتماد يدوي عبر قائمة المستحقين'
+            });
+          }
+        });
+      } catch (dbErr) {
+        console.warn('Database transaction fallback / running in dual mode:', dbErr);
+      }
+
+      // Phase 3: Mirror in In-Memory Stores
+      for (const item of validatedBatch) {
+        const empIdx = inMemoryEmployees.findIndex(e => parseInt(String(e.id)) === item.empId);
+        if (empIdx !== -1) {
+          if (item.type === 'علاوة') {
+            inMemoryEmployees[empIdx].step = item.stepAfter;
+            inMemoryEmployees[empIdx].lastIncrementDate = item.dueDate;
+            inMemoryEmployees[empIdx].last_increment_date = item.dueDate;
+          } else if (item.type === 'ترفيع') {
+            inMemoryEmployees[empIdx].grade = item.gradeAfter;
+            inMemoryEmployees[empIdx].step = item.stepAfter;
+            inMemoryEmployees[empIdx].lastPromotionDate = item.dueDate;
+            inMemoryEmployees[empIdx].last_promotion_date = item.dueDate;
+          } else if (item.type === 'تسوية') {
+            inMemoryEmployees[empIdx].lastPromotionDate = item.dueDate;
+            inMemoryEmployees[empIdx].last_promotion_date = item.dueDate;
+            if (item.activeSnapshot?.id) {
+              const snapIdx = (genericMemoryStores['degree-track-snapshots'] || []).findIndex(s => s.id === item.activeSnapshot.id);
+              if (snapIdx !== -1) {
+                genericMemoryStores['degree-track-snapshots'][snapIdx].status = 'مكتمل';
+              }
+            }
+          }
+        }
+
+        const promoId = (genericMemoryStores['promotions'] || []).length + 1;
+        genericMemoryStores['promotions'].push({
+          id: promoId,
+          employee_id: item.empId,
+          employeeId: item.empId,
+          movement_type: item.movementType,
+          movementType: item.movementType,
+          grade_before: item.gradeBefore,
+          gradeBefore: item.gradeBefore,
+          grade_after: item.gradeAfter,
+          gradeAfter: item.gradeAfter,
+          step_before: item.stepBefore,
+          stepBefore: item.stepBefore,
+          step_after: item.stepAfter,
+          stepAfter: item.stepAfter,
+          due_date: item.dueDate,
+          dueDate: item.dueDate,
+          order_number: finalOrderNumber,
+          orderNumber: finalOrderNumber,
+          order_date: finalOrderDate,
+          orderDate: finalOrderDate,
+          approved_by: approverName,
+          approvedBy: approverName,
+          notes: item.type === 'تسوية' ? 'اعتماد يدوي لتسوية مسار الشهادات (تثبيت دون تغيير درجة)' : 'اعتماد يدوي عبر قائمة المستحقين',
+          created_at: new Date().toISOString()
+        });
+
+        // Trigger eligibility recalculation for next cycle
+        await triggerRecalculateEligibility(item.empId);
+      }
+
+      saveLocalDb();
+
+      return res.json({
+        success: true,
+        approvedCount: validatedBatch.length,
+        orderNumber: finalOrderNumber,
+        orderDate: finalOrderDate,
+        message: `تم اعتماد ${validatedBatch.length} معاملة بنجاح بموجب الأمر الإداري رقم (${finalOrderNumber}) بتاريخ (${finalOrderDate})`
+      });
+    } catch (err: any) {
+      console.error('Error in batch promotion approval:', err);
       res.status(500).json({ error: err.message });
     }
   });

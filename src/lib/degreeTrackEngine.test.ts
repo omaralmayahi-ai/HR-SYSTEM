@@ -83,8 +83,7 @@ describe('Phase 2b: Degree Track Recognition Engine (محرك مسار احتس�
 
     // 5. التحقق من ثبات درجة الموظف الفعلية بالنظام (تبقى 3 دون أي تغيير)
     expect(result.actualGradeBefore).toBe(3);
-    expect(result.realTimeNextPromotion.fromGrade).toBe(3);
-    expect(result.realTimeNextPromotion.toGrade).toBe(2);
+    expect(result.realTimeNextPromotion.settlementGrade).toBe(3);
 
     // 6. التحقق من نقطة انطلاق السنتين الحقيقيتين (تاريخ الوصول لدرجة 4 بالمحاكاة: 2026-01-01)
     expect(result.realTimeNextPromotion.anchorStartDate).toBe('2026-01-01');
@@ -415,8 +414,7 @@ describe('Phase 2b: Degree Track Recognition Engine (محرك مسار احتس�
     expect(result.hasDeficit).toBe(false);
     expect(result.deficitCycles).toBe(0);
     expect(result.snapshotStatus).toBe('مكتمل');
-    expect(result.realTimeNextPromotion.fromGrade).toBe(4);
-    expect(result.realTimeNextPromotion.toGrade).toBe(3);
+    expect(result.realTimeNextPromotion.settlementGrade).toBe(4);
     expect(result.realTimeNextPromotion.anchorStartDate).toBe('2026-01-01');
     expect(result.realTimeNextPromotion.nextPromotionDueDate).toBe('2028-01-01');
   });

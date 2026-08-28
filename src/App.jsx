@@ -28,6 +28,7 @@ import UsersManagement from '@/pages/UsersManagement';
 import OrgChart from '@/pages/OrgChart';
 import SystemSettings from '@/pages/SystemSettings';
 import ServiceManagement from '@/pages/ServiceManagement';
+import PromotionsDue from '@/pages/PromotionsDue';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin, isAuthenticated } = useAuth();
@@ -70,6 +71,7 @@ const AuthenticatedApp = () => {
         <Route path="/employees/:id" element={<EmployeeDetail />} />
         <Route path="/employees/:id/edit" element={<EmployeeForm />} />
         <Route path="/service-management" element={<ServiceManagement />} />
+        <Route path="/promotions-due" element={<PromotionsDue />} />
         <Route path="/salaries" element={<Salaries />} />
         <Route path="/leaves" element={<Leaves />} />
         <Route path="/attendance" element={<Attendance />} />

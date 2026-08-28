@@ -231,6 +231,13 @@ export const apiClient = {
       method: 'POST',
       body: JSON.stringify(data)
     })
+  },
+  promotionsDue: {
+    getDueList: async () => request('/api/promotions/due-list'),
+    approveBatch: async (data) => request('/api/promotions/approve-batch', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
   }
 };
 
