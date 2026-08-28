@@ -14,7 +14,7 @@ import jwt from 'jsonwebtoken';
 import { SALARY_TABLE } from './src/lib/salaryTable.js';
 import { encryptData, decryptData } from './src/lib/cryptoStorage.ts';
 import { recalculateEligibilitySync, EngineContextData, formatDateString, isDateOnOrAfter } from './src/lib/promotionEngine.ts';
-import { calculateDegreeTrackSimulation, processDegreeTrackSettlement } from './src/lib/degreeTrackEngine.ts';
+import { calculateDegreeTrackSimulation, processDegreeTrackSettlement, processBatchDegreeTrackAutoSettlement } from './src/lib/degreeTrackEngine.ts';
 import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src/lib/promotionDelayReasonsEngine.ts';
 
 
@@ -8029,7 +8029,6 @@ async function startServer() {
   // 5. Batch Auto-Settlement Trigger
   app.post('/api/degree-track/process-auto-settlement', requireAuth, async (req, res) => {
     try {
-      const { processBatchDegreeTrackAutoSettlement } = require('./src/lib/degreeTrackEngine');
       const isAutoEnabled = inMemoryCommendationRulesSettings.degreeTrackAutoSettlement === true ||
         inMemoryCommendationRulesSettings.degree_track_auto_settlement === true;
 
