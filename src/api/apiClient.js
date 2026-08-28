@@ -203,6 +203,7 @@ export const apiClient = {
     GradePromotionRule: createEntityClient('grade-promotion-rules'),
     CommendationType: createEntityClient('commendation-types'),
     EmployeeCommendation: createEntityClient('employee-commendations'),
+    SpecializationCredit: createEntityClient('specialization-credits'),
     CommendationRulesSetting: {
       get: async () => request('/api/commendation-rules-settings'),
       update: async (data) => request('/api/commendation-rules-settings', {

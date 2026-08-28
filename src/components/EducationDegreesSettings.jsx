@@ -19,6 +19,8 @@ export default function EducationDegreesSettings() {
   const [newIsHigher, setNewIsHigher] = useState(false);
   const [newAllowanceRate, setNewAllowanceRate] = useState(0);
   const [newHigherAllowanceRate, setNewHigherAllowanceRate] = useState(0);
+  const [newBaselineGrade, setNewBaselineGrade] = useState(7);
+  const [newBaselineStep, setNewBaselineStep] = useState(1);
 
   // Editing State
   const [editingId, setEditingId] = useState(null);
@@ -26,6 +28,8 @@ export default function EducationDegreesSettings() {
   const [editIsHigher, setEditIsHigher] = useState(false);
   const [editAllowanceRate, setEditAllowanceRate] = useState(0);
   const [editHigherAllowanceRate, setEditHigherAllowanceRate] = useState(0);
+  const [editBaselineGrade, setEditBaselineGrade] = useState(7);
+  const [editBaselineStep, setEditBaselineStep] = useState(1);
   const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, id: null, name: '' });
 
   // Drag and Drop State
@@ -115,8 +119,8 @@ export default function EducationDegreesSettings() {
     e.preventDefault();
     if (!newName.trim()) {
       toast({
-        title: 'تنبيه',
-        description: 'يرجى إدخال اسم الشهادة',
+        title: 'خطأ في الإدخال',
+        description: 'يرجى كتابة اسم الشهادة الدراسية',
         variant: 'destructive',
       });
       return;
@@ -128,6 +132,8 @@ export default function EducationDegreesSettings() {
         is_higher_education: newIsHigher,
         allowance_rate: parseInt(newAllowanceRate) || 0,
         higher_allowance_rate: newIsHigher ? (parseInt(newHigherAllowanceRate) || 0) : 0,
+        baseline_grade: parseInt(newBaselineGrade) || 7,
+        baseline_step: parseInt(newBaselineStep) || 1,
       };
       await apiClient.entities.EducationDegree.create(payload);
       toast({
@@ -139,6 +145,8 @@ export default function EducationDegreesSettings() {
       setNewIsHigher(false);
       setNewAllowanceRate(0);
       setNewHigherAllowanceRate(0);
+      setNewBaselineGrade(7);
+      setNewBaselineStep(1);
       setAdding(false);
       fetchRecords();
 
@@ -162,6 +170,8 @@ export default function EducationDegreesSettings() {
     setEditIsHigher(record.is_higher_education || record.isHigherEducation || false);
     setEditAllowanceRate(record.allowance_rate || record.allowanceRate || 0);
     setEditHigherAllowanceRate(record.higher_allowance_rate || record.higherAllowanceRate || 0);
+    setEditBaselineGrade(record.baseline_grade || record.baselineGrade || 7);
+    setEditBaselineStep(record.baseline_step || record.baselineStep || 1);
   };
 
   const handleSaveEdit = async (id) => {
@@ -171,6 +181,8 @@ export default function EducationDegreesSettings() {
         is_higher_education: editIsHigher,
         allowance_rate: parseInt(editAllowanceRate) || 0,
         higher_allowance_rate: editIsHigher ? (parseInt(editHigherAllowanceRate) || 0) : 0,
+        baseline_grade: parseInt(editBaselineGrade) || 7,
+        baseline_step: parseInt(editBaselineStep) || 1,
       };
       await apiClient.entities.EducationDegree.update(id, payload);
       toast({
@@ -237,6 +249,8 @@ export default function EducationDegreesSettings() {
         is_higher_education: true,
         allowance_rate: record.allowance_rate || record.allowanceRate || 0,
         higher_allowance_rate: val,
+        baseline_grade: record.baseline_grade || record.baselineGrade || 7,
+        baseline_step: record.baseline_step || record.baselineStep || 1,
       };
       await apiClient.entities.EducationDegree.update(id, payload);
       toast({
@@ -261,19 +275,19 @@ export default function EducationDegreesSettings() {
 
   // Seeding Standard Presets compliant with Iraq Civil Service / Salary scale 2023 norms
   const handleLoadStandardPresets = async () => {
-    if (!window.confirm('هل تريد استيراد مخصصات الشهادات الدراسية القياسية في العراق؟ سيتم تفعيل مخصص الشهادة ومخصص الشهادة العليا تلقائياً.')) return;
+    if (!window.confirm('هل تريد استيراد مخصصات الشهادات الدراسية القياسية في العراق؟ سيتم تفعيل مخصص الشهادة ومخصص الشهادة العليا وتسكين الدرجات تلقائياً.')) return;
     setLoading(true);
     try {
       const presets = [
-        { name: 'دون الابتدائية', is_higher_education: false, allowance_rate: 0, higher_allowance_rate: 0 },
-        { name: 'ابتدائية', is_higher_education: false, allowance_rate: 10, higher_allowance_rate: 0 },
-        { name: 'متوسطة', is_higher_education: false, allowance_rate: 15, higher_allowance_rate: 0 },
-        { name: 'إعدادية', is_higher_education: false, allowance_rate: 25, higher_allowance_rate: 0 },
-        { name: 'دبلوم', is_higher_education: false, allowance_rate: 35, higher_allowance_rate: 0 },
-        { name: 'بكالوريوس', is_higher_education: false, allowance_rate: 45, higher_allowance_rate: 0 },
-        { name: 'دبلوم عالي', is_higher_education: true, allowance_rate: 60, higher_allowance_rate: 35 },
-        { name: 'ماجستير', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 50 },
-        { name: 'دكتوراه', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 50 },
+        { name: 'دون الابتدائية', is_higher_education: false, allowance_rate: 0, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1 },
+        { name: 'ابتدائية', is_higher_education: false, allowance_rate: 10, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1 },
+        { name: 'متوسطة', is_higher_education: false, allowance_rate: 15, higher_allowance_rate: 0, baseline_grade: 9, baseline_step: 1 },
+        { name: 'إعدادية', is_higher_education: false, allowance_rate: 25, higher_allowance_rate: 0, baseline_grade: 8, baseline_step: 1 },
+        { name: 'دبلوم', is_higher_education: false, allowance_rate: 35, higher_allowance_rate: 0, baseline_grade: 8, baseline_step: 1 },
+        { name: 'بكالوريوس', is_higher_education: false, allowance_rate: 45, higher_allowance_rate: 0, baseline_grade: 7, baseline_step: 1 },
+        { name: 'دبلوم عالي', is_higher_education: true, allowance_rate: 60, higher_allowance_rate: 35, baseline_grade: 7, baseline_step: 1 },
+        { name: 'ماجستير', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 50, baseline_grade: 6, baseline_step: 1 },
+        { name: 'دكتوراه', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 50, baseline_grade: 5, baseline_step: 1 },
       ];
 
       for (const item of presets) {
@@ -495,6 +509,35 @@ export default function EducationDegreesSettings() {
                 هل هي شهادة عليا؟
               </label>
             </div>
+
+            {/* Baseline Grade & Step (Phase 5 / Scale 2023) */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-700 block">درجة التعيين الأساس (1-10)</label>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                value={newBaselineGrade}
+                onChange={(e) => setNewBaselineGrade(parseInt(e.target.value) || 7)}
+                placeholder="مثال: 7"
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-medium"
+                required
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-700 block">المرحلة الأساس (1-11)</label>
+              <input
+                type="number"
+                min="1"
+                max="11"
+                value={newBaselineStep}
+                onChange={(e) => setNewBaselineStep(parseInt(e.target.value) || 1)}
+                placeholder="مثال: 1"
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-medium"
+                required
+              />
+            </div>
           </div>
 
           {newIsHigher && (
@@ -524,6 +567,8 @@ export default function EducationDegreesSettings() {
                 setNewIsHigher(false);
                 setNewAllowanceRate(0);
                 setNewHigherAllowanceRate(0);
+                setNewBaselineGrade(7);
+                setNewBaselineStep(1);
               }}
               className="bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 font-bold rounded-xl px-4 py-2 text-xs transition-colors"
             >
@@ -561,6 +606,7 @@ export default function EducationDegreesSettings() {
                 <th className="px-2 py-3 text-center w-10">ترتيب</th>
                 <th className="px-4 py-3">اسم الشهادة الدراسية</th>
                 <th className="px-4 py-3 text-center">نوع الشهادة</th>
+                <th className="px-4 py-3 text-center">درجة/مرحلة الأساس</th>
                 <th className="px-4 py-3 text-center">مخصص الشهادة الأساسي (%)</th>
                 <th className="px-4 py-3 text-center">مخصص الشهادة العليا (%)</th>
                 <th className="px-4 py-3 text-center">إجمالي المخصص العلمي (%)</th>
@@ -571,6 +617,8 @@ export default function EducationDegreesSettings() {
               {records.map((r, idx) => {
                 const isEditing = editingId === r.id;
                 const isHigher = r.is_higher_education || r.isHigherEducation;
+                const baseGrade = r.baseline_grade || r.baselineGrade || 7;
+                const baseStep = r.baseline_step || r.baselineStep || 1;
                 
                 return (
                   <tr 
@@ -618,6 +666,37 @@ export default function EducationDegreesSettings() {
                           isHigher ? 'bg-violet-50 text-violet-700 border border-violet-200' : 'bg-slate-50 text-slate-600 border border-slate-200'
                         }`}>
                           {isHigher ? 'شهادة عليا' : 'اعتيادية'}
+                        </span>
+                      )}
+                    </td>
+
+                    {/* Baseline Grade & Step */}
+                    <td className="px-4 py-3 text-center font-mono">
+                      {isEditing ? (
+                        <div className="flex items-center justify-center gap-1">
+                          <input
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={editBaselineGrade}
+                            onChange={(e) => setEditBaselineGrade(parseInt(e.target.value) || 7)}
+                            className="bg-white border border-slate-200 rounded-lg p-1 text-xs w-10 text-center font-bold"
+                            title="الدرجة الأساس"
+                          />
+                          <span>/</span>
+                          <input
+                            type="number"
+                            min="1"
+                            max="11"
+                            value={editBaselineStep}
+                            onChange={(e) => setEditBaselineStep(parseInt(e.target.value) || 1)}
+                            className="bg-white border border-slate-200 rounded-lg p-1 text-xs w-10 text-center font-bold"
+                            title="المرحلة الأساس"
+                          />
+                        </div>
+                      ) : (
+                        <span className="font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
+                          د {baseGrade} / م {baseStep}
                         </span>
                       )}
                     </td>

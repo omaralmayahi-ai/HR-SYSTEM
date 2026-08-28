@@ -272,6 +272,10 @@ export default function EmployeeDetail() {
   const [editingReminderId, setEditingReminderId] = useState(null);
   const [reminderInputDate, setReminderInputDate] = useState('');
 
+  // Phase 5: Commendation Types & Specialization Course Credits
+  const [commendationTypes, setCommendationTypes] = useState([]);
+  const [specializationCredits, setSpecializationCredits] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [showQRModal, setShowQRModal] = useState(false);
   
@@ -374,7 +378,7 @@ export default function EmployeeDetail() {
   const fetchData = async () => {
     try {
       const [
-        empRes, lvRes, penRes, apprRes, evRes, trRes, qualRes, jobRes, promRes, salRes, tcRes, transRes, retRes, docRes, sRecsRes, presetsRes, delayReasonsRes
+        empRes, lvRes, penRes, apprRes, evRes, trRes, qualRes, jobRes, promRes, salRes, tcRes, transRes, retRes, docRes, sRecsRes, presetsRes, delayReasonsRes, commendationTypesRes, specCreditsRes
       ] = await Promise.allSettled([
         apiClient.entities.Employee.get(id),
         apiClient.entities.LeaveRequest.filter({ employee_id: id }),
@@ -392,7 +396,9 @@ export default function EmployeeDetail() {
         apiClient.entities.Document.filter({ employee_id: id }),
         apiClient.entities.ServiceRecord.filter({ employee_id: id }),
         apiClient.entities.AllowanceDeduction.list(),
-        apiClient.promotionDelayReasons.getByEmployee(id)
+        apiClient.promotionDelayReasons.getByEmployee(id),
+        apiClient.entities.CommendationType.list().catch(() => []),
+        apiClient.entities.SpecializationCredit.filter({ employee_id: id }).catch(() => [])
       ]);
 
       if (empRes.status === 'fulfilled' && empRes.value) setEmployee(empRes.value);
@@ -411,6 +417,8 @@ export default function EmployeeDetail() {
       if (docRes.status === 'fulfilled') setDocuments(docRes.value || []);
       if (sRecsRes.status === 'fulfilled') setServiceRecords(sRecsRes.value || []);
       if (delayReasonsRes.status === 'fulfilled') setDelayReasons(delayReasonsRes.value || []);
+      if (commendationTypesRes.status === 'fulfilled') setCommendationTypes(commendationTypesRes.value || []);
+      if (specCreditsRes.status === 'fulfilled') setSpecializationCredits(specCreditsRes.value || []);
       if (presetsRes.status === 'fulfilled') {
         setAllowanceDeductionPresets(presetsRes.value || []);
         if (presetsRes.value) {
@@ -1059,12 +1067,26 @@ export default function EmployeeDetail() {
         notes: '' 
       };
     } else if (type === 'appreciation') {
+      const defaultType = commendationTypes.find(t => t.status === 'فعال') || commendationTypes[0];
+      const creditMonths = defaultType ? (defaultType.credit_months || defaultType.creditMonths || 1) : 1;
       defaultValues = {
+        commendation_type_id: defaultType ? defaultType.id : '',
+        credit_months_snapshot: creditMonths,
         order_number: '',
         order_date: new Date().toISOString().split('T')[0],
         issuer: 'السيد المدير العام',
         reason: '',
-        seniority_impact: 'قدم شهر واحد',
+        seniority_impact: creditMonths === 6 ? 'قدم 6 اشهر' : creditMonths > 1 ? `قدم ${creditMonths} أشهر` : 'قدم شهر واحد',
+        notes: ''
+      };
+    } else if (type === 'specialization_credit') {
+      defaultValues = {
+        course_name: '',
+        weeks: 2,
+        order_number: '',
+        order_date: new Date().toISOString().split('T')[0],
+        start_date: '',
+        end_date: '',
         notes: ''
       };
     } else if (type === 'penalty') {
@@ -1183,11 +1205,23 @@ export default function EmployeeDetail() {
       };
     } else if (type === 'appreciation') {
       editValues = {
+        commendation_type_id: record.commendation_type_id || record.commendationTypeId || '',
+        credit_months_snapshot: record.credit_months_snapshot || record.creditMonthsSnapshot || (record.seniority_impact?.includes('6') ? 6 : 1),
         order_number: record.order_number || record.orderNumber || '',
         order_date: record.order_date || record.orderDate || '',
         issuer: record.issuer || 'السيد المدير العام',
         reason: record.reason || '',
         seniority_impact: record.seniority_impact || record.seniorityImpact || 'قدم شهر واحد',
+        notes: record.notes || ''
+      };
+    } else if (type === 'specialization_credit') {
+      editValues = {
+        course_name: record.course_name || record.courseName || '',
+        weeks: record.weeks !== undefined ? record.weeks : 2,
+        order_number: record.order_number || record.orderNumber || '',
+        order_date: record.order_date || record.orderDate || '',
+        start_date: record.start_date || record.startDate || '',
+        end_date: record.end_date || record.endDate || '',
         notes: record.notes || ''
       };
     } else if (type === 'penalty') {
@@ -1376,7 +1410,42 @@ export default function EmployeeDetail() {
           console.warn('Could not mirror to ServiceCredit table:', eErr);
         }
       }
-      else if (activeModal === 'appreciation') clientName = 'Appreciation';
+      else if (activeModal === 'appreciation') {
+        clientName = 'Appreciation';
+        if (!modalForm.order_number || !modalForm.order_date || !modalForm.issuer) {
+          toast({ title: 'تنبيه', description: 'يرجى إدخال رقم وتاريخ الأمر الإداري وجهة الإصدار', variant: 'destructive' });
+          setModalSaving(false);
+          return;
+        }
+        const creditMonths = parseInt(modalForm.credit_months_snapshot) || (modalForm.seniority_impact?.includes('6') ? 6 : 1);
+        payload.credit_months_snapshot = creditMonths;
+        payload.seniority_impact = creditMonths === 6 ? 'قدم 6 اشهر' : creditMonths > 1 ? `قدم ${creditMonths} أشهر` : 'قدم شهر واحد';
+        
+        // Mirror to EmployeeCommendation table
+        try {
+          await apiClient.entities.EmployeeCommendation.create({
+            employee_id: parseInt(id),
+            commendation_type_id: modalForm.commendation_type_id ? parseInt(modalForm.commendation_type_id) : null,
+            credit_months_snapshot: creditMonths,
+            order_number: modalForm.order_number,
+            order_date: modalForm.order_date,
+            issuer: modalForm.issuer,
+            reason: modalForm.reason || '',
+            notes: modalForm.notes || ''
+          });
+        } catch (eErr) {
+          console.warn('Could not mirror to EmployeeCommendation:', eErr);
+        }
+      }
+      else if (activeModal === 'specialization_credit') {
+        clientName = 'SpecializationCredit';
+        if (!modalForm.course_name || !modalForm.weeks || !modalForm.order_number || !modalForm.order_date) {
+          toast({ title: 'تنبيه', description: 'يرجى إدخال اسم الدورة، وعدد الأسابيع، ورقم وتاريخ الأمر الإداري', variant: 'destructive' });
+          setModalSaving(false);
+          return;
+        }
+        payload.weeks = parseInt(modalForm.weeks) || 1;
+      }
       else if (activeModal === 'penalty') clientName = 'Penalty';
 
       if (!clientName) {
@@ -1455,6 +1524,12 @@ export default function EmployeeDetail() {
         } else {
           setAppreciations(prev => [finalItem, ...prev]);
         }
+      } else if (activeModal === 'specialization_credit') {
+        if (editingRecordId) {
+          setSpecializationCredits(prev => prev.map(sc => (String(sc.id) === String(editingRecordId) ? { ...sc, ...finalItem } : sc)));
+        } else {
+          setSpecializationCredits(prev => [finalItem, ...prev]);
+        }
       } else if (activeModal === 'penalty') {
         if (editingRecordId) {
           setPenalties(prev => prev.map(p => (String(p.id) === String(editingRecordId) ? { ...p, ...finalItem } : p)));
@@ -1523,6 +1598,8 @@ export default function EmployeeDetail() {
         setServiceRecords(prev => prev.filter(s => String(s.id) !== String(recordId)));
       } else if (clientName === 'Appreciation') {
         setAppreciations(prev => prev.filter(a => String(a.id) !== String(recordId)));
+      } else if (clientName === 'SpecializationCredit') {
+        setSpecializationCredits(prev => prev.filter(sc => String(sc.id) !== String(recordId)));
       } else if (clientName === 'Penalty') {
         setPenalties(prev => prev.filter(p => String(p.id) !== String(recordId)));
       }
@@ -2821,6 +2898,97 @@ export default function EmployeeDetail() {
                   {qualifications.length === 0 && (
                     <tr>
                       <td colSpan={7} className="px-4 py-8 text-center text-slate-400">لا توجد مؤهلات تاريخية مسجلة</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Phase 5: Specialization Courses for Degree Track (دورات الاختصاص لاحتساب الشهادات) */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
+              <div>
+                <h3 className="text-base font-bold text-indigo-950 flex items-center gap-2">
+                  <GraduationCap className="text-indigo-600" size={18} />
+                  دورات الاختصاص المعتمدة لاحتساب الشهادة أثناء الخدمة
+                  {specializationCredits.length > 0 && (
+                    <span className="bg-indigo-100 text-indigo-800 text-xs font-black px-2 py-0.5 rounded-full border border-indigo-200">
+                      {specializationCredits.reduce((sum, c) => sum + (parseInt(c.weeks) || 0), 0)} أسبوع مسجل
+                    </span>
+                  )}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  تسجيل وتوثيق دورات التدريب التخصصي المطلوبة لاستكمال متطلبات احتساب الشهادة أثناء الخدمة (شرط أسبوعين كحد أدنى لكل ترفيع).
+                </p>
+              </div>
+
+              <Button
+                size="sm"
+                onClick={() => openAddModal('specialization_credit')}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl gap-1"
+              >
+                <Plus size={14} /> إضافة دورة اختصاص
+              </Button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-indigo-50/50 text-indigo-950 border-b border-indigo-100">
+                    <th className="text-right px-4 py-2.5 font-bold">اسم الدورة التخصصية</th>
+                    <th className="text-center px-4 py-2.5 font-bold">المدة (بالأسابيع)</th>
+                    <th className="text-right px-4 py-2.5 font-bold">رقم الأمر الإداري</th>
+                    <th className="text-right px-4 py-2.5 font-bold">تاريخ الأمر</th>
+                    <th className="text-right px-4 py-2.5 font-bold">الفترة</th>
+                    <th className="text-right px-4 py-2.5 font-bold">ملاحظات</th>
+                    <th className="text-center px-4 py-2.5 font-bold">إجراءات</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {specializationCredits.map((sc) => (
+                    <tr key={sc.id} className="border-b border-slate-50 hover:bg-indigo-50/20">
+                      <td className="px-4 py-2.5 font-bold text-slate-800">{sc.course_name || sc.courseName}</td>
+                      <td className="px-4 py-2.5 text-center font-bold">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                          {sc.weeks} {parseInt(sc.weeks) === 1 ? 'أسبوع' : parseInt(sc.weeks) === 2 ? 'أسبوعان' : 'أسابيع'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-slate-700">{sc.order_number || sc.orderNumber || '—'}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-slate-600">{sc.order_date || sc.orderDate || '—'}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-slate-500">
+                        {sc.start_date || sc.startDate ? `${sc.start_date || sc.startDate} إلى ${sc.end_date || sc.endDate || '...'}` : '—'}
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-500 text-xs truncate max-w-xs">{sc.notes || '—'}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg"
+                            title="تعديل دورة الاختصاص"
+                            onClick={() => openEditModal('specialization_credit', sc)}
+                          >
+                            <Edit size={14} />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg"
+                            title="حذف"
+                            onClick={() => deleteRecord('SpecializationCredit', sc.id)}
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {specializationCredits.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                        لا توجد دورات اختصاص مسجلة للموظف
+                      </td>
                     </tr>
                   )}
                 </tbody>
@@ -4755,9 +4923,48 @@ export default function EmployeeDetail() {
                 </div>
               )}
 
-              {/* 11. Appreciation Form */}
+              {/* 11. Appreciation Form (Upgraded Phase 5: Commendation Types & Dynamic Impact) */}
               {activeModal === 'appreciation' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <Label>نوع كتاب الشكر والتقدير المقنن *</Label>
+                    <Select
+                      value={modalForm.commendation_type_id ? String(modalForm.commendation_type_id) : 'custom'}
+                      onValueChange={(v) => {
+                        if (v === 'custom') {
+                          setModalForm(prev => ({
+                            ...prev,
+                            commendation_type_id: '',
+                            credit_months_snapshot: 1,
+                            seniority_impact: 'قدم شهر واحد'
+                          }));
+                        } else {
+                          const found = commendationTypes.find(t => String(t.id) === String(v));
+                          const months = found ? (found.credit_months || found.creditMonths || 1) : 1;
+                          setModalForm(prev => ({
+                            ...prev,
+                            commendation_type_id: parseInt(v),
+                            credit_months_snapshot: months,
+                            seniority_impact: months === 6 ? 'قدم 6 اشهر' : months > 1 ? `قدم ${months} أشهر` : 'قدم شهر واحد'
+                          }));
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="mt-1 rounded-xl"><SelectValue placeholder="اختر نوع كتاب الشكر..." /></SelectTrigger>
+                      <SelectContent>
+                        {commendationTypes.map(t => {
+                          const months = t.credit_months || t.creditMonths || 1;
+                          return (
+                            <SelectItem key={t.id} value={String(t.id)}>
+                              {t.name} (+{months} {months >= 6 ? 'أشهر قدَم' : 'شهر قدَم'})
+                            </SelectItem>
+                          );
+                        })}
+                        <SelectItem value="custom">نوع مخصص / إدخال يدوي</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   <div>
                     <Label>رقم الأمر الإداري *</Label>
                     <Input className="mt-1 rounded-xl" value={modalForm.order_number || ''} onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value }))} required placeholder="مثال: 1234/ش" />
@@ -4771,16 +4978,34 @@ export default function EmployeeDetail() {
                     <Input className="mt-1 rounded-xl" value={modalForm.issuer || ''} onChange={e => setModalForm(prev => ({ ...prev, issuer: e.target.value }))} required placeholder="مثال: السيد المدير العام / معالي الوزير" />
                   </div>
                   <div>
-                    <Label>أثر القِدَم / المكافأة *</Label>
-                    <Select value={modalForm.seniority_impact} onValueChange={v => setModalForm(prev => ({ ...prev, seniority_impact: v }))}>
-                      <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="قدم شهر واحد">قدم شهر واحد</SelectItem>
-                        <SelectItem value="قدم 6 اشهر">قدم 6 اشهر</SelectItem>
-                        <SelectItem value="معنوي فقط بدون اثر">معنوي فقط بدون اثر</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label>أشهر القِدَم الممنوحة *</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max="12"
+                      className="mt-1 rounded-xl"
+                      value={modalForm.credit_months_snapshot ?? 1}
+                      onChange={e => {
+                        const m = parseInt(e.target.value) || 0;
+                        setModalForm(prev => ({
+                          ...prev,
+                          credit_months_snapshot: m,
+                          seniority_impact: m === 6 ? 'قدم 6 اشهر' : m > 1 ? `قدم ${m} أشهر` : m === 1 ? 'قدم شهر واحد' : 'معنوي فقط بدون اثر'
+                        }));
+                      }}
+                      required
+                    />
                   </div>
+
+                  {/* Expected Impact Preview Banner */}
+                  <div className="md:col-span-2 bg-amber-50/80 border border-amber-200/80 rounded-xl p-3 text-xs text-amber-950 flex items-center gap-2">
+                    <Award size={18} className="text-amber-600 shrink-0" />
+                    <div>
+                      <strong className="block font-bold">معاينة الأثر القانوني للترقية والعلاوة:</strong>
+                      سيمنح هذا الكتاب الموظف قدماً قانونياً مقداره ({modalForm.credit_months_snapshot || 1}) شهر، مما يقدّم تاريخ استحقاق الترفيع والعلاوة القادمة فور اعتماده.
+                    </div>
+                  </div>
+
                   <div className="md:col-span-2">
                     <Label>سبب / مناسبة الشكر والتقدير *</Label>
                     <Input className="mt-1 rounded-xl" value={modalForm.reason || ''} onChange={e => setModalForm(prev => ({ ...prev, reason: e.target.value }))} required placeholder="أدخل أسباب ومناسبة منح كتاب الشكر والتقدير..." />
@@ -4788,6 +5013,96 @@ export default function EmployeeDetail() {
                   <div className="md:col-span-2">
                     <Label>ملاحظات إضافية</Label>
                     <Input className="mt-1 rounded-xl" value={modalForm.notes || ''} onChange={e => setModalForm(prev => ({ ...prev, notes: e.target.value }))} placeholder="أي ملاحظات إضافية..." />
+                  </div>
+                </div>
+              )}
+
+              {/* 11.5 Specialization Course Credit Form (Phase 5) */}
+              {activeModal === 'specialization_credit' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <Label>اسم الدورة التخصصية *</Label>
+                    <Input
+                      className="mt-1 rounded-xl"
+                      value={modalForm.course_name || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, course_name: e.target.value }))}
+                      required
+                      placeholder="مثال: دورة التحليل المالي المتقدم / هندسة المكامن النفطية"
+                    />
+                  </div>
+
+                  <div>
+                    <Label>مدة الدورة (بالأسابيع) *</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="52"
+                      className="mt-1 rounded-xl"
+                      value={modalForm.weeks ?? 2}
+                      onChange={e => setModalForm(prev => ({ ...prev, weeks: parseInt(e.target.value) || 1 }))}
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <Label>رقم الأمر الإداري / كتاب المشاركة *</Label>
+                    <Input
+                      className="mt-1 rounded-xl"
+                      value={modalForm.order_number || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value }))}
+                      required
+                      placeholder="مثال: 789/د"
+                    />
+                  </div>
+
+                  <div>
+                    <Label>تاريخ الأمر الإداري *</Label>
+                    <Input
+                      type="date"
+                      className="mt-1 rounded-xl"
+                      value={modalForm.order_date || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, order_date: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <Label>تاريخ بدء الدورة</Label>
+                    <Input
+                      type="date"
+                      className="mt-1 rounded-xl"
+                      value={modalForm.start_date || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, start_date: e.target.value }))}
+                    />
+                  </div>
+
+                  <div>
+                    <Label>تاريخ انتهاء الدورة</Label>
+                    <Input
+                      type="date"
+                      className="mt-1 rounded-xl"
+                      value={modalForm.end_date || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, end_date: e.target.value }))}
+                    />
+                  </div>
+
+                  {/* Explanatory Banner */}
+                  <div className="md:col-span-2 bg-indigo-50/80 border border-indigo-200/80 rounded-xl p-3 text-xs text-indigo-950 flex items-center gap-2">
+                    <GraduationCap size={18} className="text-indigo-600 shrink-0" />
+                    <div>
+                      <strong className="block font-bold">شروط مسار احتساب الشهادات أثناء الخدمة:</strong>
+                      يتطلب القانون إتمام أسبوعين تدريب اختصاص كحد أدنى لكل ترقية وظيفية لتجاوز شرط الدورات التخصصية بنجاح.
+                    </div>
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <Label>ملاحظات إضافية</Label>
+                    <Input
+                      className="mt-1 rounded-xl"
+                      value={modalForm.notes || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, notes: e.target.value }))}
+                      placeholder="تفاصيل الجهة المنفذة أو ملاحظات تقييم الدورة..."
+                    />
                   </div>
                 </div>
               )}
