@@ -465,5 +465,118 @@ describe('Phase 3: Promotions & Increments Due Lists & Batch Approvals (قوائ
     expect(isDueForIncrement).toBe(false);
   });
 
+  // ============================================================================
+  // الاختبار 7: التحقق من حساب المؤثرات وتواريخ الترقية الحالية والقادمة وكتب الشكر والعقوبات
+  // ============================================================================
+  it('7. حساب دقيق لمؤثرات الترفيع: تاريخ الترقية الحالي والقادم، كتب الشكر (+شهور)، العقوبات (-تأخير)، والدورات الحتمية', () => {
+    const employee = {
+      id: 501,
+      fullName: 'أحمد جاسم محمد',
+      jobTitle: 'مبرمج',
+      grade: 6,
+      step: 4,
+      hireDate: '2016-01-01',
+      lastPromotionDate: '2022-01-01', // تتطلب 4 سنوات -> 2026-01-01
+      status: 'نشط'
+    };
+
+    const context: EngineContextData = {
+      today: '2026-02-01',
+      commendations: [
+        {
+          id: 1,
+          employeeId: 501,
+          orderDate: '2023-05-10',
+          creditMonthsSnapshot: 1,
+          status: 'نافذ'
+        },
+        {
+          id: 2,
+          employeeId: 501,
+          orderDate: '2024-08-15',
+          creditMonthsSnapshot: 1,
+          status: 'نافذ'
+        }
+      ],
+      penalties: [
+        {
+          id: 1,
+          employeeId: 501,
+          penaltyDate: '2023-11-20',
+          penaltyType: 'إنذار',
+          delayMonths: 3,
+          status: 'نافذ'
+        }
+      ],
+      governingCourses: [],
+      governingAssignments: {
+        '501': { status: 'مستوفي' }
+      },
+      evaluations: [
+        { employeeId: 501, year: 2024, rating: 'كفء' },
+        { employeeId: 501, year: 2025, rating: 'كفء' }
+      ]
+    };
+
+    const fullResult = recalculateEligibilitySync(employee, context);
+    const promo = fullResult.promotion;
+
+    expect(promo.lastPromotionDate).toBe('2022-01-01');
+    expect(promo.appliedCommendationsCount).toBe(2);
+    expect(promo.commendationMonthsDeducted).toBe(2);
+    expect(promo.appliedPenaltiesCount).toBe(1);
+    expect(promo.penaltyMonthsAdded).toBe(3);
+    // Net effect: 2022-01-01 + 4 years = 2026-01-01 - 2 months (commendations) + 3 months (penalty) = 2026-02-01
+    expect(promo.nextPromotionDueDate).toBe('2026-02-01');
+    expect(promo.isPromotionEligible).toBe(true);
+    expect(promo.eligibilityStatus).toBe('مستحق_للترفيع');
+    expect(promo.gateCheckResults.governingCoursesSatisfied).toBe(true);
+    expect(promo.gateCheckResults.evaluationsSatisfied).toBe(true);
+  });
+
+  // ============================================================================
+  // الاختبار 8: التحقق من حساب مؤثرات العلاوة السنوية والتواريخ السابقة والقادمة
+  // ============================================================================
+  it('8. حساب دقيق لمؤثرات العلاوة السنوية: تاريخ منح العلاوة الحالية وتاريخ الاستحقاق القادم مع تأثير كتب الشكر والعقوبات', () => {
+    const employee = {
+      id: 502,
+      fullName: 'سارة عبد الرحمن محمود',
+      jobTitle: 'مهندس',
+      grade: 5,
+      step: 2,
+      hireDate: '2019-01-01',
+      lastIncrementDate: '2025-03-01',
+      lastPromotionDate: '2023-01-01',
+      status: 'نشط'
+    };
+
+    const context: EngineContextData = {
+      today: '2026-04-01',
+      commendations: [
+        {
+          id: 10,
+          employeeId: 502,
+          orderDate: '2025-07-01',
+          creditMonthsSnapshot: 1,
+          status: 'نافذ'
+        }
+      ],
+      penalties: []
+    };
+
+    const fullResult = recalculateEligibilitySync(employee, context);
+    const inc = fullResult.increment;
+
+    expect(inc.lastIncrementDate).toBe('2025-03-01');
+    expect(inc.appliedCommendationsCount).toBe(1);
+    expect(inc.commendationMonthsDeducted).toBe(1);
+    expect(inc.appliedPenaltiesCount).toBe(0);
+    expect(inc.penaltyMonthsAdded).toBe(0);
+    // Net effect: 2025-03-01 + 1 year = 2026-03-01 - 1 month (commendation) = 2026-02-01
+    expect(inc.nextIncrementDueDate).toBe('2026-02-01');
+    expect(inc.isIncrementEligible).toBe(true);
+    expect(inc.eligibilityStatus).toBe('مستحق_للعلاوة');
+  });
+
 });
 

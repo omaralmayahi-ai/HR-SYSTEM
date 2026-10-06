@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { fetchEducationDegreesSorted, fetchResponsibilityAllowancesSorted, subscribeToSettingsUpdates, notifySettingsChanged } from '@/lib/settingsUtils';
 import { useToast } from '@/components/ui/use-toast';
@@ -21,7 +21,8 @@ import {
   Sliders,
   Play,
   Pause,
-  CalendarDays
+  CalendarDays,
+  Wallet
 } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
 
@@ -337,62 +338,48 @@ export default function FixedCustomAllowancesSettings() {
   const [draggedOverIndex, setDraggedOverIndex] = useState(null);
 
   const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, id: null, name: '' });
+  const isMountedRef = useRef(true);
 
-  const loadSettingsEntities = () => {
+  const loadSettingsEntities = async () => {
     fetchFixedSettings();
     fetchCustomRecords();
     
-    // Fetch employees for custom rule engine
-    apiClient.entities.Employee.list().then(data => {
-      setEmployees(data || []);
-    }).catch(err => {
-      console.error('Error loading employees for rules:', err);
-    });
+    try {
+      const [emps, orgs, locs, degs, resps, shifts] = await Promise.allSettled([
+        apiClient.entities.Employee.list(),
+        apiClient.entities.OrgUnit.list(),
+        apiClient.entities.WorkLocation.list(),
+        fetchEducationDegreesSorted(),
+        fetchResponsibilityAllowancesSorted(),
+        apiClient.entities.ShiftSystem.list()
+      ]);
 
-    // Fetch established org units
-    apiClient.entities.OrgUnit.list().then(data => {
-      setOrgUnits(data || []);
-    }).catch(err => {
-      console.error('Error loading org units for rules:', err);
-    });
-
-    // Fetch established work locations
-    apiClient.entities.WorkLocation.list().then(data => {
-      setWorkLocations(data || []);
-    }).catch(err => {
-      console.error('Error loading work locations for rules:', err);
-    });
-
-    // Fetch education degrees
-    fetchEducationDegreesSorted().then(data => {
-      setEducationDegrees(data || []);
-    }).catch(err => {
-      console.error('Error loading education degrees:', err);
-    });
-
-    // Fetch responsibility allowances
-    fetchResponsibilityAllowancesSorted().then(data => {
-      setResponsibilityAllowances(data || []);
-    }).catch(err => {
-      console.error('Error loading responsibility allowances:', err);
-    });
-
-    // Fetch shift systems
-    apiClient.entities.ShiftSystem.list().then(data => {
-      setShiftSystems(data || []);
-    }).catch(err => {
-      console.error('Error loading shift systems:', err);
-    });
+      if (!isMountedRef.current) return;
+      if (emps.status === 'fulfilled' && emps.value) setEmployees(emps.value);
+      if (orgs.status === 'fulfilled' && orgs.value) setOrgUnits(orgs.value);
+      if (locs.status === 'fulfilled' && locs.value) setWorkLocations(locs.value);
+      if (degs.status === 'fulfilled' && degs.value) setEducationDegrees(degs.value);
+      if (resps.status === 'fulfilled' && resps.value) setResponsibilityAllowances(resps.value);
+      if (shifts.status === 'fulfilled' && shifts.value) setShiftSystems(shifts.value);
+    } catch (err) {
+      console.warn('Error loading settings entities:', err);
+    }
   };
 
   useEffect(() => {
+    isMountedRef.current = true;
     loadSettingsEntities();
 
-    const unsubscribe = subscribeToSettingsUpdates(() => {
-      loadSettingsEntities();
+    const unsubscribe = subscribeToSettingsUpdates((detail) => {
+      if (isMountedRef.current && detail?.type !== 'allowances_deductions_local') {
+        loadSettingsEntities();
+      }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMountedRef.current = false;
+      unsubscribe();
+    };
   }, []);
 
   const loadRuleForAllowance = (id) => {
@@ -489,6 +476,7 @@ export default function FixedCustomAllowancesSettings() {
 
   const handleSaveRule = (id) => {
     localStorage.setItem(`ALLOWANCE_RULES_${id}`, JSON.stringify(currentRule));
+    notifySettingsChanged('allowances_deductions');
     toast({
       title: 'تم حفظ الشروط والحجب بنجاح',
       description: 'تم تحديث شروط الاستحقاق وموظفي الحجب لهذا البند المالي المخصص.',
@@ -648,6 +636,7 @@ export default function FixedCustomAllowancesSettings() {
       });
 
       fetchCustomRecords();
+      notifySettingsChanged('allowances_deductions');
 
       await apiClient.logs.create({
         action: newStatus === 'فعال' ? 'تفعيل مخصص مخصص' : 'إيقاف مخصص مخصص مؤقتاً',
@@ -690,6 +679,8 @@ export default function FixedCustomAllowancesSettings() {
         const name = String(item.name || '');
         const isSpouse = (name.includes('زوجية') || name.includes('الزوجية'));
         const isChild = (name.includes('أطفال') || name.includes('الاطفال') || name.includes('أولاد') || name.includes('الاولاد') || name.includes('طفل') || name.includes('ولد'));
+        const isDegree = (name.includes('شهادة') || name.includes('الشهادة') || name.includes('دكتوراه') || name.includes('ماجستير') || name.includes('دبلوم') || name.includes('بكالوريوس') || name.includes('إعدادية') || name.includes('متوسطة') || name.includes('ابتدائية'));
+        const isResponsibility = (name.includes('منصب') || name.includes('مسؤولية') || name.includes('إشرافية'));
         
         let isTemp = false;
         try {
@@ -697,7 +688,7 @@ export default function FixedCustomAllowancesSettings() {
           if (saved) isTemp = JSON.parse(saved).isTemporary;
         } catch (e) {}
 
-        return (item.type === 'allowance' || item.type === 'M_ALLOWANCE') && !isSpouse && !isChild && !isTemp;
+        return (item.type === 'allowance' || item.type === 'M_ALLOWANCE') && !isSpouse && !isChild && !isDegree && !isResponsibility && !isTemp;
       });
 
       let sortedData = customOnly;
@@ -721,7 +712,6 @@ export default function FixedCustomAllowancesSettings() {
       setUnfilteredRecords(data || []);
       if (data && data.length > 0) {
         localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(data));
-        notifySettingsChanged('allowances_deductions', data);
       }
     } catch (error) {
       console.error('Error in fetchCustomRecords:', error);
@@ -811,6 +801,7 @@ export default function FixedCustomAllowancesSettings() {
       setNewValue('');
       setAdding(false);
       fetchCustomRecords();
+      notifySettingsChanged('allowances_deductions');
 
       // Log action
       await apiClient.logs.create({
@@ -863,6 +854,7 @@ export default function FixedCustomAllowancesSettings() {
 
       setEditingId(null);
       fetchCustomRecords();
+      notifySettingsChanged('allowances_deductions');
 
       await apiClient.logs.create({
         action: 'تعديل مخصص مخصص',
@@ -894,6 +886,7 @@ export default function FixedCustomAllowancesSettings() {
       });
       setDeleteConfirm({ isOpen: false, id: null, name: '' });
       fetchCustomRecords();
+      notifySettingsChanged('allowances_deductions');
 
       await apiClient.logs.create({
         action: 'حذف مخصص مخصص',
@@ -929,6 +922,21 @@ export default function FixedCustomAllowancesSettings() {
 
   return (
     <div className="space-y-6" dir="rtl">
+      {/* Header Banner */}
+      <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <div className="flex items-center gap-2.5 mb-1">
+            <div className="p-2 rounded-xl bg-[#1B3A6B]/10 text-[#1B3A6B]">
+              <Wallet size={22} />
+            </div>
+            <h2 className="text-xl font-bold text-[#1B3A6B]">المخصصات الثابتة والمخصصة</h2>
+          </div>
+          <p className="text-xs text-slate-500 font-medium leading-relaxed">
+            إدارة المخصصات الزوجية والأطفال، والمخصصات المهنية والنوعية المستمرة والمؤقتة وفق ضوابط الخدمة المدنية.
+          </p>
+        </div>
+      </div>
+
       {/* Sub-tab navigation */}
       <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit border border-slate-200">
         <button
@@ -3457,7 +3465,7 @@ export default function FixedCustomAllowancesSettings() {
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm.isOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 pointer-events-auto bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl border border-slate-200 max-w-sm w-full p-6 animate-scaleIn shadow-2xl">
             <h3 className="text-sm font-black text-slate-900 mb-2">تأكيد حذف المخصص المخصص</h3>
             <p className="text-xs text-slate-500 leading-relaxed mb-6">

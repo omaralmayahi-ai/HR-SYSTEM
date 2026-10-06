@@ -2,7 +2,9 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Award, TrendingUp, CheckCircle2, AlertCircle, Clock,
   Search, RefreshCw, CheckSquare, Square,
-  ShieldCheck, Layers
+  ShieldCheck, Layers, FileText, ChevronDown, ChevronUp,
+  Info, AlertTriangle, ShieldAlert, Sparkles, UserCheck, Calendar,
+  ExternalLink, GraduationCap, Briefcase
 } from 'lucide-react';
 import apiClient from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
@@ -17,6 +19,39 @@ import {
   DialogFooter,
   DialogDescription,
 } from '@/components/ui/dialog';
+
+function calculatePeriodDiff(fromDateStr, toDateStr) {
+  if (!fromDateStr || !toDateStr || fromDateStr === '—' || toDateStr === '—') return null;
+  const from = new Date(fromDateStr);
+  const to = new Date(toDateStr);
+  if (isNaN(from.getTime()) || isNaN(to.getTime())) return null;
+  
+  let months = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  const dayDiff = to.getDate() - from.getDate();
+  if (dayDiff > 15) months++;
+  else if (dayDiff < -15) months--;
+  
+  if (months <= 0) return 'استحقاق فوري / حالي';
+  const years = Math.floor(months / 12);
+  const remMonths = months % 12;
+  const parts = [];
+  if (years > 0) parts.push(`${years} ${years === 1 ? 'سنة' : (years === 2 ? 'سنتين' : (years <= 10 ? 'سنوات' : 'سنة'))}`);
+  if (remMonths > 0) parts.push(`${remMonths} ${remMonths === 1 ? 'شهر' : (remMonths === 2 ? 'شهرين' : (remMonths <= 10 ? 'أشهر' : 'شهر'))}`);
+  return parts.join(' و ') || `${months} شهر`;
+}
+
+const ANNUAL_INCREMENTS = {
+  1: 20000,
+  2: 17000,
+  3: 10000,
+  4: 8000,
+  5: 6000,
+  6: 6000,
+  7: 6000,
+  8: 3000,
+  9: 3000,
+  10: 3000
+};
 
 export default function PromotionsDue() {
   const { toast } = useToast();
@@ -42,6 +77,9 @@ export default function PromotionsDue() {
   const [orderNumber, setOrderNumber] = useState('');
   const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
   const [approvalTargetItems, setApprovalTargetItems] = useState([]);
+
+  // Detailed Inspector Modal state
+  const [detailsModalItem, setDetailsModalItem] = useState(null);
 
   // Fetch Due List from Backend
   const fetchDueList = async () => {
@@ -87,7 +125,7 @@ export default function PromotionsDue() {
     return list.filter(item => {
       const name = item.name || item.fullName || '';
       const dept = item.department || '';
-      const job = item.jobTitle || item.job_title || '';
+      const job = item.jobTitle || item.job_title || item.currentJobTitle || '';
       const grade = String(item.currentGrade || item.current_grade || '');
 
       const matchSearch =
@@ -138,7 +176,6 @@ export default function PromotionsDue() {
 
   const toggleSelectAllCurrent = () => {
     if (isAllCurrentSelected) {
-      // Deselect current list
       setSelectedItems(prev => {
         const next = { ...prev };
         currentList.forEach(item => {
@@ -147,7 +184,6 @@ export default function PromotionsDue() {
         return next;
       });
     } else {
-      // Select all in current list
       setSelectedItems(prev => {
         const next = { ...prev };
         currentList.forEach(item => {
@@ -220,12 +256,9 @@ export default function PromotionsDue() {
         variant: 'default'
       });
 
-      // Clear selection & close modal
       setIsModalOpen(false);
       setOrderNumber('');
       setSelectedItems({});
-      
-      // Refresh list
       await fetchDueList();
     } catch (err) {
       console.error('Error approving batch:', err);
@@ -251,7 +284,7 @@ export default function PromotionsDue() {
             <div>
               <h1 className="text-2xl font-bold text-[#1B3A6B]">قوائم المستحقين للترقية والعلاوة والتسوية</h1>
               <p className="text-sm text-slate-500">
-                إدارة واعتماد استحقاقات الترفيع الوظيفي والعلاوات السنوية وتسوية مسار احتساب الشهادات وفق السلم الموحد 2023
+                إدارة واعتماد استحقاقات الترفيع الوظيفي والعلاوات السنوية وتسوية مسار احتساب الشهادات مع بيان كافة المؤثرات
               </p>
             </div>
           </div>
@@ -271,7 +304,7 @@ export default function PromotionsDue() {
           {selectedCount > 0 && (
             <Button
               onClick={handleOpenBatchModal}
-              className="bg-[#C8960C] hover:bg-[#b0830a] text-white flex items-center gap-2 shadow-md transition-all animate-pulse"
+              className="bg-[#C8960C] hover:bg-[#b0830a] text-white flex items-center gap-2 shadow-md transition-all animate-pulse font-semibold"
             >
               <CheckCircle2 size={18} />
               <span>اعتماد المحدد ({selectedCount})</span>
@@ -280,7 +313,7 @@ export default function PromotionsDue() {
         </div>
       </div>
 
-      {/* 4 Summary Stat Cards */}
+      {/* Summary Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Increments */}
         <div
@@ -478,7 +511,7 @@ export default function PromotionsDue() {
           {loading ? (
             <div className="p-12 text-center text-slate-500">
               <RefreshCw className="w-8 h-8 animate-spin text-[#1B3A6B] mx-auto mb-3" />
-              <p className="font-medium text-sm">جاري مراجعة وتحليل استحقاقات الموظفين...</p>
+              <p className="font-medium text-sm">جاري مراجعة وتحليل استحقاقات الموظفين وربط المؤثرات...</p>
             </div>
           ) : currentList.length === 0 ? (
             <div className="p-16 text-center text-slate-400">
@@ -488,9 +521,9 @@ export default function PromotionsDue() {
             </div>
           ) : (
             <table className="w-full text-right text-sm">
-              <thead className="bg-slate-50/80 text-slate-600 font-semibold border-b border-slate-100 text-xs">
+              <thead className="bg-slate-50/80 text-slate-700 font-bold border-b border-slate-200 text-xs">
                 <tr>
-                  <th className="p-4 w-12 text-center">
+                  <th className="p-3.5 w-12 text-center">
                     <input
                       type="checkbox"
                       checked={isAllCurrentSelected}
@@ -498,12 +531,17 @@ export default function PromotionsDue() {
                       className="w-4 h-4 rounded text-[#C8960C] focus:ring-[#C8960C] cursor-pointer"
                     />
                   </th>
-                  <th className="p-4">الموظف والتشكيل</th>
-                  <th className="p-4">الوضع الحالي</th>
-                  <th className="p-4">الإجراء والوضع المستحق</th>
-                  <th className="p-4">تاريخ الاستحقاق المحسوب</th>
-                  <th className="p-4">السند والمسار</th>
-                  <th className="p-4 text-center">الإجراء</th>
+                  <th className="p-3.5">الموظف والتشكيل</th>
+                  <th className="p-3.5">
+                    {activeTab === 'promotions' ? 'العنوان والدرجة الحالية (تاريخ الترقية الحالي)' : (activeTab === 'increments' ? 'العلاوة والمرحلة الحالية (تاريخ المنح الحالي)' : 'الوضع الحالي (تاريخ الاحتساب السابق)')}
+                  </th>
+                  <th className="p-3.5">
+                    {activeTab === 'promotions' ? 'العنوان القادم المستحق (تاريخ الترقية القادم)' : (activeTab === 'increments' ? 'المرحلة المستحقة (تاريخ الاستحقاق القادم)' : 'الاستحقاق القادم (تاريخ التسوية)')}
+                  </th>
+                  <th className="p-3.5 text-center">كتب الشكر وتأثيرها</th>
+                  <th className="p-3.5 text-center">العقوبات وتأثيرها</th>
+                  <th className="p-3.5">مؤثرات إضافية وضوابط</th>
+                  <th className="p-3.5 text-center">الإجراء</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -513,12 +551,27 @@ export default function PromotionsDue() {
                   const isPromotion = activeTab === 'promotions' || item.actionType === 'ترفيع';
                   const isIncrement = activeTab === 'increments' || item.actionType === 'علاوة';
 
+                  const commCount = item.commendationsCount || item.commendations_count || 0;
+                  const commMonths = item.commendationMonths || item.commendation_months || 0;
+                  const penCount = item.penaltiesCount || item.penalties_count || 0;
+                  const penMonths = item.penaltyDelayMonths || item.penalty_delay_months || 0;
+                  
+                  const currentDateVal = isPromotion 
+                    ? (item.lastPromotionDate || item.last_promotion_date || item.gradeDate || item.grade_date || item.currentAppointmentDate || item.current_appointment_date || item.appointmentDate || item.appointment_date || item.firstAppointmentDate || item.first_appointment_date || '—')
+                    : (item.lastIncrementDate || item.last_increment_date || item.lastPromotionDate || item.last_promotion_date || item.gradeDate || item.grade_date || item.currentAppointmentDate || item.current_appointment_date || item.appointmentDate || item.appointment_date || item.firstAppointmentDate || item.first_appointment_date || '—');
+
+                  const nextDateVal = isPromotion
+                    ? (item.nextPromotionDueDate || item.dueDate || item.due_date || '—')
+                    : (item.nextIncrementDueDate || item.dueDate || item.due_date || '—');
+
+                  const factorsList = item.otherFactors || item.other_factors || item.reasons || [];
+
                   return (
                     <tr
                       key={getItemKey(item)}
-                      className={`transition-colors ${selected ? 'bg-amber-50/40' : 'hover:bg-slate-50/60'}`}
+                      className={`transition-colors ${selected ? 'bg-amber-50/40' : 'hover:bg-slate-50/70'}`}
                     >
-                      <td className="p-4 text-center">
+                      <td className="p-3.5 text-center">
                         <input
                           type="checkbox"
                           checked={selected}
@@ -527,79 +580,231 @@ export default function PromotionsDue() {
                         />
                       </td>
 
-                      <td className="p-4">
-                        <div className="font-bold text-slate-900">{item.name || item.fullName}</div>
-                        <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-                          <span>{item.jobTitle || item.job_title}</span>
+                      {/* Employee Info */}
+                      <td className="p-3.5">
+                        <div className="font-bold text-slate-900 hover:text-[#1B3A6B] transition-colors cursor-pointer" onClick={() => setDetailsModalItem(item)}>
+                          {item.name || item.fullName}
+                        </div>
+                        <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
+                          <span className="font-medium text-slate-700">{item.jobTitle || item.job_title || item.currentJobTitle || 'موظف'}</span>
                           <span>•</span>
-                          <span className="text-slate-400">{item.department}</span>
+                          <span className="text-slate-400">{item.department || 'عام'}</span>
                         </div>
                       </td>
 
-                      <td className="p-4">
-                        <div className="inline-flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-700">
-                          <span>الدرجة {item.currentGrade || item.current_grade}</span>
-                          <span>/</span>
-                          <span>المرحلة {item.currentStep || item.current_step}</span>
+                      {/* Current Status & Current Promotion / Increment Date */}
+                      <td className="p-3.5">
+                        <div className="space-y-1.5">
+                          {isIncrement && (
+                            <>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <Badge className="bg-slate-100 text-slate-800 border-slate-200 text-[11px] font-bold">
+                                  المرحلة الحالية {item.currentStep || item.current_step}
+                                </Badge>
+                                <span className="text-[11px] text-slate-600 font-medium">
+                                  (الدرجة {item.currentGrade || item.current_grade})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 text-[11px] text-slate-700 bg-blue-50/80 border border-blue-200/70 rounded-md px-2 py-0.5">
+                                <Calendar size={12} className="text-blue-600 shrink-0" />
+                                <span className="text-blue-900 font-semibold">تاريخ منح العلاوة الحالية:</span>
+                                <span className="font-mono font-bold text-blue-950">{currentDateVal}</span>
+                              </div>
+                              {ANNUAL_INCREMENTS[item.currentGrade || item.current_grade] && (
+                                <div className="text-[10px] text-emerald-700 font-medium">
+                                  مقدار العلاوة السنوية: <span className="font-bold font-mono">+{ANNUAL_INCREMENTS[item.currentGrade || item.current_grade].toLocaleString()} د.ع</span>
+                                </div>
+                              )}
+                            </>
+                          )}
+
+                          {isPromotion && (
+                            <>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <Badge className="bg-blue-50 text-blue-900 border-blue-200 text-[11px] font-bold">
+                                  {item.jobTitle || item.job_title || item.currentJobTitle || item.current_job_title || 'العنوان الحالي'}
+                                </Badge>
+                                <span className="text-[11px] font-bold text-slate-800">
+                                  (الدرجة {item.currentGrade || item.current_grade} - مرحلة {item.currentStep || item.current_step})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 text-[11px] text-slate-700 bg-indigo-50/80 border border-indigo-200/70 rounded-md px-2 py-0.5">
+                                <Calendar size={12} className="text-indigo-600 shrink-0" />
+                                <span className="text-indigo-900 font-semibold">تاريخ الترقية الحالي:</span>
+                                <span className="font-mono font-bold text-indigo-950">{currentDateVal}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 font-medium">
+                                مدة الترفيع المقررة بالسلم: <span className="font-bold text-slate-700">{item.requiredYears || item.required_years || ((item.currentGrade || item.current_grade) <= 5 ? 5 : 4)} سنوات</span>
+                              </div>
+                            </>
+                          )}
+
+                          {isSettlement && (
+                            <>
+                              <div className="inline-flex items-center gap-1.5 bg-slate-100 px-2 py-0.5 rounded-md text-xs font-bold text-slate-800">
+                                <span>الدرجة {item.currentGrade || item.current_grade}</span>
+                                <span>/</span>
+                                <span>المرحلة {item.currentStep || item.current_step}</span>
+                              </div>
+                              <div className="flex items-center gap-1 text-[11px] text-slate-600">
+                                <Calendar size={12} className="text-slate-400 shrink-0" />
+                                <span className="text-slate-500 font-medium">تاريخ الاحتساب السابق:</span>
+                                <span className="font-mono font-semibold text-slate-800">{currentDateVal}</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </td>
 
-                      <td className="p-4">
-                        {isPromotion && (
-                          <div className="flex items-center gap-2">
-                            <Badge className="bg-blue-100 text-blue-800 border-blue-200">
-                              ترفيع درجة
-                            </Badge>
-                            <span className="text-xs font-bold text-blue-900">
-                              ← الدرجة {item.targetGrade || item.target_grade} (المرحلة 1)
+                      {/* Next Due Status & Next Due Date */}
+                      <td className="p-3.5">
+                        <div className="space-y-1.5">
+                          {isPromotion && (
+                            <>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <Badge className="bg-blue-100 text-blue-900 border-blue-200 text-[11px] font-bold">
+                                  {item.targetJobTitle || item.target_job_title || `الدرجة ${item.targetGrade}`}
+                                </Badge>
+                                <span className="text-[11px] font-bold text-blue-950">
+                                  (الدرجة {item.targetGrade || item.target_grade} - مرحلة 1)
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 text-[11px] bg-amber-50/80 border border-amber-200/80 rounded-md px-2 py-0.5">
+                                <Clock size={12} className="text-[#C8960C] shrink-0" />
+                                <span className="text-amber-950 font-semibold">تاريخ الترقية القادم:</span>
+                                <span className="font-mono font-bold text-[#1B3A6B]">{nextDateVal}</span>
+                              </div>
+                              {calculatePeriodDiff(currentDateVal, nextDateVal) && (
+                                <div className="text-[10px] text-slate-500 bg-slate-50 border border-slate-200/60 rounded px-1.5 py-0.5 inline-block font-sans">
+                                  المدة المقررة: <span className="font-bold text-slate-700">{calculatePeriodDiff(currentDateVal, nextDateVal)}</span>
+                                </div>
+                              )}
+                            </>
+                          )}
+
+                          {isIncrement && (
+                            <>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <Badge className="bg-emerald-100 text-emerald-900 border-emerald-200 text-[11px] font-bold">
+                                  المرحلة المستحقة {item.targetStep || item.target_step}
+                                </Badge>
+                                <span className="text-[11px] font-medium text-emerald-950">
+                                  (نفس الدرجة {item.currentGrade || item.current_grade})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 text-[11px] bg-emerald-50/80 border border-emerald-200/80 rounded-md px-2 py-0.5">
+                                <Clock size={12} className="text-emerald-700 shrink-0" />
+                                <span className="text-emerald-950 font-semibold">تاريخ استحقاق العلاوة:</span>
+                                <span className="font-mono font-bold text-[#1B3A6B]">{nextDateVal}</span>
+                              </div>
+                              {calculatePeriodDiff(currentDateVal, nextDateVal) && (
+                                <div className="text-[10px] text-slate-500 bg-slate-50 border border-slate-200/60 rounded px-1.5 py-0.5 inline-block font-sans">
+                                  المدة المحسوبة: <span className="font-bold text-slate-700">{calculatePeriodDiff(currentDateVal, nextDateVal)}</span>
+                                </div>
+                              )}
+                            </>
+                          )}
+
+                          {isSettlement && (
+                            <>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <Badge className="bg-amber-100 text-amber-900 border-amber-200 text-[11px] font-bold">
+                                  تسوية عجز الشهادة
+                                </Badge>
+                                <span className="text-[11px] font-semibold text-amber-900">
+                                  تثبيت بالدرجة {item.currentGrade || item.current_grade}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 text-[11px]">
+                                <Clock size={12} className="text-[#C8960C] shrink-0" />
+                                <span className="text-slate-500 font-medium">تاريخ التسوية:</span>
+                                <span className="font-mono font-bold text-[#1B3A6B]">{nextDateVal}</span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Commendation Letters & Impact */}
+                      <td className="p-3.5 text-center">
+                        {commCount > 0 ? (
+                          <div className="inline-flex flex-col items-center">
+                            <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-1 rounded-lg text-xs font-bold shadow-2xs">
+                              <Sparkles size={13} className="text-emerald-600" />
+                              <span>{commCount} كتاب شكر</span>
+                            </span>
+                            <span className="text-[10px] font-bold text-emerald-700 mt-0.5">
+                              (تقديم {commMonths} {commMonths === 1 ? 'شهر' : 'أشهر'})
                             </span>
                           </div>
+                        ) : (
+                          <span className="text-xs text-slate-400 font-medium">لا يوجد</span>
                         )}
+                      </td>
 
-                        {isIncrement && (
-                          <div className="flex items-center gap-2">
-                            <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">
-                              علاوة سنوية
-                            </Badge>
-                            <span className="text-xs font-bold text-emerald-900">
-                              ← المرحلة {item.targetStep || item.target_step} (نفس الدرجة {item.currentGrade})
+                      {/* Penalties & Delay Impact */}
+                      <td className="p-3.5 text-center">
+                        {penCount > 0 ? (
+                          <div className="inline-flex flex-col items-center">
+                            <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-800 border border-rose-200 px-2.5 py-1 rounded-lg text-xs font-bold shadow-2xs">
+                              <AlertTriangle size={13} className="text-rose-600" />
+                              <span>{penCount} عقوبة</span>
+                            </span>
+                            <span className="text-[10px] font-bold text-rose-700 mt-0.5">
+                              (تأخير {penMonths} {penMonths === 1 ? 'شهر' : 'أشهر'})
                             </span>
                           </div>
-                        )}
-
-                        {isSettlement && (
-                          <div className="flex items-center gap-2">
-                            <Badge className="bg-amber-100 text-amber-900 border-amber-200">
-                              تسوية عجز الشهادة
-                            </Badge>
-                            <span className="text-xs font-semibold text-amber-900">
-                              تثبيت بالدرجة {item.currentGrade} دون تغيير
-                            </span>
-                          </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 bg-slate-50 text-slate-600 border border-slate-200 px-2 py-0.5 rounded text-[11px]">
+                            <CheckCircle2 size={12} className="text-emerald-500" />
+                            <span>سجل نظيف</span>
+                          </span>
                         )}
                       </td>
 
-                      <td className="p-4 font-mono text-xs font-bold text-slate-800">
-                        {item.dueDate || item.due_date}
+                      {/* Other Influencing Factors */}
+                      <td className="p-3.5">
+                        <div className="space-y-1 max-w-xs">
+                          {factorsList.slice(0, 2).map((factor, fIdx) => (
+                            <div key={fIdx} className="text-xs text-slate-700 flex items-start gap-1">
+                              <span className="text-[#C8960C] font-bold">•</span>
+                              <span className="line-clamp-1 text-[11px] font-medium" title={factor}>
+                                {factor}
+                              </span>
+                            </div>
+                          ))}
+                          {factorsList.length > 2 && (
+                            <button
+                              type="button"
+                              onClick={() => setDetailsModalItem(item)}
+                              className="text-[10px] text-blue-700 hover:underline font-bold"
+                            >
+                              + {factorsList.length - 2} مؤثرات إضافية...
+                            </button>
+                          )}
+                        </div>
                       </td>
 
-                      <td className="p-4">
-                        <div className="text-xs text-slate-600 max-w-xs truncate" title={(item.reasons || []).join(' | ')}>
-                          {(item.reasons || [])[0] || 'مستوفٍ للشروط'}
+                      {/* Actions */}
+                      <td className="p-3.5 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <Button
+                            size="sm"
+                            onClick={() => handleOpenSingleModal(item)}
+                            className="text-xs bg-[#1B3A6B] hover:bg-[#152e55] text-white px-3 py-1 rounded-lg font-semibold shadow-xs"
+                          >
+                            اعتماد فوري
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setDetailsModalItem(item)}
+                            className="text-xs text-slate-500 hover:text-slate-800 p-1.5 h-8 w-8 rounded-lg"
+                            title="عرض تفاصيل المحرك والمؤثرات"
+                          >
+                            <Info size={16} />
+                          </Button>
                         </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">
-                          {item.trackType || item.track_type}
-                        </div>
-                      </td>
-
-                      <td className="p-4 text-center">
-                        <Button
-                          size="sm"
-                          onClick={() => handleOpenSingleModal(item)}
-                          className="text-xs bg-[#1B3A6B] hover:bg-[#152e55] text-white px-3 py-1 rounded-lg"
-                        >
-                          اعتماد فوري
-                        </Button>
                       </td>
                     </tr>
                   );
@@ -619,7 +824,7 @@ export default function PromotionsDue() {
               <span>اعتماد استحقاقات الترقية والعلاوة</span>
             </DialogTitle>
             <DialogDescription className="text-slate-500 text-xs">
-              سيتم إنشاء سجلات رسمية معتمدة وتحديث البيانات الوظيفية وتثبيت تواريخ الاستحقاق المحسوبة.
+              سيتم إنشاء سجلات رسمية معتمدة وتحديث البيانات الوظيفية وتثبيت تواريخ الاستحقاق المحسوبة بدقة.
             </DialogDescription>
           </DialogHeader>
 
@@ -703,6 +908,166 @@ export default function PromotionsDue() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Detailed Influencers & Eligibility Inspector Modal */}
+      <Dialog open={Boolean(detailsModalItem)} onOpenChange={(open) => !open && setDetailsModalItem(null)}>
+        <DialogContent className="sm:max-w-2xl text-right max-h-[90vh] overflow-y-auto" dir="rtl">
+          {detailsModalItem && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="text-lg font-bold text-[#1B3A6B] flex items-center gap-2 border-b pb-3">
+                  <UserCheck className="text-[#C8960C]" size={22} />
+                  <span>تفاصيل ومؤثرات استحقاق الموظف: {detailsModalItem.name || detailsModalItem.fullName}</span>
+                </DialogTitle>
+                <DialogDescription className="text-slate-500 text-xs pt-1">
+                  عرض تحليلي شامل لكافة التواريخ وكتب الشكر والعقوبات والدورات والمؤثرات القانونية المحسوبة.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 my-2 text-xs">
+                {/* General Info Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">القسم / الدائرة</span>
+                    <span className="font-bold text-slate-800">{detailsModalItem.department || 'عام'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">العنوان الوظيفي الحالي</span>
+                    <span className="font-bold text-slate-800">{detailsModalItem.jobTitle || detailsModalItem.currentJobTitle || 'موظف'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">الدرجة / المرحلة الحالية</span>
+                    <span className="font-bold text-slate-800">الدرجة {detailsModalItem.currentGrade} / المرحلة {detailsModalItem.currentStep}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">الإجراء المستحق</span>
+                    <Badge className="text-[10px] bg-[#1B3A6B] text-white">
+                      {detailsModalItem.actionType || detailsModalItem.action_type || 'استحقاق'}
+                    </Badge>
+                  </div>
+                </div>
+
+                {/* Dates Timeline Card */}
+                <div className="bg-blue-50/60 border border-blue-200 p-4 rounded-xl space-y-3">
+                  <div className="font-bold text-blue-950 flex items-center gap-2">
+                    <Calendar size={16} className="text-blue-700" />
+                    <span>المحطة الزمنية والتواريخ المحسوبة:</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div className="bg-white p-3 rounded-lg border border-blue-100">
+                      <span className="text-slate-500 block text-[11px] mb-1">
+                        {detailsModalItem.actionType === 'ترفيع' ? 'تاريخ الترقية للعنوان الحالي:' : 'تاريخ منح العلاوة الحالية:'}
+                      </span>
+                      <span className="font-mono font-bold text-sm text-slate-800">
+                        {detailsModalItem.lastPromotionDate || detailsModalItem.lastIncrementDate || '—'}
+                      </span>
+                    </div>
+
+                    <div className="bg-white p-3 rounded-lg border border-blue-100">
+                      <span className="text-blue-800 block text-[11px] font-bold mb-1">
+                        {detailsModalItem.actionType === 'ترفيع' ? 'تاريخ الترقية للعنوان القادم:' : 'تاريخ استحقاق العلاوة القادمة:'}
+                      </span>
+                      <span className="font-mono font-bold text-sm text-[#1B3A6B]">
+                        {detailsModalItem.nextPromotionDueDate || detailsModalItem.nextIncrementDueDate || detailsModalItem.dueDate || '—'}
+                      </span>
+                    </div>
+                  </div>
+                  {(() => {
+                    const fromD = detailsModalItem.actionType === 'ترفيع' ? (detailsModalItem.lastPromotionDate || detailsModalItem.grade_date) : (detailsModalItem.lastIncrementDate || detailsModalItem.lastPromotionDate);
+                    const toD = detailsModalItem.nextPromotionDueDate || detailsModalItem.nextIncrementDueDate || detailsModalItem.dueDate;
+                    const diff = calculatePeriodDiff(fromD, toD);
+                    if (!diff) return null;
+                    return (
+                      <div className="text-xs text-blue-900 bg-white/80 border border-blue-100 rounded-lg p-2 flex items-center justify-between font-medium">
+                        <span>المدة المحسوبة بين الاستحقاقين (شاملة المؤثرات):</span>
+                        <span className="font-bold text-[#1B3A6B] font-mono">{diff}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Commendations & Penalties Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Commendations Impact Card */}
+                  <div className="bg-emerald-50/60 border border-emerald-200 p-3.5 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-emerald-900 flex items-center gap-1.5">
+                        <Sparkles size={15} className="text-emerald-700" />
+                        <span>كتب الشكر والتقدير</span>
+                      </span>
+                      <Badge className="bg-emerald-100 text-emerald-800 text-[10px]">
+                        {detailsModalItem.commendationsCount || 0} كتاب
+                      </Badge>
+                    </div>
+                    <p className="text-emerald-950 text-xs">
+                      <strong>الأثر على الاستحقاق: </strong>
+                      {detailsModalItem.commendationsCount > 0 
+                        ? `تقديم موعد الاستحقاق بمقدار (${detailsModalItem.commendationMonths || 0}) شهر`
+                        : 'لا يوجد تقديم (سجل بدون كتب شكر مستفاد منها)'}
+                    </p>
+                  </div>
+
+                  {/* Penalties Impact Card */}
+                  <div className="bg-rose-50/60 border border-rose-200 p-3.5 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-rose-900 flex items-center gap-1.5">
+                        <AlertTriangle size={15} className="text-rose-700" />
+                        <span>العقوبات الإدارية</span>
+                      </span>
+                      <Badge className={detailsModalItem.penaltiesCount > 0 ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-700'}>
+                        {detailsModalItem.penaltiesCount || 0} عقوبة
+                      </Badge>
+                    </div>
+                    <p className="text-rose-950 text-xs">
+                      <strong>الأثر على الاستحقاق: </strong>
+                      {detailsModalItem.penaltiesCount > 0 
+                        ? `تأخير موعد الاستحقاق بمقدار (${detailsModalItem.penaltyDelayMonths || 0}) شهر`
+                        : 'سجل نظيف لا يتضمن أي عقوبات مؤخرة'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Other Influencing Factors Card */}
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-2">
+                  <div className="font-bold text-slate-800 flex items-center gap-2">
+                    <Info size={16} className="text-[#C8960C]" />
+                    <span>المؤثرات الإضافية والضوابط القانونية:</span>
+                  </div>
+                  <ul className="space-y-1.5 pr-2">
+                    {(detailsModalItem.otherFactors || detailsModalItem.reasons || []).map((factor, idx) => (
+                      <li key={idx} className="flex items-center gap-2 text-slate-700">
+                        <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                        <span>{factor}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              <DialogFooter className="flex gap-2 justify-end pt-2 border-t mt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDetailsModalItem(null)}
+                >
+                  إغلاق
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    const item = detailsModalItem;
+                    setDetailsModalItem(null);
+                    handleOpenSingleModal(item);
+                  }}
+                  className="bg-[#1B3A6B] hover:bg-[#152e55] text-white"
+                >
+                  اعتماد المعاملة الآن
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

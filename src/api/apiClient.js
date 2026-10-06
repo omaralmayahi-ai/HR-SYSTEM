@@ -1,6 +1,11 @@
 // src/api/apiClient.js
 
 // Request helper to handle automatic bearer tokens and json content type
+// مهلة قصوى لأي طلب API (مضافة 31-08-2026): طلب متوقف بلا استجابة (hang) في الخادم كان
+// يُجمِّد صفحات كاملة إلى الأبد رغم وجود .catch(() => []) لدى المستدعي، لأن fetch بلا AbortController
+// لا يرفض (reject) أبداً إن لم يستجب الخادم إطلاقاً - فقط يرفض عند خطأ فعلي أو استجابة غير ناجحة.
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+
 export async function request(path, options = {}) {
   const token = localStorage.getItem('hr_session_token');
   const headers = {
@@ -8,12 +13,26 @@ export async function request(path, options = {}) {
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     ...(options.headers || {})
   };
-  
-  const response = await fetch(path, {
-    ...options,
-    headers
-  });
-  
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_REQUEST_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers,
+      signal: options.signal || controller.signal
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`انتهت مهلة الاتصال بالخادم لهذا الطلب (${path}) - الخادم لم يستجب خلال الوقت المحدد`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
   const text = await response.text();
   let data = null;
 
@@ -192,6 +211,8 @@ export const apiClient = {
     LeaveType: createEntityClient('leave-types'),
     WorkLocation: createEntityClient('work-locations'),
     EducationDegree: createEntityClient('education-degrees'),
+    ServiceType: createEntityClient('service-types'),
+    EmployeeStatus: createEntityClient('employee-statuses'),
     ResponsibilityAllowance: createEntityClient('responsibility-allowances'),
     ShiftSystem: createEntityClient('shift-systems'),
     ServiceRecord: createEntityClient('service-records'),
@@ -226,6 +247,11 @@ export const apiClient = {
       method: 'POST',
       body: JSON.stringify(data)
     })
+  },
+  archive: {
+    list: async (entityType) => request(entityType ? `/api/archive?entity_type=${encodeURIComponent(entityType)}` : '/api/archive'),
+    restore: async (id) => request(`/api/archive/${id}/restore`, { method: 'POST' }),
+    permanentDelete: async (id) => request(`/api/archive/${id}`, { method: 'DELETE' })
   },
   leaveAccrual: {
     getStatus: async () => request('/api/leave-accrual/status'),

@@ -53,7 +53,6 @@ export default function ResponsibilitySettings() {
       
       // Update local storage for immediate consumption in salary calculations
       localStorage.setItem('RESPONSIBILITY_ALLOWANCES_PRESETS', JSON.stringify(sortedData));
-      notifySettingsChanged('responsibility_allowances', sortedData);
     } catch (error) {
       toast({
         title: 'خطأ في جلب البيانات',
@@ -129,6 +128,7 @@ export default function ResponsibilitySettings() {
       setNewAllowanceRate(0);
       setAdding(false);
       fetchRecords();
+      notifySettingsChanged('responsibility_allowances');
 
       // Log action
       await apiClient.logs.create({
@@ -173,6 +173,7 @@ export default function ResponsibilitySettings() {
       });
       setEditingId(null);
       fetchRecords();
+      notifySettingsChanged('responsibility_allowances');
 
       // Log action
       await apiClient.logs.create({
@@ -203,6 +204,7 @@ export default function ResponsibilitySettings() {
         variant: 'success',
       });
       fetchRecords();
+      notifySettingsChanged('responsibility_allowances');
 
       // Log action
       await apiClient.logs.create({
@@ -221,13 +223,17 @@ export default function ResponsibilitySettings() {
   return (
     <div className="space-y-6">
       {/* Upper header with info */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-            <ShieldAlert className="text-[#1B3A6B]" size={22} />
-            إعدادات مخصصات المسؤولية والمنصب الوظيفي
-          </h2>
-          <p className="text-xs text-slate-500 mt-1">
+          <div className="flex items-center gap-2.5 mb-1">
+            <div className="p-2 rounded-xl bg-[#1B3A6B]/10 text-[#1B3A6B]">
+              <ShieldAlert size={22} />
+            </div>
+            <h2 className="text-xl font-bold text-[#1B3A6B]">
+              مخصصات المسؤولية والمنصب
+            </h2>
+          </div>
+          <p className="text-xs text-slate-500 font-medium leading-relaxed">
             تعريف المسميات الوظيفية للمسؤولية والمناصب القيادية وتحديد النسبة المئوية المخصصة لكل منها من الراتب الاسمي.
           </p>
         </div>
@@ -435,7 +441,7 @@ export default function ResponsibilitySettings() {
       </div>
 
       {deleteConfirm.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-xl overflow-hidden animate-scale-up">
             <div className="p-6 text-center space-y-4">
               <div className="mx-auto w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center">

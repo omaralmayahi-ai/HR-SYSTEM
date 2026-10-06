@@ -199,6 +199,8 @@ export interface EngineContextData {
   degreeTrackSnapshot?: any;
   degreeTrackSnapshots?: any[];
   specializationCredits?: any[];
+  gradeRequirements?: Record<string, any[]>;
+  trainingCourses?: any[];
   today?: string; // YYYY-MM-DD for deterministic testing
 }
 
@@ -446,7 +448,11 @@ export function checkGateConditions(
   let governingCoursesSatisfied = true;
   const missingGoverningCourses: string[] = [];
 
-  if (empAssignment && (empAssignment.status === 'معفى_كامل' || empAssignment.status === 'معفى' || empAssignment.status === 'مستوفي' || empAssignment.status === 'ناجح')) {
+  // Check degree qualification exemption: Higher degrees and Intermediate & below are exempt
+  const eduLevel = String(employee.education_level || employee.educationLevel || employee.qualification || '').trim();
+  const isExemptByDegree = ['دكتوراه', 'ماجستير', 'دبلوم عالي', 'متوسطة', 'متوسطة فما دون', 'ابتدائية', 'بدون مؤهل', 'يقرأ ويكتب', 'امي', 'أمي'].some(lvl => eduLevel.includes(lvl));
+
+  if (isExemptByDegree || (empAssignment && (empAssignment.status === 'معفى_كامل' || empAssignment.status === 'معفى' || empAssignment.status === 'مستوفي' || empAssignment.status === 'ناجح'))) {
     governingCoursesSatisfied = true;
   } else if (governingCourses.length > 0) {
     const progress = empAssignment?.courseProgress || {};
@@ -458,6 +464,29 @@ export function checkGateConditions(
       if (!isDone) {
         governingCoursesSatisfied = false;
         missingGoverningCourses.push(cName);
+      }
+    });
+  } else if (context.gradeRequirements && context.gradeRequirements[String(gradeNum)]) {
+    const reqs = context.gradeRequirements[String(gradeNum)] || [];
+    const passedCourses = (context.trainingCourses || []).filter(
+      (c: any) => (String(c.employeeId || c.employee_id || '') === String(employee.id)) &&
+        (c.result === 'اجتاز' || c.result === 'ناجح' || c.result === 'معفى' || c.completed === true || c.isPassed === true)
+    );
+
+    reqs.forEach((req: any) => {
+      if (req.mandatory === false || req.isMandatory === false) return;
+      const rCat = String(req.category || '').trim().toLowerCase();
+      const matched = passedCourses.filter((c: any) => {
+        const cCat = String(c.category || '').trim().toLowerCase();
+        const cName = String(c.courseName || c.course_name || '').trim().toLowerCase();
+        return (cCat && (cCat.includes(rCat) || rCat.includes(cCat))) || (cName && (cName.includes(rCat) || rCat.includes(cName)));
+      });
+      const totalDays = matched.reduce((sum: number, c: any) => sum + (parseInt(c.days || c.duration_days) || 5), 0);
+      const reqDays = parseInt(req.requiredDays) || 5;
+      if (totalDays < reqDays) {
+        governingCoursesSatisfied = false;
+        const rem = reqDays - totalDays;
+        missingGoverningCourses.push(`${req.category} (متبقي ${rem} يوم)`);
       }
     });
   }
@@ -520,7 +549,10 @@ export function checkGateConditions(
 
   leaves.forEach(lv => {
     const adminEffect = lv.administrativeEffect || lv.administrative_effect || '';
-    const isPausing = adminEffect === 'يوقف_الترفيع' || adminEffect === 'pause_promotion';
+    const isPausing = Boolean(lv.affectsPromotion ?? lv.affects_promotion) || 
+                      adminEffect === 'يوقف_الترفيع' || 
+                      adminEffect === 'pause_promotion' || 
+                      adminEffect.includes('الترفيع');
     if (!isPausing) return;
     const sDate = lv.startDate || lv.start_date || '';
     const eDate = lv.endDate || lv.end_date || '';
@@ -772,7 +804,13 @@ export function calculateIncrementEligibility(
   let pausingLeaveTitle = '';
   leaves.forEach(lv => {
     const adminEffect = lv.administrativeEffect || lv.administrative_effect || '';
-    const isPausing = adminEffect === 'يوقف_الترفيع' || adminEffect === 'pause_promotion' || adminEffect === 'يوقف_العلاوة_والترفيع';
+    const isPausing = Boolean(lv.affectsIncrement ?? lv.affects_increment) ||
+                      Boolean(lv.affectsPromotion ?? lv.affects_promotion) ||
+                      adminEffect === 'يوقف_الترفيع' || 
+                      adminEffect === 'pause_promotion' || 
+                      adminEffect === 'يوقف_العلاوة_والترفيع' ||
+                      adminEffect.includes('العلاوة') ||
+                      adminEffect.includes('الترفيع');
     if (!isPausing) return;
     const sDate = lv.startDate || lv.start_date || '';
     const eDate = lv.endDate || lv.end_date || '';

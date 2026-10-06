@@ -343,7 +343,7 @@ export default function CompletedEvaluationsTab({
 
       {/* Detail Preview Modal */}
       {selectedEvaluationDetail && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 pointer-events-auto z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 overflow-y-auto max-h-[85vh] space-y-4" dir="rtl">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-black text-sm text-slate-900">

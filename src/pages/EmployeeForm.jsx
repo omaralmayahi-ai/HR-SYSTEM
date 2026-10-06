@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiClient } from '@/api/apiClient';
 import { fetchEducationDegreesSorted, fetchResponsibilityAllowancesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
@@ -12,13 +12,18 @@ import {
   ArrowRight, Save, User, Briefcase, GraduationCap, 
   ChevronDown, ChevronRight, Search, X, Camera, Trash2, 
   Upload, AlertTriangle, Clock, ClipboardList, ShieldCheck, Sparkles,
-  Plus
+  Plus, Check
 } from 'lucide-react';
 import { getGradeLabel } from '@/lib/salaryTable';
 import { isSupervisoryPosition } from '@/lib/evaluationEngine';
 
 const GRADES = [1,2,3,4,5,6,7,8,9,10,11,12,13];
 const STEPS = [1,2,3,4,5,6,7,8,9,10,11];
+const ORG_UNIT_TYPES = ['مدير عام', 'معاون مدير عام', 'هيئة', 'قسم مركزي', 'قسم', 'شعبة', 'وحدة'];
+
+// القيمة الرمزية التي تُستخدم لتمييز الحقول التي لا تتوفر بياناتها الآن وستُسجَّل لاحقاً،
+// مع إبقاء الحقل "إلزامياً" شكلياً (غير فارغ) وقابلاً للبحث عنه لاحقاً كسجل بيانات غير مكتملة.
+export const PENDING_VALUE = 'سيتم تسجيله لاحقاً';
 
 const STANDARD_JOB_TITLES = [
   "مهندس", "مهندس أقدم", "معاون مهندس", "رئيس مهندسين", "رئيس مهندسين أقدم",
@@ -44,11 +49,76 @@ const normalizeArabic = (text) => {
     .toLowerCase();
 };
 
+// مكوّن قائمة منسدلة قابلة للتوسيع من قبل المستخدم (إضافة قيمة جديدة) مع منع التكرار.
+// يُستخدم لكل من "نوع الخدمة" و"حالة الموظف" و"موقع العمل في الشركة".
+function EditableSelect({ label, required, value, options, onChange, onAddOption, addPlaceholder, toast, triggerClassName }) {
+  const [adding, setAdding] = useState(false);
+  const [newValue, setNewValue] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleConfirmAdd = async () => {
+    const name = newValue.trim();
+    if (!name) return;
+    if (options.some(o => String(o).trim().toLowerCase() === name.toLowerCase())) {
+      toast({ title: 'تنبيه تكرار', description: `"${name}" موجود بالفعل في القائمة`, variant: 'destructive' });
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await onAddOption(name);
+      onChange(name);
+      setNewValue('');
+      setAdding(false);
+    } catch (err) {
+      toast({ title: 'خطأ', description: err.message || 'تعذرت إضافة القيمة الجديدة', variant: 'destructive' });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div>
+      <Label>{label}{required ? ' *' : ''}</Label>
+      <Select value={value} onValueChange={(v) => {
+        if (v === '__add_new__') { setAdding(true); return; }
+        onChange(v);
+      }}>
+        <SelectTrigger className={triggerClassName || "mt-1 rounded-xl"}><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {options.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+          <SelectItem value="__add_new__" className="text-blue-700 font-bold">
+            <span className="flex items-center gap-1"><Plus size={12} /> إضافة قيمة جديدة...</span>
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      {adding && (
+        <div className="flex items-center gap-1.5 mt-1.5 bg-blue-50/60 border border-blue-200 rounded-xl p-1.5">
+          <Input
+            autoFocus
+            className="h-8 rounded-lg text-xs bg-white"
+            placeholder={addPlaceholder || 'اكتب القيمة الجديدة'}
+            value={newValue}
+            onChange={e => setNewValue(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleConfirmAdd(); } }}
+          />
+          <Button type="button" size="sm" disabled={submitting} className="h-8 px-2 bg-[#1B3A6B] hover:bg-[#152d54]" onClick={handleConfirmAdd}>
+            <Check size={14} />
+          </Button>
+          <Button type="button" size="sm" variant="outline" className="h-8 px-2" onClick={() => { setAdding(false); setNewValue(''); }}>
+            <X size={14} />
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function EmployeeForm() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
   const isEdit = !!id;
+  const isMountedRef = useRef(true);
 
   const [form, setForm] = useState({
     first_name: '', father_name: '', grandfather_name: '', great_grandfather_name: '',
@@ -59,7 +129,7 @@ export default function EmployeeForm() {
     residence_card: '', ration_card: '', nationality_cert: '', address: '', phone: '', email: '',
     appointment_date: '', first_appointment_date: '', current_appointment_date: '', oil_sector_start_date: '', appointment_order: '', job_title: '', department: '', section: '',
     service_record_number: '', employee_id_number: '', employee_number: '',
-    service_type: 'دائم', grade: 1, step: 1, grade_date: '', status: 'مستمر',
+    service_type: 'دائم', grade: 1, step: 1, grade_date: '', last_promotion_date: '', last_increment_date: '', status: 'مستمر',
     status_order_number: '', status_order_date: '', status_notes: '',
     work_nature: 'مكتبي',
     work_shift_type: 'صباحي',
@@ -80,6 +150,8 @@ export default function EmployeeForm() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [workLocations, setWorkLocations] = useState([]);
+  const [serviceTypeOptions, setServiceTypeOptions] = useState(['دائم', 'عقد', 'أجر يومي']);
+  const [statusOptions, setStatusOptions] = useState(['مستمر', 'منسب', 'مجاز', 'متقاعد', 'مستقيل', 'موقوف']);
   const [educationDegrees, setEducationDegrees] = useState([]);
   const [responsibilityAllowances, setResponsibilityAllowances] = useState([]);
   const [shiftSystems, setShiftSystems] = useState([]);
@@ -89,54 +161,67 @@ export default function EmployeeForm() {
   const [spouses, setSpouses] = useState([{ id: 1, name: '' }]);
   const [childrenDetails, setChildrenDetails] = useState([]);
 
-  const loadSystemSettingsData = () => {
-    apiClient.entities.WorkLocation.list().then(data => {
-      setWorkLocations(data || []);
-    }).catch(err => {
-      console.error('Error fetching work locations:', err);
-    });
+  const loadSystemSettingsData = async () => {
+    try {
+      const [wLocs, eduDegs, respAlls, shifts, jobTitles, svcTypes, empStatuses] = await Promise.allSettled([
+        apiClient.entities.WorkLocation.list(),
+        fetchEducationDegreesSorted(),
+        fetchResponsibilityAllowancesSorted(),
+        apiClient.entities.ShiftSystem.list(),
+        apiClient.entities.JobTitle.list(),
+        apiClient.entities.ServiceType.list(),
+        apiClient.entities.EmployeeStatus.list()
+      ]);
 
-    fetchEducationDegreesSorted().then(data => {
-      setEducationDegrees(data || []);
-    }).catch(err => {
-      console.error('Error fetching education degrees:', err);
-    });
+      if (!isMountedRef.current) return;
 
-    fetchResponsibilityAllowancesSorted().then(data => {
-      setResponsibilityAllowances(data || []);
-    }).catch(err => {
-      console.error('Error fetching responsibility allowances:', err);
-    });
-
-    apiClient.entities.ShiftSystem.list().then(data => {
-      setShiftSystems(data || []);
-    }).catch(err => {
-      console.error('Error fetching shift systems:', err);
-    });
-
-    apiClient.entities.JobTitle.list().then(data => {
-      if (Array.isArray(data) && data.length > 0) {
-        const activeOnly = data.filter(t => t.status === 'فعال' || !t.status || t.status !== 'معطل');
+      if (wLocs.status === 'fulfilled' && wLocs.value) {
+        setWorkLocations(wLocs.value);
+      }
+      if (svcTypes.status === 'fulfilled' && Array.isArray(svcTypes.value) && svcTypes.value.length > 0) {
+        const names = svcTypes.value.map(r => r.name).filter(Boolean);
+        setServiceTypeOptions(Array.from(new Set(names)));
+      }
+      if (empStatuses.status === 'fulfilled' && Array.isArray(empStatuses.value) && empStatuses.value.length > 0) {
+        const names = empStatuses.value.map(r => r.name).filter(Boolean);
+        setStatusOptions(Array.from(new Set(names)));
+      }
+      if (eduDegs.status === 'fulfilled' && eduDegs.value) {
+        setEducationDegrees(eduDegs.value);
+      }
+      if (respAlls.status === 'fulfilled' && respAlls.value) {
+        setResponsibilityAllowances(respAlls.value);
+      }
+      if (shifts.status === 'fulfilled' && shifts.value) {
+        setShiftSystems(shifts.value);
+      }
+      if (jobTitles.status === 'fulfilled' && Array.isArray(jobTitles.value) && jobTitles.value.length > 0) {
+        const activeOnly = jobTitles.value.filter(t => t.status === 'فعال' || !t.status || t.status !== 'معطل');
         setJobTitlesObjects(activeOnly);
         const activeNames = activeOnly.map(t => t.name).filter(Boolean);
         setAllJobTitles(Array.from(new Set(activeNames)).sort());
       } else {
         setAllJobTitles(STANDARD_JOB_TITLES);
       }
-    }).catch(err => {
-      console.error('Error fetching job titles entity:', err);
-      setAllJobTitles(STANDARD_JOB_TITLES);
-    });
+    } catch (err) {
+      console.warn('Error loading system settings in EmployeeForm:', err);
+    }
   };
 
   useEffect(() => {
+    isMountedRef.current = true;
     loadSystemSettingsData();
 
     const unsubscribe = subscribeToSettingsUpdates(() => {
-      loadSystemSettingsData();
+      if (isMountedRef.current) {
+        loadSystemSettingsData();
+      }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMountedRef.current = false;
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -161,6 +246,9 @@ export default function EmployeeForm() {
             merged.university = data.university || data.institution || merged.university || '';
             merged.graduation_year = data.graduation_year || data.graduationYear || merged.graduation_year || '';
             merged.education_order = data.education_order || data.evaluation_order || data.educationOrder || data.evaluationOrder || merged.education_order || '';
+            merged.last_increment_date = data.last_increment_date || data.lastIncrementDate || data.grade_date || data.gradeDate || data.appointment_date || data.appointmentDate || '';
+            merged.last_promotion_date = data.last_promotion_date || data.lastPromotionDate || data.grade_date || data.gradeDate || data.appointment_date || data.appointmentDate || '';
+            merged.grade_date = data.grade_date || data.gradeDate || data.last_promotion_date || data.lastPromotionDate || '';
 
             // Parse loaded Spouses
             let loadedSpouses = [];
@@ -293,9 +381,67 @@ export default function EmployeeForm() {
     }
   };
 
+  // التقاط صورة الموظف مباشرة عبر كاميرا الجهاز (بديل عن رفع صورة من الملفات)
+  const [showCameraCapture, setShowCameraCapture] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const videoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+
+  const openCameraCapture = async () => {
+    setCameraError('');
+    setShowCameraCapture(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      cameraStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+    } catch (err) {
+      setCameraError('تعذر الوصول إلى كاميرا الجهاز. يرجى التأكد من منح الإذن اللازم للمتصفح، أو استخدام خيار "تحميل صورة" بدلاً من ذلك.');
+    }
+  };
+
+  const closeCameraCapture = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      cameraStreamRef.current = null;
+    }
+    setShowCameraCapture(false);
+    setCameraError('');
+  };
+
+  const captureFromCamera = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 480;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    set('photo', dataUrl);
+    closeCameraCapture();
+    toast({ title: 'تم التقاط الصورة', description: 'تم تعيين الصورة الملتقطة كصورة شخصية للموظف' });
+  };
+
+  // إيقاف الكاميرا تلقائياً عند مغادرة الصفحة (إن كانت لا تزال مفعّلة)
+  useEffect(() => {
+    return () => {
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
   // State for Org Unit Picker Modal
   const [showOrgPicker, setShowOrgPicker] = useState(false);
   const [orgUnits, setOrgUnits] = useState([]);
+  const [showAddOrgUnit, setShowAddOrgUnit] = useState(false);
+  const [newOrgUnitName, setNewOrgUnitName] = useState('');
+  const [newOrgUnitType, setNewOrgUnitType] = useState('قسم');
+  const [newOrgUnitParentId, setNewOrgUnitParentId] = useState('');
+  const [addingOrgUnit, setAddingOrgUnit] = useState(false);
   const [orgLoading, setOrgLoading] = useState(false);
   const [orgSearch, setOrgSearch] = useState('');
   const [expandedPickerIds, setExpandedPickerIds] = useState(new Set());
@@ -346,12 +492,94 @@ export default function EmployeeForm() {
     setShowOrgPicker(false);
   };
 
+  const handleAddOrgUnit = async () => {
+    const name = newOrgUnitName.trim();
+    if (!name) {
+      toast({ title: 'تنبيه', description: 'يرجى إدخال اسم جهة العمل', variant: 'destructive' });
+      return;
+    }
+    const parentId = newOrgUnitParentId ? parseInt(newOrgUnitParentId) : null;
+    // منع التكرار على مستوى الواجهة أيضاً (ضمن نفس الجهة الأعلى)، بالإضافة إلى الفحص في الخادم
+    const duplicate = orgUnits.find(u => {
+      const uPid = u.parentId !== undefined && u.parentId !== null ? u.parentId : (u.parent_id ?? null);
+      const samePid = (uPid === null && parentId === null) || (uPid !== null && parentId !== null && parseInt(String(uPid)) === parentId);
+      return samePid && String(u.name || '').trim().toLowerCase() === name.toLowerCase();
+    });
+    if (duplicate) {
+      toast({ title: 'تنبيه تكرار', description: `"${name}" موجودة بالفعل ضمن نفس الجهة الأعلى`, variant: 'destructive' });
+      return;
+    }
+    setAddingOrgUnit(true);
+    try {
+      const created = await apiClient.entities.OrgUnit.create({ name, type: newOrgUnitType, parentId });
+      const updatedUnits = await apiClient.entities.OrgUnit.list();
+      setOrgUnits(updatedUnits || []);
+      if (parentId) {
+        setExpandedPickerIds(prev => { const next = new Set(prev); next.add(parentId); return next; });
+      }
+      setNewOrgUnitName('');
+      setNewOrgUnitType('قسم');
+      setNewOrgUnitParentId('');
+      setShowAddOrgUnit(false);
+      toast({ title: 'تمت الإضافة', description: `تمت إضافة "${created.name}" إلى الهيكل التنظيمي` });
+    } catch (err) {
+      toast({ title: 'خطأ', description: err.message || 'تعذرت إضافة جهة العمل', variant: 'destructive' });
+    } finally {
+      setAddingOrgUnit(false);
+    }
+  };
+
+  const LETTER_EXEMPT_SERVICE_TYPES = ['عقد', 'أجر يومي'];
+
+  const validateCompanyNumber = (companyNumber, serviceType) => {
+    const value = (companyNumber || '').toString().trim();
+    if (!value) {
+      return 'رقم الشركة إلزامي ولا يمكن ترك الحقل فارغاً';
+    }
+    if (LETTER_EXEMPT_SERVICE_TYPES.includes(serviceType)) {
+      if (!/^[A-Za-z0-9ء-ي\-\/]{3,20}$/.test(value)) {
+        return 'رقم الشركة لموظفي العقد/الأجر اليومي يجب أن يتكون من 3 إلى 20 محرفاً (حروف أو أرقام)';
+      }
+      return null;
+    }
+    if (!/^\d{6}$/.test(value)) {
+      return 'رقم الشركة يجب أن يتكون من 6 أرقام بالضبط (يُسمح بالحروف فقط لموظفي العقد أو الأجر اليومي)';
+    }
+    return null;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
-      if (form.service_record_number) {
-        const allEmployees = await apiClient.entities.Employee.list();
+      const companyNumberError = validateCompanyNumber(form.company_number, form.service_type);
+      if (companyNumberError) {
+        toast({
+          title: 'خطأ في رقم الشركة',
+          description: companyNumberError,
+          variant: 'destructive'
+        });
+        setSaving(false);
+        return;
+      }
+
+      const allEmployees = await apiClient.entities.Employee.list();
+
+      const duplicateCompanyNumber = allEmployees.find(emp =>
+        (emp.company_number || '').toString().trim() === form.company_number.toString().trim() &&
+        String(emp.id) !== String(id || '')
+      );
+      if (duplicateCompanyNumber) {
+        toast({
+          title: 'تنبيه تكرار رقم الشركة',
+          description: `رقم الشركة (${form.company_number}) مستخدم بالفعل من قبل موظف آخر`,
+          variant: 'destructive'
+        });
+        setSaving(false);
+        return;
+      }
+
+      if (form.service_record_number && form.service_record_number !== PENDING_VALUE) {
         const duplicate = allEmployees.find(emp => 
           emp.service_record_number === form.service_record_number && 
           String(emp.id) !== String(id || '')
@@ -360,6 +588,23 @@ export default function EmployeeForm() {
           toast({
             title: 'تنبيه تكرار رقم الإضبارة',
             description: 'رقم اضبارة الموظف يجب أن يكون فريداً ولا يتكرر لموظف آخر!',
+            variant: 'destructive'
+          });
+          setSaving(false);
+          return;
+        }
+      }
+
+      // الرقم الوظيفي (رقم وزارة التخطيط): رقم فريد أيضاً، لكن يُسمح بتجاوز الفحص إن كانت قيمته PENDING_VALUE
+      if (form.civil_service_number && form.civil_service_number !== PENDING_VALUE) {
+        const duplicateCivilServiceNumber = allEmployees.find(emp =>
+          (emp.civil_service_number || '').toString().trim() === form.civil_service_number.toString().trim() &&
+          String(emp.id) !== String(id || '')
+        );
+        if (duplicateCivilServiceNumber) {
+          toast({
+            title: 'تنبيه تكرار الرقم الوظيفي',
+            description: `الرقم الوظيفي (${form.civil_service_number}) مستخدم بالفعل من قبل موظف آخر`,
             variant: 'destructive'
           });
           setSaving(false);
@@ -385,6 +630,12 @@ export default function EmployeeForm() {
         childrenDetails: JSON.stringify(cleanChildren),
         children_count: parseInt(form.children_count) || 0,
         childrenCount: parseInt(form.children_count) || 0,
+        grade_date: form.grade_date || form.last_promotion_date || '',
+        gradeDate: form.grade_date || form.last_promotion_date || '',
+        last_promotion_date: form.last_promotion_date || form.grade_date || '',
+        lastPromotionDate: form.last_promotion_date || form.grade_date || '',
+        last_increment_date: form.last_increment_date || form.grade_date || '',
+        lastIncrementDate: form.last_increment_date || form.grade_date || '',
         education_order: form.education_order || form.evaluation_order || '',
         evaluation_order: form.education_order || form.evaluation_order || '',
         educationOrder: form.education_order || form.evaluation_order || '',
@@ -419,13 +670,16 @@ export default function EmployeeForm() {
   );
 
   const defaultResponsibilities = ['بلا مسؤولية', 'مسؤول وجبة', 'مسؤول وحدة', 'مسؤول شعبة', 'مدير قسم', 'مدير قسم مركزي', 'مدير هيئة', 'معاون مدير عام', 'مدير عام'];
-  const primaryResponsibilityOptions = responsibilityAllowances.length > 0
-    ? responsibilityAllowances.map(r => r.name)
-    : defaultResponsibilities;
-
-  const hasNoResponsibility = primaryResponsibilityOptions.includes('بلا مسؤولية');
-  const finalPrimaryOptions = hasNoResponsibility ? primaryResponsibilityOptions : ['بلا مسؤولية', ...primaryResponsibilityOptions];
-  const actingResponsibilityOptions = ['بلا وكالة', ...finalPrimaryOptions.filter(r => r !== 'بلا مسؤولية' && r !== 'بلا وكالة')];
+  const rawResponsibilities = (responsibilityAllowances || []).map(r => r?.name).filter(Boolean);
+  const responsibilityList = rawResponsibilities.length > 0 ? rawResponsibilities : defaultResponsibilities;
+  const combinedResponsibilities = Array.from(new Set([
+    'بلا مسؤولية',
+    ...responsibilityList,
+    form.primary_responsibility,
+    form.acting_responsibility
+  ].filter(Boolean)));
+  const finalPrimaryOptions = combinedResponsibilities.filter(r => r !== 'بلا وكالة');
+  const actingResponsibilityOptions = ['بلا وكالة', ...combinedResponsibilities.filter(r => r !== 'بلا مسؤولية' && r !== 'بلا وكالة')];
 
   return (
     <div className="space-y-5" dir="rtl">
@@ -499,15 +753,6 @@ export default function EmployeeForm() {
                     {[form.first_name, form.father_name, form.grandfather_name, form.great_grandfather_name, form.surname].filter(Boolean).join(' ') || 'لم يتم إدخال الاسم بعد'}
                   </span>
                 </div>
-                <div>
-                  <Label>الرقم الوظيفي (رقم وزارة التخطيط) *</Label>
-                  <Input className="mt-1 rounded-xl" value={form.civil_service_number || ''} onChange={e => set('civil_service_number', e.target.value)} required placeholder="الرقم الوظيفي الموحد" />
-                </div>
-                <div>
-                  <Label>رقم الشركة (رقم فريد للموظف) *</Label>
-                  <Input className="mt-1 rounded-xl" value={form.company_number || ''} onChange={e => set('company_number', e.target.value)} required placeholder="رقم فريد ضمن الشركة" />
-                </div>
-
                 {/* 2. المعلومات الحيوية والاجتماعية */}
                 <div className="col-span-full pt-2 pb-2 border-b border-slate-100 flex items-center gap-2">
                   <span className="w-1.5 h-4 bg-[#1B3A6B] rounded-full" />
@@ -526,15 +771,15 @@ export default function EmployeeForm() {
                   <Input type="date" className="mt-1 rounded-xl" value={form.birth_date || ''} onChange={e => set('birth_date', e.target.value)} required />
                 </div>
                 <div>
-                  <Label>محل الميلاد</Label>
-                  <Input className="mt-1 rounded-xl" value={form.birth_place || ''} onChange={e => set('birth_place', e.target.value)} />
+                  <Label>محل الميلاد *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.birth_place || ''} onChange={e => set('birth_place', e.target.value)} required />
                 </div>
                 <div>
-                  <Label>الجنسية</Label>
-                  <Input className="mt-1 rounded-xl" value={form.nationality || ''} onChange={e => set('nationality', e.target.value)} />
+                  <Label>الجنسية *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.nationality || ''} onChange={e => set('nationality', e.target.value)} required />
                 </div>
                 <div>
-                  <Label>القومية</Label>
+                  <Label>القومية *</Label>
                   <Select value={form.ethnicity || 'عربي/ة'} onValueChange={v => set('ethnicity', v)}>
                     <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -552,7 +797,7 @@ export default function EmployeeForm() {
                   </Select>
                 </div>
                 <div>
-                  <Label>فصيلة الدم</Label>
+                  <Label>فصيلة الدم *</Label>
                   <Select value={form.blood_type || 'غير معروف'} onValueChange={v => set('blood_type', v)}>
                     <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -578,7 +823,7 @@ export default function EmployeeForm() {
                   </Select>
                 </div>
                 <div>
-                  <Label>عدد الأولاد المعالين</Label>
+                  <Label>عدد الأولاد المعالين *</Label>
                   <Input 
                     type="number" 
                     min={0} 
@@ -586,6 +831,7 @@ export default function EmployeeForm() {
                     className="mt-1 rounded-xl" 
                     value={form.children_count || 0} 
                     onChange={e => handleChildrenCountChange(e.target.value)} 
+                    required
                   />
                 </div>
 
@@ -636,6 +882,7 @@ export default function EmployeeForm() {
                             placeholder="الاسم الرباعي واللقب للزوجة"
                             value={spouse.name || ''}
                             onChange={e => updateSpouse(idx, e.target.value)}
+                            required
                           />
                         </div>
                       ))}
@@ -681,12 +928,13 @@ export default function EmployeeForm() {
                               placeholder="مثال: علي عمر محمود"
                               value={child.name || ''}
                               onChange={e => updateChild(idx, 'name', e.target.value)}
+                              required
                             />
                           </div>
 
                           <div className="grid grid-cols-2 gap-2">
                             <div>
-                              <Label className="text-xs text-slate-600">الجنس</Label>
+                              <Label className="text-xs text-slate-600">الجنس *</Label>
                               <Select
                                 value={child.gender || 'ذكر'}
                                 onValueChange={v => updateChild(idx, 'gender', v)}
@@ -702,12 +950,13 @@ export default function EmployeeForm() {
                             </div>
 
                             <div>
-                              <Label className="text-xs text-slate-600">تاريخ الميلاد</Label>
+                              <Label className="text-xs text-slate-600">تاريخ الميلاد *</Label>
                               <Input
                                 type="date"
                                 className="mt-1 rounded-xl text-xs bg-slate-50/50 h-9"
                                 value={child.birth_date || ''}
                                 onChange={e => updateChild(idx, 'birth_date', e.target.value)}
+                                required
                               />
                             </div>
                           </div>
@@ -725,19 +974,39 @@ export default function EmployeeForm() {
 
                 <div>
                   <Label>رقم البطاقة الوطنية / الهوية *</Label>
-                  <Input className="mt-1 rounded-xl" value={form.national_id || ''} onChange={e => set('national_id', e.target.value)} required />
+                  <div className="flex items-center gap-1.5">
+                    <Input className="mt-1 rounded-xl" value={form.national_id || ''} onChange={e => set('national_id', e.target.value)} required disabled={form.national_id === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.national_id === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('national_id', form.national_id === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.national_id === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
                 </div>
                 <div>
-                  <Label>رقم بطاقة السكن</Label>
-                  <Input className="mt-1 rounded-xl" value={form.residence_card || ''} onChange={e => set('residence_card', e.target.value)} />
+                  <Label>رقم بطاقة السكن *</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Input className="mt-1 rounded-xl" value={form.residence_card || ''} onChange={e => set('residence_card', e.target.value)} required disabled={form.residence_card === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.residence_card === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('residence_card', form.residence_card === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.residence_card === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
                 </div>
                 <div>
-                  <Label>البطاقة التموينية</Label>
-                  <Input className="mt-1 rounded-xl" value={form.ration_card || ''} onChange={e => set('ration_card', e.target.value)} placeholder="رقم البطاقة التموينية" />
+                  <Label>البطاقة التموينية *</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Input className="mt-1 rounded-xl" value={form.ration_card || ''} onChange={e => set('ration_card', e.target.value)} placeholder="رقم البطاقة التموينية" required disabled={form.ration_card === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.ration_card === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('ration_card', form.ration_card === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.ration_card === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
                 </div>
                 <div>
-                  <Label>رقم الجواز</Label>
-                  <Input className="mt-1 rounded-xl" value={form.passport_number || ''} onChange={e => set('passport_number', e.target.value)} />
+                  <Label>رقم الجواز *</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Input className="mt-1 rounded-xl" value={form.passport_number || ''} onChange={e => set('passport_number', e.target.value)} required disabled={form.passport_number === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.passport_number === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('passport_number', form.passport_number === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.passport_number === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
                 </div>
 
                 {/* 4. بيانات الاتصال والسكن والصورة */}
@@ -748,29 +1017,49 @@ export default function EmployeeForm() {
 
                 <div className="lg:col-span-2 space-y-4">
                   <div>
-                    <Label>عنوان السكن الكامل</Label>
-                    <Input className="mt-1 rounded-xl" value={form.address || ''} onChange={e => set('address', e.target.value)} placeholder="المحافظة / المنطقة / زقاق، محلة، دار" />
+                    <Label>عنوان السكن الكامل *</Label>
+                    <div className="flex items-center gap-1.5">
+                    <Input className="mt-1 rounded-xl" value={form.address || ''} onChange={e => set('address', e.target.value)} placeholder="المحافظة / المنطقة / زقاق، محلة، دار" required disabled={form.address === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.address === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('address', form.address === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.address === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
                   </div>
                   <div>
-                    <Label>رقم الهاتف</Label>
-                    <Input className="mt-1 rounded-xl" value={form.phone || ''} onChange={e => set('phone', e.target.value)} placeholder="07XXXXXXXXX" />
+                    <Label>رقم الهاتف *</Label>
+                    <div className="flex items-center gap-1.5">
+                    <Input className="mt-1 rounded-xl" value={form.phone || ''} onChange={e => set('phone', e.target.value)} placeholder="07XXXXXXXXX" required disabled={form.phone === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.phone === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('phone', form.phone === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.phone === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
                   </div>
                   <div>
-                    <Label>البريد الإلكتروني</Label>
-                    <Input type="email" className="mt-1 rounded-xl" value={form.email || ''} onChange={e => set('email', e.target.value)} placeholder="example@domain.com" />
+                    <Label>البريد الإلكتروني *</Label>
+                    <div className="flex items-center gap-1.5">
+                    <Input type="email" className="mt-1 rounded-xl" value={form.email || ''} onChange={e => set('email', e.target.value)} placeholder="example@domain.com" required disabled={form.email === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.email === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('email', form.email === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.email === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
                   </div>
                 </div>
 
                 <div className="flex flex-col">
-                  <Label className="block mb-2 text-slate-700 font-semibold text-xs">الصورة الشخصية للموظف</Label>
+                  <Label className="block mb-2 text-slate-700 font-semibold text-xs">الصورة الشخصية للموظف *</Label>
                   <div className="flex flex-col items-center gap-4 bg-slate-50/50 p-4 rounded-2xl border border-dashed border-slate-200">
                     <div className="relative w-28 h-28 rounded-2xl overflow-hidden border-2 border-white shadow-md bg-slate-100 group">
-                      {form.photo ? (
+                      {form.photo && form.photo !== PENDING_VALUE ? (
                         <img 
                           src={form.photo} 
                           alt="صورة الموظف" 
                           className="w-full h-full object-cover" 
                         />
+                      ) : form.photo === PENDING_VALUE ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-amber-700 bg-amber-50 px-1 text-center">
+                          <Clock size={28} className="stroke-[1.5]" />
+                          <span className="text-[9px] mt-1 font-bold">سيتم تسجيلها لاحقاً</span>
+                        </div>
                       ) : (
                         <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 bg-slate-50">
                           <User size={36} className="stroke-[1.5]" />
@@ -802,12 +1091,24 @@ export default function EmployeeForm() {
                           variant="outline" 
                           className="flex-1 rounded-xl text-[10px] gap-1 h-8 border-slate-200 hover:bg-slate-100 px-2"
                           onClick={() => document.getElementById('photo-upload-input').click()}
+                          disabled={form.photo === PENDING_VALUE}
                         >
                           <Upload size={12} className="text-slate-500" />
                           <span>تحميل صورة</span>
                         </Button>
 
-                        {form.photo && (
+                        <Button 
+                          type="button" 
+                          variant="outline" 
+                          className="flex-1 rounded-xl text-[10px] gap-1 h-8 border-slate-200 hover:bg-slate-100 px-2"
+                          onClick={openCameraCapture}
+                          disabled={form.photo === PENDING_VALUE}
+                        >
+                          <Camera size={12} className="text-slate-500" />
+                          <span>التقاط بالكاميرا</span>
+                        </Button>
+
+                        {form.photo && form.photo !== PENDING_VALUE && (
                           <Button 
                             type="button" 
                             variant="ghost" 
@@ -819,6 +1120,15 @@ export default function EmployeeForm() {
                           </Button>
                         )}
                       </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className={`w-full h-8 text-[10px] rounded-lg ${form.photo === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`}
+                        onClick={() => set('photo', form.photo === PENDING_VALUE ? '' : PENDING_VALUE)}
+                      >
+                        {form.photo === PENDING_VALUE ? 'إلغاء (سيتم تسجيلها لاحقاً)' : 'لاحقاً — لا تتوفر الصورة حالياً'}
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -842,12 +1152,34 @@ export default function EmployeeForm() {
                 </div>
 
                 <div>
-                  <Label>أمر التعيين (رقم الأمر الإداري)</Label>
-                  <Input className="mt-1 rounded-xl" value={form.appointment_order || ''} onChange={e => set('appointment_order', e.target.value)} placeholder="مثال: م.أ/2451" />
+                  <Label>الرقم الوظيفي (رقم وزارة التخطيط) *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.civil_service_number || ''} onChange={e => set('civil_service_number', e.target.value)} required placeholder="الرقم الوظيفي الموحد" />
+                  <span className="text-[10px] text-slate-400 mt-1 block">رقم فريد أيضاً (لا يمكن أن يتكرر لموظف آخر)، لكن الاعتماد الأساسي في النظام على رقم الشركة</span>
                 </div>
                 <div>
-                  <Label>تاريخ أمر التعيين</Label>
-                  <Input type="date" className="mt-1 rounded-xl" value={form.appointment_date || ''} onChange={e => set('appointment_date', e.target.value)} />
+                  <Label>رقم الشركة (رقم فريد للموظف) *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.company_number || ''} onChange={e => set('company_number', e.target.value)} required
+                    placeholder={['عقد','أجر يومي'].includes(form.service_type) ? 'رقم أو رمز فريد (حروف وأرقام)' : '6 أرقام بالضبط'}
+                    maxLength={['عقد','أجر يومي'].includes(form.service_type) ? 20 : 6} />
+                  <span className="text-[10px] text-slate-400 mt-1 block">
+                    {['عقد','أجر يومي'].includes(form.service_type)
+                      ? 'يُسمح بالحروف والأرقام لموظفي العقد/الأجر اليومي (3-20 محرفاً)'
+                      : 'يجب أن يتكون من 6 أرقام بالضبط، ولا يمكن أن يتكرر لموظف آخر'}
+                  </span>
+                </div>
+
+                <div>
+                  <Label>أمر التعيين (رقم الأمر الإداري) *</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Input className="mt-1 rounded-xl" value={form.appointment_order || ''} onChange={e => set('appointment_order', e.target.value)} placeholder="مثال: م.أ/2451" required disabled={form.appointment_order === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.appointment_order === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('appointment_order', form.appointment_order === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.appointment_order === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <Label>تاريخ أمر التعيين *</Label>
+                  <Input type="date" className="mt-1 rounded-xl" value={form.appointment_date || ''} onChange={e => set('appointment_date', e.target.value)} required />
                 </div>
                 <div>
                   <Label>تاريخ المباشرة الأولى *</Label>
@@ -860,22 +1192,31 @@ export default function EmployeeForm() {
                   <span className="text-[10px] text-slate-400 mt-1 block">تاريخ المباشرة الحالية في هذه الشركة</span>
                 </div>
                 <div>
-                  <Label>تاريخ العمل في القطاع النفطي</Label>
-                  <Input type="date" className="mt-1 rounded-xl" value={form.oil_sector_start_date || ''} onChange={e => set('oil_sector_start_date', e.target.value)} />
+                  <Label>تاريخ العمل في القطاع النفطي *</Label>
+                  <Input type="date" className="mt-1 rounded-xl" value={form.oil_sector_start_date || ''} onChange={e => set('oil_sector_start_date', e.target.value)} required />
                   <span className="text-[10px] text-slate-400 mt-1 block">تاريخ أول مباشرة للعمل بالقطاع النفطي</span>
                 </div>
-                <div>
-                  <Label>نوع الخدمة *</Label>
-                  <Select value={form.service_type} onValueChange={v => set('service_type', v)}>
-                    <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {['دائم','مؤقت','عقد','إعارة'].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>حالة الموظف</Label>
-                  <Select value={form.status} onValueChange={v => {
+                <EditableSelect
+                  label="نوع الخدمة"
+                  required
+                  value={form.service_type}
+                  options={serviceTypeOptions}
+                  toast={toast}
+                  addPlaceholder="اكتب نوع الخدمة الجديد"
+                  onChange={v => set('service_type', v)}
+                  onAddOption={async (name) => {
+                    await apiClient.entities.ServiceType.create({ name });
+                    setServiceTypeOptions(prev => Array.from(new Set([...prev, name])));
+                  }}
+                />
+                <EditableSelect
+                  label="حالة الموظف"
+                  required
+                  value={form.status}
+                  options={statusOptions}
+                  toast={toast}
+                  addPlaceholder="اكتب حالة الموظف الجديدة"
+                  onChange={v => {
                     set('status', v);
                     if (v === 'مستمر') {
                       setForm(prev => ({
@@ -886,27 +1227,26 @@ export default function EmployeeForm() {
                         status_notes: ''
                       }));
                     }
-                  }}>
-                    <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {['مستمر','مجاز','موقوف','متقاعد','مستقيل'].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
+                  }}
+                  onAddOption={async (name) => {
+                    await apiClient.entities.EmployeeStatus.create({ name });
+                    setStatusOptions(prev => Array.from(new Set([...prev, name])));
+                  }}
+                />
 
                 {form.status !== 'مستمر' && (
                   <div className="col-span-full grid grid-cols-1 md:grid-cols-3 gap-4 bg-amber-50/60 p-4 rounded-2xl border border-amber-200">
                     <div>
-                      <Label>رقم الأمر الإداري للحالة</Label>
-                      <Input className="mt-1 rounded-xl bg-white" value={form.status_order_number || ''} onChange={e => set('status_order_number', e.target.value)} placeholder="رقم الأمر" />
+                      <Label>رقم الأمر الإداري للحالة *</Label>
+                      <Input className="mt-1 rounded-xl bg-white" value={form.status_order_number || ''} onChange={e => set('status_order_number', e.target.value)} placeholder="رقم الأمر" required />
                     </div>
                     <div>
-                      <Label>تاريخ الأمر الإداري للحالة</Label>
-                      <Input type="date" className="mt-1 rounded-xl bg-white" value={form.status_order_date || ''} onChange={e => set('status_order_date', e.target.value)} />
+                      <Label>تاريخ الأمر الإداري للحالة *</Label>
+                      <Input type="date" className="mt-1 rounded-xl bg-white" value={form.status_order_date || ''} onChange={e => set('status_order_date', e.target.value)} required />
                     </div>
                     <div>
-                      <Label>ملاحظات الحالة</Label>
-                      <Input className="mt-1 rounded-xl bg-white" value={form.status_notes || ''} onChange={e => set('status_notes', e.target.value)} placeholder="ملاحظات توضيحية" />
+                      <Label>ملاحظات الحالة *</Label>
+                      <Input className="mt-1 rounded-xl bg-white" value={form.status_notes || ''} onChange={e => set('status_notes', e.target.value)} placeholder="ملاحظات توضيحية" required />
                     </div>
                   </div>
                 )}
@@ -1046,24 +1386,21 @@ export default function EmployeeForm() {
                   </div>
                 </div>
 
+                <EditableSelect
+                  label="موقع العمل في الشركة"
+                  required
+                  value={form.work_location || 'غير محدد'}
+                  options={['غير محدد', ...workLocations.map(loc => loc.name)]}
+                  toast={toast}
+                  addPlaceholder="اكتب اسم موقع العمل الجديد"
+                  onChange={v => set('work_location', v)}
+                  onAddOption={async (name) => {
+                    const created = await apiClient.entities.WorkLocation.create({ name });
+                    setWorkLocations(prev => [...prev, created]);
+                  }}
+                />
                 <div>
-                  <Label>موقع العمل للشركة</Label>
-                  <Select value={form.work_location || 'غير محدد'} onValueChange={v => set('work_location', v)}>
-                    <SelectTrigger className="mt-1 rounded-xl">
-                      <SelectValue placeholder="اختر موقع العمل" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="غير محدد">-- لم يحدد بعد --</SelectItem>
-                      {workLocations.map(loc => (
-                        <SelectItem key={loc.id} value={loc.name}>
-                          {loc.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>طبيعة العمل</Label>
+                  <Label>طبيعة العمل *</Label>
                   <Select value={form.work_nature || 'مكتبي'} onValueChange={v => set('work_nature', v)}>
                     <SelectTrigger className="mt-1 rounded-xl">
                       <SelectValue placeholder="اختر طبيعة العمل" />
@@ -1075,7 +1412,7 @@ export default function EmployeeForm() {
                   </Select>
                 </div>
                 <div>
-                  <Label>نوع عمل الموظف (الدوام)</Label>
+                  <Label>نوع عمل الموظف (الدوام) *</Label>
                   <Select
                     value={form.work_shift_type || 'صباحي'}
                     onValueChange={v => {
@@ -1165,7 +1502,7 @@ export default function EmployeeForm() {
                 </div>
 
                 <div>
-                  <Label>المسؤولية الأساسية</Label>
+                  <Label>المسؤولية الأساسية *</Label>
                   <Select value={form.primary_responsibility || 'بلا مسؤولية'} onValueChange={v => handleResponsibilityChange(v)}>
                     <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -1176,7 +1513,7 @@ export default function EmployeeForm() {
                   </Select>
                 </div>
                 <div>
-                  <Label>المسؤولية في حالة الوكالة</Label>
+                  <Label>المسؤولية في حالة الوكالة *</Label>
                   <Select value={form.acting_responsibility || 'بلا وكالة'} onValueChange={v => set('acting_responsibility', v)}>
                     <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -1187,7 +1524,7 @@ export default function EmployeeForm() {
                   </Select>
                 </div>
                 <div>
-                  <Label>تحديد درجة الوكيل</Label>
+                  <Label>تحديد درجة الوكيل *</Label>
                   <Select value={form.deputy_level || 'لا يوجد'} onValueChange={v => set('deputy_level', v)}>
                     <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -1227,8 +1564,31 @@ export default function EmployeeForm() {
                   </Select>
                 </div>
                 <div>
-                  <Label>تاريخ الدرجة الحالية</Label>
-                  <Input type="date" className="mt-1 rounded-xl" value={form.grade_date || ''} onChange={e => set('grade_date', e.target.value)} />
+                  <Label className="flex items-center justify-between text-xs font-bold text-slate-700">
+                    <span>تاريخ الدرجة الحالية (آخر ترفيع) *</span>
+                  </Label>
+                  <Input 
+                    type="date" 
+                    className="mt-1 rounded-xl font-mono" 
+                    value={form.grade_date || form.last_promotion_date || ''} 
+                    onChange={e => {
+                      set('grade_date', e.target.value);
+                      set('last_promotion_date', e.target.value);
+                    }}
+                    required
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">تاريخ نيل الدرجة الحالية لاحتساب موعد الترفيع القادم</p>
+                </div>
+                <div>
+                  <Label className="flex items-center justify-between text-xs font-bold text-blue-900">
+                    <span>تاريخ العلاوة الحالية (آخر علاوة سنوية) *</span>
+                  </Label>
+                  <Input 
+                    type="date" 
+                    className="mt-1 rounded-xl font-mono border-blue-200 bg-blue-50/20 text-[#1B3A6B]" 
+                    value={form.last_increment_date || ''} 
+                    onChange={e => set('last_increment_date', e.target.value)} required />
+                  <p className="text-[10px] text-blue-600 font-medium mt-1">تاريخ منح المرحلة الحالية لاحتساب العلاوة السنوية القادمة وفروقات المؤثرات</p>
                 </div>
 
                 {/* 5. الأرقام الثبوتية الإدارية */}
@@ -1238,20 +1598,31 @@ export default function EmployeeForm() {
                 </div>
 
                 <div>
-                  <Label>رقم اضبارة الموظف (رقم فريد)</Label>
-                  <Input className="mt-1 rounded-xl" value={form.service_record_number || ''} onChange={e => set('service_record_number', e.target.value)} placeholder="مثال: إضبارة-4512" />
+                  <Label>رقم اضبارة الموظف (رقم فريد) *</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Input className="mt-1 rounded-xl" value={form.service_record_number || ''} onChange={e => set('service_record_number', e.target.value)} placeholder="مثال: إضبارة-4512" required disabled={form.service_record_number === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.service_record_number === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('service_record_number', form.service_record_number === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.service_record_number === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
                 </div>
                 <div>
-                  <Label>رقم هوية الموظف</Label>
-                  <Input className="mt-1 rounded-xl" value={form.employee_id_number || ''} onChange={e => set('employee_id_number', e.target.value)} placeholder="مثال: 12044" />
+                  <Label>رقم هوية الموظف (يُنشأ تلقائياً)</Label>
+                  <Input
+                    className="mt-1 rounded-xl bg-slate-50 font-mono text-slate-500"
+                    value={isEdit ? (form.employee_id_number || '—') : 'سيتم إنشاؤه تلقائياً بعد الحفظ'}
+                    disabled
+                    readOnly
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">رقم فريد يُولّده النظام تلقائياً ويُدرج ضمن الهوية الرقمية للموظف — لا يمكن إدخاله أو تعديله يدوياً</span>
                 </div>
                 <div>
-                  <Label>رقم التصريح الأمني</Label>
-                  <Input className="mt-1 rounded-xl" value={form.security_clearance_number || ''} onChange={e => set('security_clearance_number', e.target.value)} placeholder="رقم التصريح الأمني" />
+                  <Label>رقم التصريح الأمني *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.security_clearance_number || ''} onChange={e => set('security_clearance_number', e.target.value)} placeholder="رقم التصريح الأمني" required />
                 </div>
                 <div>
-                  <Label>تاريخ التصريح الأمني</Label>
-                  <Input type="date" className="mt-1 rounded-xl" value={form.security_clearance_date || ''} onChange={e => set('security_clearance_date', e.target.value)} />
+                  <Label>تاريخ التصريح الأمني *</Label>
+                  <Input type="date" className="mt-1 rounded-xl" value={form.security_clearance_date || ''} onChange={e => set('security_clearance_date', e.target.value)} required />
                 </div>
                 <div>
                   <Label>الدور في النظام</Label>
@@ -1294,30 +1665,41 @@ export default function EmployeeForm() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 <div>
                   <Label>الشهادة العلمية *</Label>
-                  <Select value={form.education_level} onValueChange={v => set('education_level', v)}>
+                  <Select value={form.education_level || 'بكالوريوس'} onValueChange={v => set('education_level', v)}>
                     <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {educationDegrees.length > 0 
-                        ? educationDegrees.map(d => <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>)
-                        : ['دكتوراه','ماجستير','بكالوريوس','دبلوم عالي','دبلوم','إعدادية','متوسطة','ابتدائية'].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                      {(() => {
+                        const defaultDegrees = ['دكتوراه', 'ماجستير', 'دبلوم عالي', 'بكالوريوس', 'دبلوم', 'إعدادية', 'متوسطة', 'ابتدائية'];
+                        const rawDegrees = (educationDegrees || []).map(d => d?.name).filter(Boolean);
+                        const degreeList = rawDegrees.length > 0 ? rawDegrees : defaultDegrees;
+                        const finalDegreeOptions = Array.from(new Set([...degreeList, form.education_level].filter(Boolean)));
+                        return finalDegreeOptions.map((degName, idx) => (
+                          <SelectItem key={`${degName}-${idx}`} value={degName}>{degName}</SelectItem>
+                        ));
+                      })()}
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label>الاختصاص العام والدقيق</Label>
-                  <Input className="mt-1 rounded-xl" value={form.specialization || ''} onChange={e => set('specialization', e.target.value)} placeholder="مثال: هندسة نفط / حاسبات / محاسبة" />
+                  <Label>الاختصاص العام والدقيق *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.specialization || ''} onChange={e => set('specialization', e.target.value)} placeholder="مثال: هندسة نفط / حاسبات / محاسبة" required />
                 </div>
                 <div>
-                  <Label>الجامعة / الكلية / المعهد</Label>
-                  <Input className="mt-1 rounded-xl" value={form.university || ''} onChange={e => set('university', e.target.value)} placeholder="مثال: جامعة بغداد / كلية الهندسة" />
+                  <Label>الجامعة / الكلية / المعهد *</Label>
+                  <Input className="mt-1 rounded-xl" value={form.university || ''} onChange={e => set('university', e.target.value)} placeholder="مثال: جامعة بغداد / كلية الهندسة" required />
                 </div>
                 <div>
-                  <Label>سنة التخرج</Label>
-                  <Input type="number" className="mt-1 rounded-xl" value={form.graduation_year || ''} onChange={e => set('graduation_year', parseInt(e.target.value) || '')} placeholder="مثال: 2018" />
+                  <Label>سنة التخرج *</Label>
+                  <Input type="number" className="mt-1 rounded-xl" value={form.graduation_year || ''} onChange={e => set('graduation_year', parseInt(e.target.value) || '')} placeholder="مثال: 2018" required />
                 </div>
                 <div>
-                  <Label>رقم أمر احتساب الشهادة</Label>
-                  <Input className="mt-1 rounded-xl" value={form.education_order || ''} onChange={e => set('education_order', e.target.value)} placeholder="مثال: ق/2154" />
+                  <Label>رقم أمر احتساب الشهادة *</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Input className="mt-1 rounded-xl" value={form.education_order || ''} onChange={e => set('education_order', e.target.value)} placeholder="مثال: ق/2154" required disabled={form.education_order === PENDING_VALUE} />
+                    <Button type="button" size="sm" variant="outline" className={`h-9 px-2 text-[10px] shrink-0 rounded-lg whitespace-nowrap ${form.education_order === PENDING_VALUE ? "bg-amber-100 border-amber-300 text-amber-800" : ""}`} onClick={() => set('education_order', form.education_order === PENDING_VALUE ? '' : PENDING_VALUE)}>
+                      {form.education_order === PENDING_VALUE ? 'إلغاء' : 'لاحقاً'}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1343,14 +1725,14 @@ export default function EmployeeForm() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div className="bg-slate-50/70 p-5 rounded-2xl border border-slate-100">
-                  <Label className="font-bold text-emerald-900">رصيد الإجازات الاعتيادية الابتدائي (يوم)</Label>
-                  <Input type="number" min={0} className="mt-2 rounded-xl bg-white font-bold text-emerald-700" value={form.initial_regular_leave_balance || 0} onChange={e => set('initial_regular_leave_balance', parseInt(e.target.value) || 0)} />
+                  <Label className="font-bold text-emerald-900">رصيد الإجازات الاعتيادية الابتدائي (يوم) *</Label>
+                  <Input type="number" min={0} className="mt-2 rounded-xl bg-white font-bold text-emerald-700" value={form.initial_regular_leave_balance || 0} onChange={e => set('initial_regular_leave_balance', parseInt(e.target.value) || 0)} required />
                   <span className="text-[11px] text-slate-400 mt-1.5 block">الرصيد التراكمي المتاح للموظف من السنوات السابقة</span>
                 </div>
 
                 <div className="bg-slate-50/70 p-5 rounded-2xl border border-slate-100">
-                  <Label className="font-bold text-rose-900">رصيد الإجازات المرضية الابتدائي (يوم)</Label>
-                  <Input type="number" min={0} className="mt-2 rounded-xl bg-white font-bold text-rose-600" value={form.initial_sick_leave_balance || 0} onChange={e => set('initial_sick_leave_balance', parseInt(e.target.value) || 0)} />
+                  <Label className="font-bold text-rose-900">رصيد الإجازات المرضية الابتدائي (يوم) *</Label>
+                  <Input type="number" min={0} className="mt-2 rounded-xl bg-white font-bold text-rose-600" value={form.initial_sick_leave_balance || 0} onChange={e => set('initial_sick_leave_balance', parseInt(e.target.value) || 0)} required />
                   <span className="text-[11px] text-slate-400 mt-1.5 block">الرصيد المتبقي براتب تام</span>
                 </div>
               </div>
@@ -1368,18 +1750,99 @@ export default function EmployeeForm() {
       </form>
 
       {/* Organizational Unit Picker Modal */}
+      {showCameraCapture && (
+        <div className="fixed inset-0 pointer-events-auto bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm transition-opacity duration-300">
+          <div className="bg-white rounded-2xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200" dir="rtl">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-6 bg-[#1B3A6B] rounded-full" />
+                <h3 className="font-bold text-[#1B3A6B]">التقاط صورة الموظف بالكاميرا</h3>
+              </div>
+              <Button type="button" size="icon" variant="ghost" onClick={closeCameraCapture} className="rounded-full h-8 w-8 hover:bg-slate-200 text-slate-500">
+                <X size={16} />
+              </Button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              {cameraError ? (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl p-3 text-center">
+                  {cameraError}
+                </div>
+              ) : (
+                <div className="rounded-xl overflow-hidden bg-black aspect-square flex items-center justify-center">
+                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="flex-1 rounded-xl" onClick={closeCameraCapture}>
+                  إلغاء
+                </Button>
+                <Button type="button" className="flex-1 rounded-xl bg-[#1B3A6B] hover:bg-[#152d54]" onClick={captureFromCamera} disabled={!!cameraError}>
+                  <Camera size={14} className="ml-1" /> التقاط الصورة
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showOrgPicker && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm transition-opacity duration-300">
+        <div className="fixed inset-0 pointer-events-auto bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm transition-opacity duration-300">
           <div className="bg-white rounded-2xl w-full max-w-2xl h-[550px] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200" dir="rtl">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <div className="flex items-center gap-2">
                 <div className="w-2 h-6 bg-[#1B3A6B] rounded-full" />
                 <h3 className="font-bold text-[#1B3A6B]">تحديد جهة العمل من الهيكل التنظيمي</h3>
               </div>
-              <Button type="button" size="icon" variant="ghost" onClick={() => setShowOrgPicker(false)} className="rounded-full h-8 w-8 hover:bg-slate-200 text-slate-500">
-                <X size={16} />
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button type="button" size="sm" variant="outline" onClick={() => setShowAddOrgUnit(v => !v)} className="rounded-lg text-xs h-8 gap-1 border-[#1B3A6B]/30 text-[#1B3A6B] hover:bg-[#1B3A6B]/5">
+                  <Plus size={13} /> إضافة جهة عمل جديدة
+                </Button>
+                <Button type="button" size="icon" variant="ghost" onClick={() => setShowOrgPicker(false)} className="rounded-full h-8 w-8 hover:bg-slate-200 text-slate-500">
+                  <X size={16} />
+                </Button>
+              </div>
             </div>
+
+            {/* Add New Org Unit Inline Form */}
+            {showAddOrgUnit && (
+              <div className="p-4 border-b border-slate-100 bg-blue-50/50 space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <Input
+                    autoFocus
+                    className="rounded-lg bg-white text-xs h-9"
+                    placeholder="اسم جهة العمل الجديدة"
+                    value={newOrgUnitName}
+                    onChange={e => setNewOrgUnitName(e.target.value)}
+                  />
+                  <Select value={newOrgUnitType} onValueChange={setNewOrgUnitType}>
+                    <SelectTrigger className="rounded-lg bg-white text-xs h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {ORG_UNIT_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={newOrgUnitParentId || '__none__'} onValueChange={v => setNewOrgUnitParentId(v === '__none__' ? '' : v)}>
+                    <SelectTrigger className="rounded-lg bg-white text-xs h-9"><SelectValue placeholder="الجهة الأعلى (اختياري)" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">-- بدون (مستوى أعلى) --</SelectItem>
+                      {orgUnits.map(u => (
+                        <SelectItem key={u.id} value={String(u.id)}>{getHierarchyChain(u, orgUnits)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button type="button" size="sm" disabled={addingOrgUnit} onClick={handleAddOrgUnit} className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-lg text-xs h-8 gap-1">
+                    <Check size={13} /> {addingOrgUnit ? 'جاري الإضافة...' : 'إضافة'}
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" className="rounded-lg text-xs h-8" onClick={() => { setShowAddOrgUnit(false); setNewOrgUnitName(''); setNewOrgUnitParentId(''); }}>
+                    إلغاء
+                  </Button>
+                  <span className="text-[10px] text-slate-500">لا يُسمح بتكرار اسم جهة العمل ضمن نفس الجهة الأعلى</span>
+                </div>
+              </div>
+            )}
 
             {/* Search Box */}
             <div className="p-4 border-b border-slate-100">

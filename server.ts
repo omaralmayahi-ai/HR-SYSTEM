@@ -5,8 +5,8 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { db, schema, eq, and, desc, asc, ensureSchema, pool } from './src/db/index.ts';
-import { getTableColumns } from 'drizzle-orm';
+import { db, schema, eq, and, or, desc, asc, ensureSchema, pool } from './src/db/index.ts';
+import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
 import { requireAuth, AuthRequest, JWT_SECRET } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
 import bcrypt from 'bcryptjs';
@@ -16,12 +16,26 @@ import { encryptData, decryptData } from './src/lib/cryptoStorage.ts';
 import { recalculateEligibilitySync, EngineContextData, formatDateString, isDateOnOrAfter } from './src/lib/promotionEngine.ts';
 import { calculateDegreeTrackSimulation, processDegreeTrackSettlement, processBatchDegreeTrackAutoSettlement } from './src/lib/degreeTrackEngine.ts';
 import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src/lib/promotionDelayReasonsEngine.ts';
+import { checkReferentialUsage } from './src/lib/referentialIntegrity.ts';
 
 
-const currentFilename = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' && import.meta.url ? fileURLToPath(import.meta.url) : '');
+const currentFilename = typeof __filename !== 'undefined' ? __filename : '';
 const currentDirname = typeof __dirname !== 'undefined' ? __dirname : (currentFilename ? path.dirname(currentFilename) : process.cwd());
 
 async function startServer() {
+  // تشخيص اتصال قاعدة البيانات (مؤقت): يطبع سبب فشل الاتصال الحقيقي بوضوح في الطرفية عند الإقلاع،
+  // بدل رسالة 'Database offline' العامة التي لا تحدد السبب.
+  try {
+    await pool.query("SELECT 1");
+    console.log('[DB-CHECK] الاتصال بقاعدة البيانات ناجح -', 'host=' + process.env.SQL_HOST, 'port=' + process.env.SQL_PORT, 'db=' + process.env.SQL_DB_NAME, 'user=' + process.env.SQL_USER);
+  } catch (dbCheckErr: any) {
+    console.error('[DB-CHECK] فشل الاتصال بقاعدة البيانات ==========================');
+    console.error('[DB-CHECK] host=' + process.env.SQL_HOST, 'port=' + process.env.SQL_PORT, 'db=' + process.env.SQL_DB_NAME, 'user=' + process.env.SQL_USER);
+    console.error('[DB-CHECK] error.message:', dbCheckErr?.message);
+    console.error('[DB-CHECK] error.code:', dbCheckErr?.code);
+    console.error('[DB-CHECK] error.cause:', dbCheckErr?.cause?.message || dbCheckErr?.cause);
+    console.error('[DB-CHECK] ==========================================================');
+  }
   await ensureSchema().catch(() => {});
   const app = express();
   const PORT = Number(process.env.PORT) || 5000;
@@ -598,6 +612,112 @@ async function startServer() {
   let inMemoryAppreciations: any[] = [];
   let inMemoryPerformanceEvaluations: any[] = [];
   let inMemoryPromotionDelayReasons: any[] = [];
+  let inMemoryDegreeTrackSnapshots: any[] = [];
+  let inMemoryDegreeTrackSimulationSteps: any[] = [];
+  let inMemorySpecializationCredits: any[] = [];
+  let inMemoryServiceRecords: any[] = [];
+  let inMemoryServiceCredits: any[] = [];
+
+  const genericMemoryStores: Record<string, any[]> = {
+    'career': inMemoryCareerHistories,
+    'job-assignments': inMemoryJobAssignments,
+    'qualifications': inMemoryQualifications,
+    'promotions': inMemoryPromotions,
+    'salary-allowances': inMemorySalaryAllowances,
+    'annual-evaluations': inMemoryAnnualEvaluations,
+    'training-courses': inMemoryTrainingCourses,
+    'transfers': inMemoryTransfers,
+    'retirements': inMemoryRetirements,
+    'documents': inMemoryDocuments,
+    'service-records': inMemoryServiceRecords,
+    'service-credits': inMemoryServiceCredits,
+    'leaves': inMemoryLeaves,
+    'penalties': inMemoryPenalties,
+    'appreciations': inMemoryAppreciations,
+    'performance': inMemoryPerformanceEvaluations,
+    'degree-track-snapshots': inMemoryDegreeTrackSnapshots,
+    'degree-track-simulation-steps': inMemoryDegreeTrackSimulationSteps,
+    'specialization-credits': inMemorySpecializationCredits,
+    'promotion-delay-reasons': inMemoryPromotionDelayReasons,
+    'promotion_delay_reasons': inMemoryPromotionDelayReasons
+  };
+
+  function syncEmployeeRecord(emp: any, action: 'insert' | 'update' | 'delete') {
+    if (!emp) return;
+    const empId = parseInt(String(emp.id));
+    if (isNaN(empId)) return;
+
+    if (action === 'delete') {
+      inMemoryEmployees = inMemoryEmployees.filter((e: any) => parseInt(String(e.id)) !== empId);
+    } else if (action === 'update') {
+      const idx = inMemoryEmployees.findIndex((e: any) => parseInt(String(e.id)) === empId);
+      if (idx !== -1) {
+        inMemoryEmployees[idx] = { ...inMemoryEmployees[idx], ...emp, id: empId, updatedAt: new Date().toISOString(), updated_at: new Date().toISOString() };
+      } else {
+        inMemoryEmployees.push({ ...emp, id: empId });
+      }
+    } else if (action === 'insert') {
+      const idx = inMemoryEmployees.findIndex((e: any) => parseInt(String(e.id)) === empId);
+      if (idx !== -1) {
+        inMemoryEmployees[idx] = { ...inMemoryEmployees[idx], ...emp, id: empId };
+      } else {
+        inMemoryEmployees.push({ ...emp, id: empId });
+      }
+    }
+    saveLocalDb();
+  }
+
+  function syncEntityRecord(endpoint: string, item: any, action: 'insert' | 'update' | 'delete') {
+    if (!endpoint || !item) return;
+    genericMemoryStores[endpoint] = genericMemoryStores[endpoint] || [];
+    const list = genericMemoryStores[endpoint];
+    const itemId = String(item.id);
+
+    if (action === 'delete') {
+      genericMemoryStores[endpoint] = list.filter((r: any) => String(r.id) !== itemId);
+    } else if (action === 'update') {
+      const idx = list.findIndex((r: any) => String(r.id) === itemId);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...item };
+      } else {
+        list.push(item);
+      }
+    } else if (action === 'insert') {
+      const idx = list.findIndex((r: any) => String(r.id) === itemId);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...item };
+      } else {
+        list.push(item);
+      }
+    }
+
+    // Mirror to named memory stores
+    if (endpoint === 'qualifications') inMemoryQualifications = genericMemoryStores['qualifications'];
+    if (endpoint === 'job-assignments') inMemoryJobAssignments = genericMemoryStores['job-assignments'];
+    if (endpoint === 'promotions') inMemoryPromotions = genericMemoryStores['promotions'];
+    if (endpoint === 'salary-allowances') inMemorySalaryAllowances = genericMemoryStores['salary-allowances'];
+    if (endpoint === 'annual-evaluations') inMemoryAnnualEvaluations = genericMemoryStores['annual-evaluations'];
+    if (endpoint === 'training-courses') inMemoryTrainingCourses = genericMemoryStores['training-courses'];
+    if (endpoint === 'transfers') inMemoryTransfers = genericMemoryStores['transfers'];
+    if (endpoint === 'retirements') inMemoryRetirements = genericMemoryStores['retirements'];
+    if (endpoint === 'documents') inMemoryDocuments = genericMemoryStores['documents'];
+    if (endpoint === 'service-records') inMemoryServiceRecords = genericMemoryStores['service-records'];
+    if (endpoint === 'service-credits') inMemoryServiceCredits = genericMemoryStores['service-credits'];
+    if (endpoint === 'leaves') inMemoryLeaves = genericMemoryStores['leaves'];
+    if (endpoint === 'penalties') inMemoryPenalties = genericMemoryStores['penalties'];
+    if (endpoint === 'appreciations') inMemoryAppreciations = genericMemoryStores['appreciations'];
+    if (endpoint === 'performance') inMemoryPerformanceEvaluations = genericMemoryStores['performance'];
+    if (endpoint === 'career') inMemoryCareerHistories = genericMemoryStores['career'];
+    if (endpoint === 'degree-track-snapshots') inMemoryDegreeTrackSnapshots = genericMemoryStores['degree-track-snapshots'];
+    if (endpoint === 'degree-track-simulation-steps') inMemoryDegreeTrackSimulationSteps = genericMemoryStores['degree-track-simulation-steps'];
+    if (endpoint === 'specialization-credits') inMemorySpecializationCredits = genericMemoryStores['specialization-credits'];
+    if (endpoint === 'promotion-delay-reasons' || endpoint === 'promotion_delay_reasons') {
+      inMemoryPromotionDelayReasons = genericMemoryStores['promotion-delay-reasons'];
+      genericMemoryStores['promotion_delay_reasons'] = inMemoryPromotionDelayReasons;
+    }
+
+    saveLocalDb();
+  }
 
   async function syncEmployeeQualificationFromEmployee(employeeId: number, mappedData: any) {
     if (!employeeId || isNaN(employeeId)) return;
@@ -738,6 +858,123 @@ async function startServer() {
     return clean;
   }
 
+  // رقم الشركة: المعرّف الفريد الأساسي للموظف.
+  // القاعدة: 6 أرقام فقط لجميع الموظفين، باستثناء أصحاب صفة "عقد" أو "أجر يومي"
+  // المسموح لهم إدخال حروف ضمن رقم الشركة (مثال: أرقام عقود تحوي حروفاً).
+  const LETTER_EXEMPT_SERVICE_TYPES = new Set(['عقد', 'أجر يومي']);
+
+  function validateCompanyNumberFormat(companyNumber: any, serviceType: any): { isValid: boolean; error?: string } {
+    const value = (companyNumber === null || companyNumber === undefined) ? '' : String(companyNumber).trim();
+    if (!value) {
+      return { isValid: false, error: 'رقم الشركة إلزامي ولا يمكن ترك الحقل فارغاً' };
+    }
+    const isExempt = LETTER_EXEMPT_SERVICE_TYPES.has(String(serviceType || '').trim());
+    if (isExempt) {
+      // يُسمح بالحروف والأرقام للموظفين بصفة عقد أو أجر يومي، ضمن طول معقول
+      if (!/^[A-Za-z0-9ء-ي\-\/]{3,20}$/.test(value)) {
+        return { isValid: false, error: 'رقم الشركة لموظفي العقد/الأجر اليومي يجب أن يتكون من 3 إلى 20 محرفاً (حروف أو أرقام)' };
+      }
+      return { isValid: true };
+    }
+    if (!/^\d{6}$/.test(value)) {
+      return { isValid: false, error: 'رقم الشركة يجب أن يتكون من 6 أرقام بالضبط (يُسمح بالحروف فقط لموظفي العقد أو الأجر اليومي)' };
+    }
+    return { isValid: true };
+  }
+
+  async function findEmployeeByCompanyNumber(companyNumber: string, excludeId?: number) {
+    const value = String(companyNumber).trim();
+    try {
+      const rows = await db.select().from(schema.employees).where(eq(schema.employees.companyNumber, value));
+      const dbMatch = rows.find(r => excludeId === undefined || parseInt(String(r.id)) !== excludeId);
+      if (dbMatch) return dbMatch;
+    } catch (err) {
+      console.warn('Database fallback for company number duplicate check');
+    }
+    const memMatch = inMemoryEmployees.find(e => {
+      const cn = (e.companyNumber !== undefined ? e.companyNumber : e.company_number);
+      if (!cn || String(cn).trim() !== value) return false;
+      if (excludeId !== undefined && parseInt(String(e.id)) === excludeId) return false;
+      return true;
+    });
+    return memMatch || null;
+  }
+
+  // الرقم الوظيفي (رقم وزارة التخطيط): رقم فريد أيضاً، لكن الاعتماد الأساسي في النظام على رقم الشركة.
+  // يُسمح بترك هذا الحقل بقيمة "سيتم تسجيله لاحقاً" (PENDING_VALUE من الواجهة) عندما لا تتوفر البيانات بعد،
+  // وفي هذه الحالة لا يُطبَّق فحص التفرد عليه.
+  const PENDING_VALUE_SENTINEL = 'سيتم تسجيله لاحقاً';
+
+  async function findEmployeeByCivilServiceNumber(civilServiceNumber: string, excludeId?: number) {
+    const value = String(civilServiceNumber).trim();
+    if (!value || value === PENDING_VALUE_SENTINEL) return null;
+    try {
+      const rows = await db.select().from(schema.employees).where(eq(schema.employees.civilServiceNumber, value));
+      const dbMatch = rows.find(r => excludeId === undefined || parseInt(String(r.id)) !== excludeId);
+      if (dbMatch) return dbMatch;
+    } catch (err) {
+      console.warn('Database fallback for civil service number duplicate check');
+    }
+    const memMatch = inMemoryEmployees.find(e => {
+      const csn = (e.civilServiceNumber !== undefined ? e.civilServiceNumber : e.civil_service_number);
+      if (!csn || String(csn).trim() !== value) return false;
+      if (String(csn).trim() === PENDING_VALUE_SENTINEL) return false;
+      if (excludeId !== undefined && parseInt(String(e.id)) === excludeId) return false;
+      return true;
+    });
+    return memMatch || null;
+  }
+
+  // رقم هوية الموظف: يُنشأ تلقائياً بالكامل من الخادم عند إضافة الموظف (لا يُدخله موظف الـHR يدوياً إطلاقاً)،
+  // ويجب أن يبقى فريداً دوماً. يُستخدم كمعرّف الهوية الرقمية للموظف ورمز الوصول السريع (QR).
+  const EMPLOYEE_ID_NUMBER_SEED = 500001;
+
+  async function findEmployeeByEmployeeIdNumber(employeeIdNumber: string, excludeId?: number) {
+    const value = String(employeeIdNumber).trim();
+    if (!value) return null;
+    try {
+      const rows = await db.select().from(schema.employees).where(eq(schema.employees.employeeIdNumber, value));
+      const dbMatch = rows.find(r => excludeId === undefined || parseInt(String(r.id)) !== excludeId);
+      if (dbMatch) return dbMatch;
+    } catch (err) {
+      console.warn('Database fallback for employee ID number duplicate check');
+    }
+    const memMatch = inMemoryEmployees.find(e => {
+      const ein = (e.employeeIdNumber !== undefined ? e.employeeIdNumber : e.employee_id_number);
+      if (!ein || String(ein).trim() !== value) return false;
+      if (excludeId !== undefined && parseInt(String(e.id)) === excludeId) return false;
+      return true;
+    });
+    return memMatch || null;
+  }
+
+  async function generateUniqueEmployeeIdNumber(): Promise<string> {
+    let maxSeq = EMPLOYEE_ID_NUMBER_SEED - 1;
+    const collectFrom = (list: any[]) => {
+      for (const e of list || []) {
+        const raw = e.employeeIdNumber !== undefined ? e.employeeIdNumber : e.employee_id_number;
+        const num = parseInt(String(raw || '').replace(/\D/g, ''), 10);
+        if (!isNaN(num) && num > maxSeq) maxSeq = num;
+      }
+    };
+    try {
+      const rows = await db.select().from(schema.employees);
+      collectFrom(rows);
+    } catch (err) {
+      console.warn('Database fallback while generating employee_id_number');
+    }
+    collectFrom(inMemoryEmployees);
+
+    let candidate = String(maxSeq + 1);
+    let guard = 0;
+    while (await findEmployeeByEmployeeIdNumber(candidate) && guard < 1000) {
+      maxSeq++;
+      candidate = String(maxSeq + 1);
+      guard++;
+    }
+    return candidate;
+  }
+
   function enhanceEmployeeRecord(emp: any) {
     if (!emp) return emp;
     const mapped = mapKeys(emp, camelToSnake);
@@ -767,10 +1004,19 @@ async function startServer() {
     mapped.education_order = mapped.education_order || mapped.evaluation_order || emp.educationOrder || emp.evaluationOrder || '';
     mapped.evaluation_order = mapped.evaluation_order || mapped.education_order || emp.evaluationOrder || emp.educationOrder || '';
 
-    // Ensure job title is explicitly synced in both camel and snake
-    const jt = emp.jobTitle || emp.job_title || mapped.job_title || mapped.jobTitle || '';
+    // Ensure job title is explicitly synced and linked with the latest title name from job titles directory
+    let jt = emp.jobTitle || emp.job_title || mapped.job_title || mapped.jobTitle || '';
+    const jId = emp.jobTitleId || emp.job_title_id || mapped.job_title_id || mapped.jobTitleId;
+    if (jId && Array.isArray(inMemoryJobTitles)) {
+      const matchById = inMemoryJobTitles.find(t => parseInt(String(t.id)) === parseInt(String(jId)));
+      if (matchById && matchById.name) {
+        jt = matchById.name;
+      }
+    }
     mapped.job_title = jt;
     mapped.jobTitle = jt;
+    mapped.job_title_id = jId;
+    mapped.jobTitleId = jId;
 
     // Ensure spouse and children details are preserved and synced
     mapped.spouse_names = mapped.spouse_names || emp.spouseNames || emp.spouse_names || '';
@@ -1022,7 +1268,7 @@ async function startServer() {
     }
 
     // Also update in-memory employee record
-    const idx = inMemoryEmployees.findIndex(e => e.id === employeeId);
+    const idx = inMemoryEmployees.findIndex(e => parseInt(String(e.id)) === employeeId);
     if (idx !== -1) {
       const current = inMemoryEmployees[idx];
       const updated = { ...current };
@@ -1036,14 +1282,268 @@ async function startServer() {
       updated.updatedAt = new Date().toISOString();
       updated.updated_at = new Date().toISOString();
       inMemoryEmployees[idx] = updated;
+      saveLocalDb();
     }
   }
 
+  app.post('/api/admin/reload-local-db', async (req, res) => {
+    loadLocalDb();
+    res.json({ success: true, count: inMemoryEmployees.length });
+  });
+
   // Employees API
+  // مراجعة صفحة الموظفين (31-08-2026): بناء شروط الفلترة من جهة الخادم لمسار GET /api/employees
+  // المرقّم صفحياً - يُطابق منطق الفلاتر الـ20 المطبَّقة سابقاً في src/pages/Employees.jsx حرفياً،
+  // لضمان عدم اختلاف نتائج الفلترة بين النسخة القديمة (فلترة على المتصفح) والجديدة (فلترة في قاعدة
+  // البيانات)، تمهيداً لتحمّل النظام 10-20 ألف قيد موظف بأداء سريع بدل تحميل كل السجلات دفعة واحدة.
+  // PENDING_VALUE_SENTINEL معرَّف مسبقاً أعلاه في الملف (استخدام مشترك)
+  const INCOMPLETE_DATA_COLUMNS = [
+    schema.employees.nationalId,
+    schema.employees.residenceCard,
+    schema.employees.rationCard,
+    schema.employees.passportNumber,
+    schema.employees.address,
+    schema.employees.phone,
+    schema.employees.email,
+    schema.employees.photo,
+    schema.employees.appointmentOrder,
+    schema.employees.serviceRecordNumber,
+    schema.employees.educationOrder,
+  ];
+
+  async function buildEmployeeFilterConditions(q: any): Promise<any[]> {
+    const conditions: any[] = [];
+
+    // 1. البحث النصي (الاسم الكامل، الرقم الوظيفي، رقم الإضبارة، العنوان الوظيفي)
+    if (q.search && String(q.search).trim()) {
+      const term = `%${String(q.search).trim()}%`;
+      conditions.push(or(
+        ilike(schema.employees.fullName, term),
+        ilike(schema.employees.civilServiceNumber, term),
+        ilike(schema.employees.serviceRecordNumber, term),
+        ilike(schema.employees.jobTitle, term)
+      ));
+    }
+
+    // 2-5. حقول مطابقة مباشرة بسيطة
+    const directEqFilters: Array<[any, string | undefined]> = [
+      [schema.employees.gender, q.gender],
+      [schema.employees.religion, q.religion],
+      [schema.employees.ethnicity, q.ethnicity],
+      [schema.employees.maritalStatus, q.marital_status],
+      [schema.employees.jobTitle, q.job_title],
+      [schema.employees.workLocation, q.work_location],
+      [schema.employees.workNature, q.work_nature],
+      [schema.employees.educationLevel, q.education],
+      [schema.employees.workShiftType, q.work_shift_type],
+      [schema.employees.serviceType, q.service_type],
+    ];
+    for (const [col, val] of directEqFilters) {
+      if (val !== undefined && val !== null && val !== 'all' && String(val).trim() !== '') {
+        conditions.push(eq(col, String(val)));
+      }
+    }
+
+    // 6. المسؤولية الأساسية
+    if (q.primary_resp && q.primary_resp !== 'all') {
+      if (q.primary_resp === 'none') {
+        conditions.push(or(isNull(schema.employees.primaryResponsibility), eq(schema.employees.primaryResponsibility, 'بلا مسؤولية')));
+      } else {
+        conditions.push(eq(schema.employees.primaryResponsibility, String(q.primary_resp)));
+      }
+    }
+
+    // 7. المسؤولية بالوكالة
+    if (q.acting_resp && q.acting_resp !== 'all') {
+      if (q.acting_resp === 'has_acting') {
+        conditions.push(and(isNotNull(schema.employees.actingResponsibility), ne(schema.employees.actingResponsibility, 'بلا وكالة'), ne(schema.employees.actingResponsibility, '')));
+      } else if (q.acting_resp === 'no_acting') {
+        conditions.push(or(isNull(schema.employees.actingResponsibility), eq(schema.employees.actingResponsibility, 'بلا وكالة'), eq(schema.employees.actingResponsibility, '')));
+      } else {
+        conditions.push(eq(schema.employees.actingResponsibility, String(q.acting_resp)));
+      }
+    }
+
+    // 8. درجة الوكيل / صفة الوكالة
+    if (q.deputy_level && q.deputy_level !== 'all') {
+      if (q.deputy_level === 'general') {
+        conditions.push(or(
+          and(isNotNull(schema.employees.actingResponsibility), ne(schema.employees.actingResponsibility, 'بلا وكالة'), ne(schema.employees.actingResponsibility, '')),
+          and(isNotNull(schema.employees.deputyLevel), ne(schema.employees.deputyLevel, 'لا يوجد'), ne(schema.employees.deputyLevel, '')),
+          and(isNotNull(schema.employees.deputyStatus), ne(schema.employees.deputyStatus, 'لا يوجد'), ne(schema.employees.deputyStatus, ''))
+        ));
+      } else {
+        conditions.push(or(eq(schema.employees.deputyLevel, String(q.deputy_level)), eq(schema.employees.deputyStatus, String(q.deputy_level))));
+      }
+    }
+
+    // 9. نوع التشكيل الهيكلي (يعتمد على جدول org_units لتحديد الجهات المطابقة)
+    if (q.org_type && q.org_type !== 'all') {
+      let matchingNames: string[] = [];
+      try {
+        const units = await db.select({ name: schema.orgUnits.name }).from(schema.orgUnits).where(eq(schema.orgUnits.type, String(q.org_type)));
+        matchingNames = units.map(u => u.name).filter(Boolean) as string[];
+      } catch { /* تجاهل - سيُستخدم الاحتياطي أدناه */ }
+      if (matchingNames.length > 0) {
+        conditions.push(or(
+          inArray(schema.employees.section, matchingNames),
+          and(or(isNull(schema.employees.section), eq(schema.employees.section, '')), inArray(schema.employees.department, matchingNames))
+        ));
+      } else {
+        conditions.push(or(
+          ilike(schema.employees.section, `%${q.org_type}%`),
+          ilike(schema.employees.department, `%${q.org_type}%`)
+        ));
+      }
+    }
+
+    // 10. جهة العمل / القسم / الشعبة (مطابقة دقيقة على القسم أو الشعبة)
+    if (q.org_unit && q.org_unit !== 'all') {
+      conditions.push(or(eq(schema.employees.department, String(q.org_unit)), eq(schema.employees.section, String(q.org_unit))));
+    }
+
+    // 12. حالة الموظف (مع معالجة خاصة لحالة "متقاعد" لتشمل "متقاعد مع تمديد")
+    if (q.status && q.status !== 'all') {
+      if (q.status === 'متقاعد') {
+        conditions.push(or(eq(schema.employees.status, 'متقاعد'), eq(schema.employees.status, 'متقاعد مع تمديد')));
+      } else {
+        conditions.push(eq(schema.employees.status, String(q.status)));
+      }
+    }
+
+    // 12b. تمديد خدمة التقاعد
+    if (q.extension && q.extension !== 'all') {
+      const hasExtCond = or(
+        gt(schema.employees.retirementExtensionYears, 0),
+        gt(schema.employees.retirementExtensionMonths, 0),
+        and(isNotNull(schema.employees.retirementExtensionOrderNumber), ne(schema.employees.retirementExtensionOrderNumber, ''))
+      );
+      if (q.extension === 'has_extension') {
+        conditions.push(hasExtCond);
+      } else if (q.extension === 'no_extension') {
+        conditions.push(not(hasExtCond));
+      } else if (q.extension === 'retired_extended') {
+        conditions.push(and(
+          or(eq(schema.employees.status, 'متقاعد'), eq(schema.employees.status, 'متقاعد مع تمديد')),
+          hasExtCond
+        ));
+      }
+    }
+
+    // 15-16. الدرجة والمرحلة الوظيفية
+    if (q.grade && q.grade !== 'all') {
+      const g = parseInt(String(q.grade));
+      if (!Number.isNaN(g)) conditions.push(eq(schema.employees.grade, g));
+    }
+    if (q.step && q.step !== 'all') {
+      const s = parseInt(String(q.step));
+      if (!Number.isNaN(s)) conditions.push(eq(schema.employees.step, s));
+    }
+
+    // 19. نظام المناوبة المحدد (بالمعرّف أو بالاسم المطابق)
+    if (q.shift_system && q.shift_system !== 'all') {
+      let sysName: string | null = null;
+      try {
+        const [sys] = await db.select({ name: schema.shiftSystems.name }).from(schema.shiftSystems).where(eq(schema.shiftSystems.id, parseInt(String(q.shift_system))));
+        sysName = sys?.name || null;
+      } catch { /* تجاهل */ }
+      const idVal = parseInt(String(q.shift_system));
+      const orConds = [];
+      if (!Number.isNaN(idVal)) orConds.push(eq(schema.employees.shiftSystemId, idVal));
+      if (sysName) orConds.push(eq(schema.employees.shiftSystemName, sysName));
+      else orConds.push(eq(schema.employees.shiftSystemName, String(q.shift_system)));
+      conditions.push(or(...orConds));
+    }
+
+    // 20. اكتمال البيانات (وجود قيمة "سيتم تسجيله لاحقاً" في أي حقل من الحقول القابلة للتأجيل)
+    if (q.data_completeness && q.data_completeness !== 'all') {
+      // ملاحظة مهمة: eq(col, X) على عمود NULL تُقيَّم إلى NULL في SQL (وليس false)، وبالتالي
+      // not(or(...)) كانت تستثني بصمت أي موظف لديه عمود NULL واحد فقط من كل من 'مكتمل' و'غير مكتمل'
+      // معاً. الحل: تغليف كل شرط مساواة بـ isNotNull أولاً، ليُقيَّم بوضوح إلى false (لا NULL) على
+      // الأعمدة الفارغة، فتصبح not(or(...)) صحيحة منطقياً بشكل كامل (كل موظف يقع في فئة واحدة بالضبط).
+      const incompleteConds = [
+        ...INCOMPLETE_DATA_COLUMNS.map(col => and(isNotNull(col), eq(col, PENDING_VALUE_SENTINEL))),
+        and(isNotNull(schema.employees.spousesData), ilike(schema.employees.spousesData, `%${PENDING_VALUE_SENTINEL}%`)),
+        and(isNotNull(schema.employees.childrenDetails), ilike(schema.employees.childrenDetails, `%${PENDING_VALUE_SENTINEL}%`)),
+      ];
+      const incompleteCond = or(...incompleteConds);
+      if (q.data_completeness === 'incomplete') {
+        conditions.push(incompleteCond);
+      } else if (q.data_completeness === 'complete') {
+        conditions.push(not(incompleteCond));
+      }
+    }
+
+    return conditions;
+  }
+
+  const EMPLOYEE_SORT_COLUMNS: Record<string, any> = {
+    id: schema.employees.id,
+    created_at: schema.employees.createdAt,
+    full_name: schema.employees.fullName,
+    company_number: schema.employees.companyNumber,
+    civil_service_number: schema.employees.civilServiceNumber,
+    grade: schema.employees.grade,
+    step: schema.employees.step,
+    status: schema.employees.status,
+  };
+
   app.get('/api/employees', requireAuth, async (req, res) => {
+    if (!inMemoryEmployees || inMemoryEmployees.length === 0) {
+      loadLocalDb();
+    }
+
+    // مسار الترقيم والفلترة من جهة الخادم: يُفعَّل فقط عند وجود معامل page في الطلب، حفاظاً على
+    // التوافق التام مع كل الاستدعاءات القديمة الأخرى في النظام (الحضور، الرواتب، التقارير...) التي
+    // تستدعي هذا المسار بلا معاملات وتتوقع القائمة الكاملة كما كانت دوماً.
+    if (req.query.page !== undefined) {
+      try {
+        const page = Math.max(1, parseInt(String(req.query.page)) || 1);
+        const pageSize = Math.min(500, Math.max(1, parseInt(String(req.query.pageSize)) || 50));
+        const sortCol = EMPLOYEE_SORT_COLUMNS[String(req.query.sortBy)] || schema.employees.id;
+        const sortDir = String(req.query.sortDir) === 'desc' ? desc : asc;
+
+        const conditions = await buildEmployeeFilterConditions(req.query);
+        const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+        let rows: any[] = [];
+        let total = 0;
+        let debugFallbackError: string | undefined;
+        try {
+          const [{ value: totalCount }] = whereClause
+            ? await db.select({ value: sqlCount() }).from(schema.employees).where(whereClause)
+            : await db.select({ value: sqlCount() }).from(schema.employees);
+          total = Number(totalCount) || 0;
+
+          // مهم: .where() يجب أن يُستدعى مباشرة بعد .from() وقبل .orderBy()/.limit()/.offset() -
+          // بناء الاستعلام بترتيب مختلف يفشل بصمت في Drizzle ويؤدي لسقوط الاستعلام كاملاً إلى catch (dbErr)
+          rows = whereClause
+            ? await db.select().from(schema.employees).where(whereClause).orderBy(sortDir(sortCol)).limit(pageSize).offset((page - 1) * pageSize)
+            : await db.select().from(schema.employees).orderBy(sortDir(sortCol)).limit(pageSize).offset((page - 1) * pageSize);
+        } catch (dbErr: any) {
+          console.warn('Database fallback for paginated employees list:', dbErr?.message);
+          debugFallbackError = String(dbErr?.message || dbErr) + ' || stack: ' + String(dbErr?.stack || '').slice(0, 500);
+          // احتياطي: فلترة/ترقيم على نسخة الذاكرة عند فشل الاستعلام المباشر لقاعدة البيانات
+          rows = inMemoryEmployees.slice((page - 1) * pageSize, page * pageSize);
+          total = inMemoryEmployees.length;
+        }
+
+        return res.json({
+          data: rows.map(enhanceEmployeeRecord),
+          total,
+          page,
+          pageSize,
+          _debugFallbackError: debugFallbackError,
+        });
+      } catch (error: any) {
+        console.error('Error in paginated employees list:', error);
+        return res.status(500).json({ error: error.message });
+      }
+    }
+
     try {
       const allEmployees = await db.select().from(schema.employees).orderBy(desc(schema.employees.createdAt));
-      if (allEmployees) {
+      if (allEmployees && allEmployees.length > 0) {
         return res.json(allEmployees.map(enhanceEmployeeRecord));
       }
     } catch (error: any) {
@@ -1058,25 +1558,53 @@ async function startServer() {
       const mappedData = mapKeys(data, snakeToCamel);
       processEmployeeNameData(mappedData, true);
       processEmployeeEducationData(mappedData);
+
+      // رقم الشركة: تحقق من الصيغة أولاً (6 أرقام، أو حروف مسموحة لعقد/أجر يومي)
+      const companyNumberCheck = validateCompanyNumberFormat(mappedData.companyNumber, mappedData.serviceType);
+      if (!companyNumberCheck.isValid) {
+        return res.status(400).json({ error: companyNumberCheck.error });
+      }
+      // منع تكرار رقم الشركة بين الموظفين
+      const duplicateEmployee = await findEmployeeByCompanyNumber(mappedData.companyNumber);
+      if (duplicateEmployee) {
+        return res.status(400).json({ error: `رقم الشركة (${String(mappedData.companyNumber).trim()}) مستخدم بالفعل من قبل موظف آخر` });
+      }
+
+      // الرقم الوظيفي (رقم وزارة التخطيط): منع التكرار إن أُدخل فعلياً (ليس فارغاً وليس "سيتم تسجيله لاحقاً")
+      if (mappedData.civilServiceNumber) {
+        const duplicateCivilServiceNumber = await findEmployeeByCivilServiceNumber(mappedData.civilServiceNumber);
+        if (duplicateCivilServiceNumber) {
+          return res.status(400).json({ error: `الرقم الوظيفي (${String(mappedData.civilServiceNumber).trim()}) مستخدم بالفعل من قبل موظف آخر` });
+        }
+      }
+
+      // رقم هوية الموظف: يُنشأ تلقائياً دوماً عند الإضافة (يتجاهل أي قيمة قد تُرسل من الواجهة لهذا الحقل تحديداً)
+      mappedData.employeeIdNumber = await generateUniqueEmployeeIdNumber();
+
       const cleanData = sanitizeEmployeeData(mappedData);
 
       if (mappedData.jobTitle || data.job_title) {
         const empGrade = mappedData.grade || data.grade || 7;
-        ensureJobTitleExists(mappedData.jobTitle || data.job_title, empGrade, 'أخرى');
+        const rawTitle = String(mappedData.jobTitle || data.job_title || '').trim();
+        ensureJobTitleExists(rawTitle, empGrade, 'أخرى');
+        const matchTitle = inMemoryJobTitles.find(t => (t.name && String(t.name).trim() === rawTitle) || (t.id && String(t.id) === String(mappedData.jobTitleId || data.job_title_id)));
+        if (matchTitle) {
+          cleanData.jobTitleId = matchTitle.id;
+          mappedData.jobTitleId = matchTitle.id;
+        }
       }
 
+      let insertedFromDb: any = null;
       try {
         const [newEmployee] = await db.insert(schema.employees).values(cleanData).returning();
         if (newEmployee && newEmployee.id) {
-          await syncEmployeeQualificationFromEmployee(newEmployee.id, mappedData);
-          saveLocalDb();
-          return res.status(201).json(enhanceEmployeeRecord(newEmployee));
+          insertedFromDb = newEmployee;
         }
       } catch (dbErr) {
         console.warn('Database fallback for creating employee');
       }
 
-      const newId = inMemoryEmployees.length > 0 ? Math.max(...inMemoryEmployees.map(e => e.id || 0)) + 1 : 1;
+      const newId = insertedFromDb?.id || (inMemoryEmployees.length > 0 ? Math.max(...inMemoryEmployees.map(e => parseInt(String(e.id)) || 0)) + 1 : 1);
       const memEmployee: any = {
         id: newId,
         createdAt: new Date().toISOString(),
@@ -1096,7 +1624,17 @@ async function startServer() {
         memEmployee[camelKey] = v;
         memEmployee[snakeKey] = v;
       }
-      inMemoryEmployees.push(memEmployee);
+      if (insertedFromDb) {
+        for (const [k, v] of Object.entries(insertedFromDb)) {
+          const camelKey = snakeToCamel(k);
+          const snakeKey = camelToSnake(k);
+          memEmployee[k] = v;
+          memEmployee[camelKey] = v;
+          memEmployee[snakeKey] = v;
+        }
+      }
+
+      syncEmployeeRecord(memEmployee, 'insert');
       await syncEmployeeQualificationFromEmployee(newId, mappedData);
       saveLocalDb();
       res.status(201).json(enhanceEmployeeRecord(memEmployee));
@@ -1186,6 +1724,7 @@ async function startServer() {
             updatedCount++;
             if (updated) {
               await syncEmployeeQualificationFromEmployee(updated.id, mappedData);
+              syncEmployeeRecord(updated, 'update');
               processedEmployees.push(enhanceEmployeeRecord(updated));
               handled = true;
             }
@@ -1195,6 +1734,7 @@ async function startServer() {
 
             if (inserted) {
               await syncEmployeeQualificationFromEmployee(inserted.id, mappedData);
+              syncEmployeeRecord(inserted, 'insert');
               processedEmployees.push(enhanceEmployeeRecord(inserted));
               handled = true;
             }
@@ -1206,7 +1746,7 @@ async function startServer() {
         if (!handled) {
           const newId = inMemoryEmployees.length > 0 ? Math.max(...inMemoryEmployees.map(e => e.id || 0)) + 1 : 1;
           const memEmp = { id: newId, ...cleanData, createdAt: new Date().toISOString() };
-          inMemoryEmployees.push(memEmp);
+          syncEmployeeRecord(memEmp, 'insert');
           await syncEmployeeQualificationFromEmployee(newId, mappedData);
           processedEmployees.push(enhanceEmployeeRecord(memEmp));
           insertedCount++;
@@ -1231,6 +1771,35 @@ async function startServer() {
     }
   });
 
+  // إحصائية عدد الموظفين ضمن كل حالة (لبطاقات التنقل بين الحالات في صفحة الموظفين)
+  // ملاحظة: يجب أن يُسجَّل هذا المسار قبل app.get('/api/employees/:id') وإلا سيُفسَّر
+  // "status-counts" كمعرّف موظف (:id) لأن Express يطابق المسارات بترتيب التسجيل.
+  app.get('/api/employees/status-counts', requireAuth, async (req, res) => {
+    try {
+      const rows = await db
+        .select({ status: schema.employees.status, count: sqlCount() })
+        .from(schema.employees)
+        .groupBy(schema.employees.status);
+      const counts: Record<string, number> = {};
+      let total = 0;
+      for (const r of rows) {
+        const key = r.status || 'غير محدد';
+        const n = Number(r.count) || 0;
+        counts[key] = (counts[key] || 0) + n;
+        total += n;
+      }
+      return res.json({ counts, total });
+    } catch (error: any) {
+      console.warn('Database fallback for employee status counts:', error?.message);
+      const counts: Record<string, number> = {};
+      for (const e of inMemoryEmployees) {
+        const key = e.status || e.Status || 'غير محدد';
+        counts[key] = (counts[key] || 0) + 1;
+      }
+      return res.json({ counts, total: inMemoryEmployees.length });
+    }
+  });
+
   app.get('/api/employees/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
@@ -1244,7 +1813,7 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for get employee by id');
     }
-    const memEmp = inMemoryEmployees.find(e => e.id === id);
+    const memEmp = inMemoryEmployees.find(e => parseInt(String(e.id)) === id);
     if (memEmp) {
       return res.json(enhanceEmployeeRecord(memEmp));
     }
@@ -1260,13 +1829,44 @@ async function startServer() {
     const mappedData = mapKeys(data, snakeToCamel);
     processEmployeeNameData(mappedData, false);
     processEmployeeEducationData(mappedData);
+
+    // رقم الشركة: تحقق من الصيغة والتفرد عند التعديل أيضاً (إن أُرسل الحقل ضمن التحديث)
+    if (mappedData.companyNumber !== undefined) {
+      const companyNumberCheck = validateCompanyNumberFormat(mappedData.companyNumber, mappedData.serviceType);
+      if (!companyNumberCheck.isValid) {
+        return res.status(400).json({ error: companyNumberCheck.error });
+      }
+      const duplicateEmployee = await findEmployeeByCompanyNumber(mappedData.companyNumber, id);
+      if (duplicateEmployee) {
+        return res.status(400).json({ error: `رقم الشركة (${String(mappedData.companyNumber).trim()}) مستخدم بالفعل من قبل موظف آخر` });
+      }
+    }
+
+    // الرقم الوظيفي (رقم وزارة التخطيط): منع التكرار عند التعديل أيضاً إن أُرسل فعلياً
+    if (mappedData.civilServiceNumber !== undefined && mappedData.civilServiceNumber) {
+      const duplicateCivilServiceNumber = await findEmployeeByCivilServiceNumber(mappedData.civilServiceNumber, id);
+      if (duplicateCivilServiceNumber) {
+        return res.status(400).json({ error: `الرقم الوظيفي (${String(mappedData.civilServiceNumber).trim()}) مستخدم بالفعل من قبل موظف آخر` });
+      }
+    }
+
+    // رقم هوية الموظف: يُنشأ تلقائياً مرة واحدة فقط عند الإضافة، ولا يُسمح بتعديله يدوياً عبر واجهة التعديل إطلاقاً
+    delete mappedData.employeeIdNumber;
+
     const cleanData = sanitizeEmployeeData(mappedData);
 
-      if (mappedData.jobTitle || data.job_title) {
-        const empGrade = mappedData.grade || data.grade || 7;
-        ensureJobTitleExists(mappedData.jobTitle || data.job_title, empGrade, 'أخرى');
+    if (mappedData.jobTitle || data.job_title) {
+      const empGrade = mappedData.grade || data.grade || 7;
+      const rawTitle = String(mappedData.jobTitle || data.job_title || '').trim();
+      ensureJobTitleExists(rawTitle, empGrade, 'أخرى');
+      const matchTitle = inMemoryJobTitles.find(t => (t.name && String(t.name).trim() === rawTitle) || (t.id && String(t.id) === String(mappedData.jobTitleId || data.job_title_id)));
+      if (matchTitle) {
+        cleanData.jobTitleId = matchTitle.id;
+        mappedData.jobTitleId = matchTitle.id;
       }
+    }
 
+    let updatedFromDb: any = null;
     try {
       const [updatedEmployee] = await db.update(schema.employees)
         .set(cleanData)
@@ -1274,72 +1874,527 @@ async function startServer() {
         .returning();
 
       if (updatedEmployee && updatedEmployee.id) {
-        await syncEmployeeQualificationFromEmployee(updatedEmployee.id, mappedData);
-        saveLocalDb();
-        return res.json(enhanceEmployeeRecord(updatedEmployee));
+        updatedFromDb = updatedEmployee;
       }
     } catch (error: any) {
       console.warn('Database fallback for update employee');
     }
 
-    const idx = inMemoryEmployees.findIndex(e => e.id === id);
+    const idx = inMemoryEmployees.findIndex(e => parseInt(String(e.id)) === id);
+    let updatedRecord: any = null;
     if (idx !== -1) {
       const current = inMemoryEmployees[idx];
-      const updated = { ...current };
+      updatedRecord = { ...current };
       for (const [k, v] of Object.entries(mappedData)) {
         const camelKey = snakeToCamel(k);
         const snakeKey = camelToSnake(k);
-        updated[k] = v;
-        updated[camelKey] = v;
-        updated[snakeKey] = v;
+        updatedRecord[k] = v;
+        updatedRecord[camelKey] = v;
+        updatedRecord[snakeKey] = v;
       }
       for (const [k, v] of Object.entries(cleanData)) {
         const camelKey = snakeToCamel(k);
         const snakeKey = camelToSnake(k);
-        updated[k] = v;
-        updated[camelKey] = v;
-        updated[snakeKey] = v;
+        updatedRecord[k] = v;
+        updatedRecord[camelKey] = v;
+        updatedRecord[snakeKey] = v;
       }
-      updated.updatedAt = new Date().toISOString();
-      updated.updated_at = new Date().toISOString();
-      inMemoryEmployees[idx] = updated;
-      await syncEmployeeQualificationFromEmployee(id, mappedData);
-      saveLocalDb();
-      return res.json(enhanceEmployeeRecord(inMemoryEmployees[idx]));
+      if (updatedFromDb) {
+        for (const [k, v] of Object.entries(updatedFromDb)) {
+          const camelKey = snakeToCamel(k);
+          const snakeKey = camelToSnake(k);
+          updatedRecord[k] = v;
+          updatedRecord[camelKey] = v;
+          updatedRecord[snakeKey] = v;
+        }
+      }
+      updatedRecord.updatedAt = new Date().toISOString();
+      updatedRecord.updated_at = new Date().toISOString();
+      inMemoryEmployees[idx] = updatedRecord;
+    } else {
+      updatedRecord = { id, ...mappedData, ...cleanData, ...(updatedFromDb || {}) };
+      inMemoryEmployees.push(updatedRecord);
     }
-    const newEmp: any = { id, createdAt: new Date().toISOString(), created_at: new Date().toISOString() };
-    for (const [k, v] of Object.entries(mappedData)) {
-      const camelKey = snakeToCamel(k);
-      const snakeKey = camelToSnake(k);
-      newEmp[k] = v;
-      newEmp[camelKey] = v;
-      newEmp[snakeKey] = v;
-    }
-    for (const [k, v] of Object.entries(cleanData)) {
-      const camelKey = snakeToCamel(k);
-      const snakeKey = camelToSnake(k);
-      newEmp[k] = v;
-      newEmp[camelKey] = v;
-      newEmp[snakeKey] = v;
-    }
-    inMemoryEmployees.push(newEmp);
+
+    await syncEmployeeQualificationFromEmployee(id, mappedData);
     saveLocalDb();
-    res.json(enhanceEmployeeRecord(newEmp));
+    res.json(enhanceEmployeeRecord(updatedRecord));
   });
+
+  // ==================== نظام الأرشفة الشاملة عند حذف الموظف (1 أيلول 2026) ====================
+  // بطلب دقيق من الإدارة: عند حذف حساب موظف — حتى لو كان مرتبطاً بسجلات أخرى — يُنقل هو وجميع
+  // سجلاته المرتبطة بالنظام دفعة واحدة إلى أرشيف المحذوفات، بدلاً من منع الحذف كما كان سابقاً.
+  // من الأرشيف: إما استعادة كاملة لكل شيء كما كان قبل الحذف تماماً، أو حذف نهائي لا رجعة فيه.
+  // خلال بقائه في الأرشيف، الموظف وكل بياناته وملفاته محذوفون فعلياً من الجداول الحية (ولا يوجد
+  // سواهم إلا كنسخة JSON كاملة داخل archived_items)، وهذا يضمن تلقائياً أنه لا يمكن لأي جزء من
+  // النظام إضافة/تعديل/حذف أي شيء يخصه، وأنه محجوب بالكامل عن كل صفحات النظام أثناء الأرشفة.
+
+  // كل الجداول المرتبطة بالموظف مباشرة عبر عمود employee_id مع قيد cascade فعلي في قاعدة البيانات:
+  // حذف صف الموظف يحذفها تلقائياً؛ نجمعها هنا فقط لالتقاط نسخة منها قبل الحذف ولإعادة إدراجها لاحقاً
+  // عند الاستعادة (بنفس المعرّفات الأصلية).
+  const EMPLOYEE_CASCADE_TABLES: { key: string; table: any; column: any; memKey?: string }[] = [
+    { key: 'careerHistories', table: schema.careerHistories, column: schema.careerHistories.employeeId, memKey: 'career' },
+    { key: 'leaveRequests', table: schema.leaveRequests, column: schema.leaveRequests.employeeId, memKey: 'leaves' },
+    { key: 'penalties', table: schema.penalties, column: schema.penalties.employeeId, memKey: 'penalties' },
+    { key: 'appreciations', table: schema.appreciations, column: schema.appreciations.employeeId, memKey: 'appreciations' },
+    { key: 'performanceEvaluations', table: schema.performanceEvaluations, column: schema.performanceEvaluations.employeeId, memKey: 'performance' },
+    { key: 'trainingEnrollments', table: schema.trainingEnrollments, column: schema.trainingEnrollments.employeeId },
+    { key: 'salaryRecords', table: schema.salaryRecords, column: schema.salaryRecords.employeeId },
+    { key: 'attendance', table: schema.attendance, column: schema.attendance.employeeId },
+    { key: 'qualifications', table: schema.qualifications, column: schema.qualifications.employeeId, memKey: 'qualifications' },
+    { key: 'jobAssignments', table: schema.jobAssignments, column: schema.jobAssignments.employeeId, memKey: 'job-assignments' },
+    { key: 'promotionsIncrements', table: schema.promotionsIncrements, column: schema.promotionsIncrements.employeeId, memKey: 'promotions' },
+    { key: 'salaryAllowances', table: schema.salaryAllowances, column: schema.salaryAllowances.employeeId, memKey: 'salary-allowances' },
+    { key: 'annualEvaluations', table: schema.annualEvaluations, column: schema.annualEvaluations.employeeId, memKey: 'annual-evaluations' },
+    { key: 'trainingCourses', table: schema.trainingCourses, column: schema.trainingCourses.employeeId, memKey: 'training-courses' },
+    { key: 'transfers', table: schema.transfers, column: schema.transfers.employeeId, memKey: 'transfers' },
+    { key: 'retirements', table: schema.retirements, column: schema.retirements.employeeId, memKey: 'retirements' },
+    { key: 'documents', table: schema.documents, column: schema.documents.employeeId, memKey: 'documents' },
+    { key: 'serviceRecords', table: schema.serviceRecords, column: schema.serviceRecords.employeeId, memKey: 'service-records' },
+    { key: 'employeeCommendations', table: schema.employeeCommendations, column: schema.employeeCommendations.employeeId },
+    { key: 'serviceCredits', table: schema.serviceCredits, column: schema.serviceCredits.employeeId, memKey: 'service-credits' },
+    { key: 'degreeTrackSnapshots', table: schema.degreeTrackSnapshots, column: schema.degreeTrackSnapshots.employeeId, memKey: 'degree-track-snapshots' },
+    { key: 'specializationCourseCredits', table: schema.specializationCourseCredits, column: schema.specializationCourseCredits.employeeId, memKey: 'specialization-credits' },
+    { key: 'promotionDelayReasons', table: schema.promotionDelayReasons, column: schema.promotionDelayReasons.employeeId, memKey: 'promotion-delay-reasons' },
+  ];
+
+  // جداول مرتبطة بالموظف لكنها بلا قيد cascade فعلي في قاعدة البيانات، فتحتاج معالجة يدوية صريحة:
+  // - trainers: ملف "مدرّب داخلي" اختياري للموظف؛ قد تُشير إليه دورات تدريبية سُجّلت لموظفين آخرين
+  //   عبر trainings.trainer_id، لكن اسم المدرب محفوظ بشكل منفصل ومكرَّر (trainer_name) داخل كل دورة،
+  //   فأرشفة/حذف ملف المدرب لا تُفقد الموظفين الآخرين أي بيانات أو سجلات تخصهم — هذا هو "الملف
+  //   المشترك مع موظفين آخرين" الوحيد المكتشف في قاعدة البيانات الحالية.
+  // - governingCourseEmployeeAssignments: يستخدم employee_id كنص وليس مفتاحاً خارجياً حقيقياً.
+  async function checkEmployeeRelatedRecords(employeeId: number): Promise<{ canProceed: boolean; message?: string; breakdown?: Record<string, number> }> {
+    const checks: { label: string; table: any; column: any; memArray?: any[] }[] = [
+      { label: 'قسائم رواتب', table: schema.salaryRecords, column: schema.salaryRecords.employeeId },
+      { label: 'طلبات إجازة', table: schema.leaveRequests, column: schema.leaveRequests.employeeId, memArray: inMemoryLeaves },
+      { label: 'عقوبات إدارية', table: schema.penalties, column: schema.penalties.employeeId, memArray: inMemoryPenalties },
+      { label: 'كتب شكر وتقدير', table: schema.appreciations, column: schema.appreciations.employeeId, memArray: inMemoryAppreciations },
+      { label: 'تقييمات أداء سنوية', table: schema.performanceEvaluations, column: schema.performanceEvaluations.employeeId, memArray: inMemoryPerformanceEvaluations },
+      { label: 'مؤهلات دراسية', table: schema.qualifications, column: schema.qualifications.employeeId, memArray: inMemoryQualifications },
+      { label: 'سجلات تكليف وظيفي', table: schema.jobAssignments, column: schema.jobAssignments.employeeId, memArray: inMemoryJobAssignments },
+      { label: 'سجلات تنقلات', table: schema.transfers, column: schema.transfers.employeeId, memArray: inMemoryTransfers },
+      { label: 'سجلات تقاعد', table: schema.retirements, column: schema.retirements.employeeId, memArray: inMemoryRetirements },
+      { label: 'مستندات ومرفقات', table: schema.documents, column: schema.documents.employeeId, memArray: inMemoryDocuments },
+      { label: 'سجلات احتساب خدمة / تمديد', table: schema.serviceRecords, column: schema.serviceRecords.employeeId, memArray: inMemoryServiceRecords },
+    ];
+
+    const breakdown: Record<string, number> = {};
+    for (const check of checks) {
+      let count = 0;
+      try {
+        const rows = await db.select().from(check.table).where(eq(check.column, employeeId));
+        count = rows.length;
+      } catch (err) {
+        count = 0;
+      }
+      if (count === 0 && Array.isArray(check.memArray)) {
+        count = check.memArray.filter((item: any) =>
+          parseInt(String(item.employee_id ?? item.employeeId ?? '0')) === employeeId
+        ).length;
+      }
+      if (count > 0) breakdown[check.label] = count;
+    }
+
+    if (Object.keys(breakdown).length === 0) {
+      return { canProceed: true };
+    }
+
+    const summary = Object.entries(breakdown).map(([label, count]) => `${label} (${count})`).join('، ');
+    // ملاحظة: هذا الفحص لم يعد يُستخدم لمنع الحذف (انظر التحديث أعلاه بتاريخ 1 أيلول 2026)، بل فقط
+    // لعرض ملخّص السجلات المنقولة إلى الأرشيف مع الموظف في استجابة الحذف.
+    return {
+      canProceed: true,
+      message: `تم نقل الموظف إلى الأرشيف مع السجلات المرتبطة به: ${summary}`,
+      breakdown
+    };
+  }
+
+  // التقاط نسخة كاملة من كل السجلات المرتبطة بالموظف في كل مفاصل النظام قبل حذفها، لتُحفظ ضمن
+  // بيانات الأرشيف (data) وتُستخدم لاحقاً في الاستعادة الكاملة إن طُلبت.
+  async function buildEmployeeCascadeSnapshot(employeeId: number): Promise<Record<string, any[]>> {
+    const related: Record<string, any[]> = {};
+
+    for (const cfg of EMPLOYEE_CASCADE_TABLES) {
+      let rows: any[] = [];
+      try {
+        rows = await db.select().from(cfg.table).where(eq(cfg.column, employeeId));
+      } catch {
+        rows = [];
+      }
+      if ((!rows || rows.length === 0) && cfg.memKey && Array.isArray(genericMemoryStores[cfg.memKey])) {
+        rows = genericMemoryStores[cfg.memKey].filter((item: any) =>
+          parseInt(String(item.employee_id ?? item.employeeId ?? '0')) === employeeId
+        );
+      }
+      related[cfg.key] = rows || [];
+    }
+
+    // خطوات محاكاة مسار الشهادات (degree_track_simulation_steps) ترتبط بلقطة المسار (snapshot) وليس بالموظف مباشرة
+    const snapshotIds = (related['degreeTrackSnapshots'] || []).map((s: any) => s.id).filter((v: any) => v != null);
+    let simulationSteps: any[] = [];
+    if (snapshotIds.length > 0) {
+      try {
+        simulationSteps = await db.select().from(schema.degreeTrackSimulationSteps).where(inArray(schema.degreeTrackSimulationSteps.snapshotId, snapshotIds));
+      } catch {
+        simulationSteps = [];
+      }
+      if (simulationSteps.length === 0 && Array.isArray(genericMemoryStores['degree-track-simulation-steps'])) {
+        simulationSteps = genericMemoryStores['degree-track-simulation-steps'].filter((item: any) =>
+          snapshotIds.includes(parseInt(String(item.snapshot_id ?? item.snapshotId ?? '0')))
+        );
+      }
+    }
+    related['degreeTrackSimulationSteps'] = simulationSteps;
+
+    let trainerRows: any[] = [];
+    try {
+      trainerRows = await db.select().from(schema.trainers).where(eq(schema.trainers.employeeId, employeeId));
+    } catch {
+      trainerRows = [];
+    }
+    related['trainers'] = trainerRows || [];
+
+    let governingRows: any[] = [];
+    try {
+      governingRows = await db.select().from(schema.governingCourseEmployeeAssignments).where(eq(schema.governingCourseEmployeeAssignments.employeeId, String(employeeId)));
+    } catch {
+      governingRows = [];
+    }
+    related['governingCourseEmployeeAssignments'] = governingRows || [];
+
+    return related;
+  }
+
+  // حذف كل أثر للموظف من مخازن الذاكرة المؤقتة (النسخة الاحتياطية التي يعمل عليها النظام عند تعذّر
+  // الاتصال الفعلي بقاعدة البيانات)، بما يضمن حجبه الكامل عن كل صفحات النظام أثناء بقائه في الأرشيف.
+  function removeEmployeeFromMemoryStores(employeeId: number) {
+    Object.keys(genericMemoryStores).forEach(key => {
+      if (Array.isArray(genericMemoryStores[key])) {
+        genericMemoryStores[key] = genericMemoryStores[key].filter(
+          (item: any) => parseInt(String(item.employee_id ?? item.employeeId ?? '0')) !== employeeId
+        );
+      }
+    });
+    // خطوات محاكاة مسار الشهادات ترتبط بلقطة (snapshot_id) لا بالموظف مباشرة؛ بعد حذف لقطاته أعلاه
+    // نحذف أي خطوات محاكاة يتيمة تابعة لها احتياطاً
+    if (Array.isArray(genericMemoryStores['degree-track-simulation-steps'])) {
+      const remainingSnapshotIds = new Set(
+        (genericMemoryStores['degree-track-snapshots'] || []).map((s: any) => parseInt(String(s.id)))
+      );
+      genericMemoryStores['degree-track-simulation-steps'] = genericMemoryStores['degree-track-simulation-steps'].filter(
+        (item: any) => remainingSnapshotIds.has(parseInt(String(item.snapshot_id ?? item.snapshotId ?? '0')))
+      );
+    }
+  }
 
   app.delete('/api/employees/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid ID format' });
     }
+
+    // جلب نسخة كاملة من بيانات الموظف قبل الحذف لأرشفتها: الحذف هنا ليس نهائياً، بل نقل — هو وجميع
+    // سجلاته المرتبطة بكل مفاصل النظام دفعة واحدة — إلى أرشيف المحذوفات (archived_items)، حسب طلب
+    // دقيق بتاريخ 1 أيلول 2026: لم يعد الحذف يُمنع لوجود سجلات مرتبطة، بل تُنقل معه جميعها للأرشيف،
+    // ومن هناك إما استعادة كاملة أو حذف نهائي لا رجعة فيه.
+    let employeeSnapshot: any = null;
     try {
-      await db.delete(schema.employees).where(eq(schema.employees.id, id));
+      const [employee] = await db.select().from(schema.employees).where(eq(schema.employees.id, id));
+      if (employee) employeeSnapshot = employee;
     } catch (error: any) {
-      console.warn('Database fallback for delete employee');
+      console.warn('Database fallback for employee snapshot before archive');
     }
-    inMemoryEmployees = inMemoryEmployees.filter(e => e.id !== id);
+    if (!employeeSnapshot) {
+      employeeSnapshot = inMemoryEmployees.find((e: any) => parseInt(String(e.id)) === id) || null;
+    }
+    if (!employeeSnapshot) {
+      return res.status(404).json({ error: 'الموظف غير موجود' });
+    }
+
+    // التقاط ملخّص وصفي (لعرضه فقط في الاستجابة) + نسخة كاملة من كل السجلات المرتبطة قبل حذف أي شيء
+    const relatedCheck = await checkEmployeeRelatedRecords(id);
+    const relatedSnapshot = await buildEmployeeCascadeSnapshot(id);
+
+    let archivedRowId: number | null = null;
+    try {
+      const [archivedRow] = await db.insert(schema.archivedItems).values({
+        entityType: 'employee',
+        entityId: id,
+        entityLabel: employeeSnapshot.fullName || employeeSnapshot.full_name || `موظف #${id}`,
+        data: JSON.stringify({ employee: employeeSnapshot, related: relatedSnapshot }),
+        deletedBy: req.user?.username || req.user?.email || null,
+        deletedByName: (req.user as any)?.fullName || (req.user as any)?.name || req.user?.username || req.user?.email || null,
+      }).returning({ id: schema.archivedItems.id });
+      archivedRowId = archivedRow?.id ?? null;
+    } catch (archiveError: any) {
+      console.error('CRITICAL: failed to archive employee before delete, aborting delete:', archiveError?.message);
+      return res.status(500).json({ error: 'تعذّر نقل الموظف إلى أرشيف المحذوفات؛ تم إلغاء عملية الحذف حفاظاً على سلامة البيانات. الرجاء المحاولة لاحقاً.' });
+    }
+
+    // حذف فعلي داخل معاملة واحدة (transaction): يُحذف صراحةً كل جدول من الجداول الـ23 المرتبطة
+    // بالموظف (EMPLOYEE_CASCADE_TABLES) يدوياً بالكود، دون أي اعتماد على قيد cascade في قاعدة
+    // البيانات — فحسب تدقيق حي أُجري بتاريخ 2 أيلول 2026، فقط 11 من أصل 23 جدولاً تملك فعلياً قيد
+    // "ON DELETE CASCADE" حقيقياً في قاعدة البيانات الفعلية (رغم أن schema.ts يُعرّف هذا القيد على
+    // الجداول الـ23 كلها)؛ الجداول الـ12 الباقية (career_histories, leave_requests, penalties,
+    // appreciations, performance_evaluations, training_enrollments, salary_records, attendance,
+    // qualifications, job_assignments, employee_commendations, service_records) عمودها عادي بلا
+    // أي قيد مفتاح خارجي إطلاقاً. الاعتماد على الافتراض السابق كان يترك سجلات هذه الجداول الـ12
+    // حيّة يتيمة بعد حذف الموظف (تسبب تحديداً في فشل الاستعادة لاحقاً بخطأ تكرار مفتاح أساسي عند
+    // إعادة إدراجها بنفس معرّفاتها). الحذف الصريح هنا مأمون تماماً حتى للجداول التي تملك cascade
+    // فعلياً (حذف صفر صف هو ببساطة عملية لا تُغيّر شيئاً). كذلك تُحذف يدوياً الجداول التي لا تملك
+    // قيد cascade فعلياً أصلاً (trainers, governingCourseEmployeeAssignments) حتى تكون عملية الحجب
+    // شاملة فعلاً كما طُلب.
+    let deleteConfirmed = false;
+    let deleteErrorDetail: string | null = null;
+    try {
+      await db.transaction(async (tx) => {
+        // خطوات محاكاة مسار الشهادات ترتبط بلقطة (snapshot_id) لا بالموظف مباشرة، فيجب حذفها قبل
+        // حذف لقطات المسار نفسها (degreeTrackSnapshots) لتفادي أي تعارض في ترتيب الحذف
+        const snapshotIds = (relatedSnapshot['degreeTrackSnapshots'] || []).map((s: any) => s.id).filter((v: any) => v != null);
+        if (snapshotIds.length > 0) {
+          await tx.delete(schema.degreeTrackSimulationSteps).where(inArray(schema.degreeTrackSimulationSteps.snapshotId, snapshotIds));
+        }
+        for (const cfg of EMPLOYEE_CASCADE_TABLES) {
+          await tx.delete(cfg.table).where(eq(cfg.column, id));
+        }
+        await tx.delete(schema.trainers).where(eq(schema.trainers.employeeId, id));
+        await tx.delete(schema.governingCourseEmployeeAssignments).where(eq(schema.governingCourseEmployeeAssignments.employeeId, String(id)));
+        const deletedRows = await tx.delete(schema.employees).where(eq(schema.employees.id, id)).returning({ id: schema.employees.id });
+        deleteConfirmed = Array.isArray(deletedRows) && deletedRows.length > 0;
+        if (!deleteConfirmed) {
+          throw new Error('EMPLOYEE_DELETE_NOT_CONFIRMED');
+        }
+      });
+    } catch (error: any) {
+      deleteErrorDetail = error?.cause?.message || error?.message || String(error);
+      console.warn('Database fallback / rollback for cascade delete employee:', deleteErrorDetail);
+      deleteConfirmed = false;
+    }
+
+    if (!deleteConfirmed) {
+      try {
+        const [stillThere] = await db.select({ id: schema.employees.id }).from(schema.employees).where(eq(schema.employees.id, id));
+        if (stillThere) {
+          if (archivedRowId) {
+            try { await db.delete(schema.archivedItems).where(eq(schema.archivedItems.id, archivedRowId)); } catch {}
+          }
+          return res.status(500).json({ error: 'تعذّر حذف قيد الموظف وسجلاته فعلياً من قاعدة البيانات؛ تم التراجع عن نقله إلى الأرشيف حفاظاً على تطابق البيانات.' + (deleteErrorDetail ? (' التفاصيل: ' + deleteErrorDetail) : '') });
+        }
+      } catch (verifyError: any) {
+        console.warn('Could not verify employee deletion, proceeding with in-memory sync:', verifyError?.message);
+      }
+    }
+
+    syncEmployeeRecord({ id }, 'delete');
+    removeEmployeeFromMemoryStores(id);
+
     saveLocalDb();
-    res.json({ success: true });
+    res.json({ success: true, archived: true, relatedRecords: relatedCheck.breakdown || {} });
+  });
+
+  // ==================== أرشيف المحذوفات (Soft Delete Archive) ====================
+  // عند حذف أي سجل مدعوم (الموظفون حالياً)، يُنقل هو وجميع سجلاته المرتبطة إلى هذا الأرشيف بدلاً من
+  // حذفه نهائياً. مدير النظام يستطيع من نافذة الإعدادات استعراض الأرشيف، استعادة أي سجل منه بكل
+  // تفاصيله بنفس معرّفاته الأصلية، أو تأكيد حذفه بشكل نهائي ولا رجعة فيه.
+
+  app.get('/api/archive', requireAuth, async (req, res) => {
+    try {
+      const entityType = req.query.entity_type as string | undefined;
+      let query = db.select().from(schema.archivedItems);
+      if (entityType) {
+        query = db.select().from(schema.archivedItems).where(eq(schema.archivedItems.entityType, entityType)) as any;
+      }
+      const rows = await query.orderBy(desc(schema.archivedItems.createdAt));
+      return res.json(rows.map((r: any) => mapKeys(r, camelToSnake)));
+    } catch (error: any) {
+      console.error('Error listing archived items:', error?.message);
+      return res.status(500).json({ error: 'تعذّر تحميل أرشيف المحذوفات' });
+    }
+  });
+
+  // خريطة (جدول Drizzle <- مفتاح في بيانات الأرشيف) لكل الجداول المرتبطة بالموظف، تُستخدم عند
+  // الاستعادة لإعادة إدراج كل سجل بنفس معرّفه الأصلي. الترتيب هنا مهم: يجب إدراج لقطات مسار
+  // الشهادات (degreeTrackSnapshots) قبل خطوات محاكاتها (degreeTrackSimulationSteps) لأن الأخيرة
+  // ترتبط بها عبر مفتاح خارجي داخلي.
+  const EMPLOYEE_RESTORE_ORDER: string[] = [
+    'degreeTrackSnapshots', 'degreeTrackSimulationSteps',
+    'careerHistories', 'leaveRequests', 'penalties', 'appreciations', 'performanceEvaluations',
+    'trainingEnrollments', 'salaryRecords', 'attendance', 'qualifications', 'jobAssignments',
+    'promotionsIncrements', 'salaryAllowances', 'annualEvaluations', 'trainingCourses',
+    'transfers', 'retirements', 'documents', 'serviceRecords', 'employeeCommendations',
+    'serviceCredits', 'specializationCourseCredits', 'promotionDelayReasons',
+    'trainers', 'governingCourseEmployeeAssignments',
+  ];
+  const EMPLOYEE_RESTORE_TABLE_BY_KEY: Record<string, any> = {
+    careerHistories: schema.careerHistories, leaveRequests: schema.leaveRequests, penalties: schema.penalties,
+    appreciations: schema.appreciations, performanceEvaluations: schema.performanceEvaluations,
+    trainingEnrollments: schema.trainingEnrollments, salaryRecords: schema.salaryRecords, attendance: schema.attendance,
+    qualifications: schema.qualifications, jobAssignments: schema.jobAssignments, promotionsIncrements: schema.promotionsIncrements,
+    salaryAllowances: schema.salaryAllowances, annualEvaluations: schema.annualEvaluations, trainingCourses: schema.trainingCourses,
+    transfers: schema.transfers, retirements: schema.retirements, documents: schema.documents, serviceRecords: schema.serviceRecords,
+    employeeCommendations: schema.employeeCommendations, serviceCredits: schema.serviceCredits,
+    degreeTrackSnapshots: schema.degreeTrackSnapshots, degreeTrackSimulationSteps: schema.degreeTrackSimulationSteps,
+    specializationCourseCredits: schema.specializationCourseCredits, promotionDelayReasons: schema.promotionDelayReasons,
+    trainers: schema.trainers, governingCourseEmployeeAssignments: schema.governingCourseEmployeeAssignments,
+  };
+  // خريطة (مفتاح بيانات الأرشيف <- اسم مخزن الذاكرة المؤقتة) لمزامنة الاستعادة مع الطبقة الاحتياطية
+  const EMPLOYEE_RESTORE_MEMKEY_BY_KEY: Record<string, string> = {
+    careerHistories: 'career', leaveRequests: 'leaves', penalties: 'penalties', appreciations: 'appreciations',
+    performanceEvaluations: 'performance', qualifications: 'qualifications', jobAssignments: 'job-assignments',
+    promotionsIncrements: 'promotions', salaryAllowances: 'salary-allowances', annualEvaluations: 'annual-evaluations',
+    trainingCourses: 'training-courses', transfers: 'transfers', retirements: 'retirements', documents: 'documents',
+    serviceRecords: 'service-records', serviceCredits: 'service-credits', degreeTrackSnapshots: 'degree-track-snapshots',
+    degreeTrackSimulationSteps: 'degree-track-simulation-steps', specializationCourseCredits: 'specialization-credits',
+    promotionDelayReasons: 'promotion-delay-reasons',
+  };
+
+  app.post('/api/archive/:id/restore', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid ID' });
+    }
+    try {
+      const [row] = await db.select().from(schema.archivedItems).where(eq(schema.archivedItems.id, id));
+      if (!row) {
+        return res.status(404).json({ error: 'السجل غير موجود في الأرشيف' });
+      }
+
+      if (row.entityType !== 'employee') {
+        return res.status(400).json({ error: `استعادة نوع السجلات (${row.entityType}) غير مدعومة حالياً` });
+      }
+
+      const parsed = JSON.parse(row.data);
+      // توافق مع السجلات المؤرشفة قبل تحديث 1 أيلول 2026: كانت data تحتوي وقتها على كائن الموظف
+      // مباشرة دون سجلاته المرتبطة (لأن الحذف كان يُمنع أصلاً عند وجود أي سجلات مرتبطة سابقاً)
+      const isLegacyFormat = !parsed.employee && !parsed.related;
+      const snapshot = isLegacyFormat ? parsed : parsed.employee;
+      const related: Record<string, any[]> = isLegacyFormat ? {} : (parsed.related || {});
+
+      // منع الاستعادة إذا كان هناك موظف حالياً يحمل نفس المعرّف أو نفس رقم الشركة (تضارب بيانات)
+      const [existingById] = await db.select().from(schema.employees).where(eq(schema.employees.id, row.entityId));
+      if (existingById) {
+        return res.status(400).json({ error: 'يوجد موظف آخر مسجَّل حالياً بنفس المعرّف، تعذّرت الاستعادة' });
+      }
+      if (snapshot.companyNumber) {
+        const [existingByCompanyNumber] = await db.select().from(schema.employees).where(eq(schema.employees.companyNumber, snapshot.companyNumber));
+        if (existingByCompanyNumber) {
+          return res.status(400).json({ error: `رقم الشركة (${snapshot.companyNumber}) مستخدم حالياً من قبل موظف آخر، تعذّرت الاستعادة` });
+        }
+      }
+
+      const restoreData: any = { ...snapshot, id: row.entityId };
+      delete restoreData.createdAt;
+      delete restoreData.created_at;
+
+      // إدراج صف الموظف نفسه: هذه الخطوة وحدها حرجة ويجب أن تنجح لتُعتبر الاستعادة ناجحة
+      await db.insert(schema.employees).values(restoreData);
+
+      // إدراج كل جدول من الجداول المرتبطة بمعاملة (transaction) مستقلة خاصة به: فشل جدول واحد فقط
+      // (كحالات انحراف تعريف الأعمدة القديمة والموثّقة سابقاً بين schema.ts وقاعدة البيانات الفعلية
+      // — مثال حي: عمود course_type في training_courses معرَّف في schema.ts لكنه غير موجود فعلياً في
+      // الجدول الحي) لا يجوز أن يُسقط استعادة بقية بيانات الموظف بأكملها. هذا يطابق تماماً الفلسفة
+      // المعتمدة في بقية نقاط النظام: قاعدة البيانات طبقة "أفضل جهد"، ومخزن الذاكرة المؤقتة (الذي
+      // تُزامَن معه كل السجلات المستعادة أدناه بلا استثناء) هو مصدر الحقيقة الفعلي الذي يعمل عليه
+      // النظام عند تعذّر الكتابة الحية — تماماً كما كان الحال قبل حذف الموظف أصلاً.
+      const dbPersistFailures: Record<string, string> = {};
+      for (const key of EMPLOYEE_RESTORE_ORDER) {
+        const table = EMPLOYEE_RESTORE_TABLE_BY_KEY[key];
+        const rows = (related[key] || []).map((r: any) => {
+          const clean = { ...r };
+          delete clean.createdAt; delete clean.created_at;
+          delete clean.updatedAt; delete clean.updated_at;
+          return clean;
+        });
+        if (table && rows.length > 0) {
+          try {
+            await db.transaction(async (tx) => {
+              // تنظيف احتياطي: حذف أي صف حي قد يحمل نفس المعرّف مسبقاً قبل إعادة الإدراج. هذا يحمي
+              // من حالة أرشيف قديم/تالف (كالثغرة التي كانت موجودة قبل 2 أيلول 2026 حين لم تكن بعض
+              // الجداول تُحذف فعلياً عند الأرشفة، فتبقى نسخ يتيمة حيّة بنفس المعرّفات) دون أي خطر على
+              // بيانات موظفين آخرين، لأن هذه المعرّفات (id) خاصة حصراً بسجلات هذا الموظف المؤرشف.
+              const restoreIds = rows.map((r: any) => r.id).filter((v: any) => v != null);
+              if (restoreIds.length > 0) {
+                await tx.delete(table).where(inArray(table.id, restoreIds));
+              }
+              await tx.insert(table).values(rows);
+            });
+          } catch (tableError: any) {
+            const tableDetail = tableError?.cause?.message || tableError?.message || String(tableError);
+            console.warn(`Database fallback for restoring "${key}" (kept in memory layer only):`, tableDetail);
+            dbPersistFailures[key] = tableDetail;
+          }
+        }
+      }
+
+      // مزامنة مخازن الذاكرة المؤقتة: إعادة الموظف وكل سجلاته المرتبطة كما كانت قبل الحذف تماماً
+      syncEmployeeRecord(mapKeys(restoreData, snakeToCamel), 'insert');
+      for (const [tableKey, memKey] of Object.entries(EMPLOYEE_RESTORE_MEMKEY_BY_KEY)) {
+        const rows = related[tableKey] || [];
+        if (rows.length === 0) continue;
+        genericMemoryStores[memKey] = genericMemoryStores[memKey] || [];
+        for (const r of rows) {
+          genericMemoryStores[memKey].push({ ...mapKeys(r, snakeToCamel), ...mapKeys(r, camelToSnake) });
+        }
+      }
+      // إعادة ربط أسماء المتغيرات المسمّاة بمخازنها العامة (نفس نمط syncEntityRecord أعلاه)
+      inMemoryCareerHistories = genericMemoryStores['career'];
+      inMemoryLeaves = genericMemoryStores['leaves'];
+      inMemoryPenalties = genericMemoryStores['penalties'];
+      inMemoryAppreciations = genericMemoryStores['appreciations'];
+      inMemoryPerformanceEvaluations = genericMemoryStores['performance'];
+      inMemoryQualifications = genericMemoryStores['qualifications'];
+      inMemoryJobAssignments = genericMemoryStores['job-assignments'];
+      inMemoryPromotions = genericMemoryStores['promotions'];
+      inMemorySalaryAllowances = genericMemoryStores['salary-allowances'];
+      inMemoryAnnualEvaluations = genericMemoryStores['annual-evaluations'];
+      inMemoryTrainingCourses = genericMemoryStores['training-courses'];
+      inMemoryTransfers = genericMemoryStores['transfers'];
+      inMemoryRetirements = genericMemoryStores['retirements'];
+      inMemoryDocuments = genericMemoryStores['documents'];
+      inMemoryServiceRecords = genericMemoryStores['service-records'];
+      inMemoryServiceCredits = genericMemoryStores['service-credits'];
+      inMemoryDegreeTrackSnapshots = genericMemoryStores['degree-track-snapshots'];
+      inMemoryDegreeTrackSimulationSteps = genericMemoryStores['degree-track-simulation-steps'];
+      inMemorySpecializationCredits = genericMemoryStores['specialization-credits'];
+      inMemoryPromotionDelayReasons = genericMemoryStores['promotion-delay-reasons'];
+      genericMemoryStores['promotion_delay_reasons'] = inMemoryPromotionDelayReasons;
+
+      await db.delete(schema.archivedItems).where(eq(schema.archivedItems.id, id));
+      saveLocalDb();
+
+      if (Object.keys(dbPersistFailures).length > 0) {
+        console.warn('Restore completed with partial DB persistence for employee', row.entityId, '- tables kept in memory layer only:', Object.keys(dbPersistFailures).join(', '));
+      }
+      res.json({ success: true, restoredId: row.entityId, dbPersistFailures: Object.keys(dbPersistFailures) });
+    } catch (error: any) {
+      const detail = error?.cause?.message || error?.message || String(error);
+      console.error('Error restoring archived item:', detail);
+      res.status(500).json({ error: 'تعذّرت استعادة السجل من الأرشيف: ' + detail });
+    }
+  });
+
+  app.delete('/api/archive/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid ID' });
+    }
+    try {
+      // ملاحظة (تحديث 1 أيلول 2026): الأرشفة (الحذف الأول) تنقل الموظف وكل سجلاته المرتبطة فعلياً
+      // خارج الجداول الحية إلى داخل هذا السجل المؤرشف (data) كنسخة JSON كاملة. لذلك "الحذف النهائي"
+      // هنا يعني إتلاف هذه النسخة الاحتياطية نفسها بشكل نهائي ولا رجعة فيه — وهذا يحقق تلقائياً ما
+      // طُلب: أي ملف كان مشتركاً مع موظفين آخرين (كملف "مدرّب" داخلي مرتبط بدورات تدريبية سُجّلت
+      // لموظفين آخرين) سبق حذفه من الجداول الحية عند الأرشفة، بينما تبقى بيانات وسجلات الموظفين
+      // الآخرين المرتبطة به (كاسم المدرّب المحفوظ ضمن كل دورة تدريبية) محفوظة دون أي مساس بها.
+      const deletedRows = await db.delete(schema.archivedItems).where(eq(schema.archivedItems.id, id)).returning({ id: schema.archivedItems.id });
+      if (!deletedRows || deletedRows.length === 0) {
+        return res.status(404).json({ error: 'السجل غير موجود في الأرشيف' });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error permanently deleting archived item:', error?.message);
+      res.status(500).json({ error: 'تعذّر الحذف النهائي للسجل من الأرشيف' });
+    }
   });
 
   // Leave Requests API
@@ -1352,13 +2407,18 @@ async function startServer() {
         query = db.select().from(schema.leaveRequests).where(eq(schema.leaveRequests.employeeId, employeeId)) as any;
       }
       const leaves = await query.orderBy(desc(schema.leaveRequests.createdAt));
-      if (leaves) {
+      if (leaves && leaves.length > 0) {
         return res.json(leaves.map(r => mapKeys(r, camelToSnake)));
       }
     } catch (error: any) {
       console.warn('Database fallback for leaves list');
     }
-    res.json([]);
+    const empIdParam = req.query.employeeId || req.query.employee_id;
+    let memList = genericMemoryStores['leaves'] || inMemoryLeaves || [];
+    if (empIdParam) {
+      memList = memList.filter(item => String(item.employee_id || item.employeeId) === String(empIdParam));
+    }
+    res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
   });
 
   app.post('/api/leaves', requireAuth, async (req, res) => {
@@ -1381,7 +2441,7 @@ async function startServer() {
         return res.status(400).json({ error: 'employee_id is required' });
       }
 
-      let newLeave = null;
+      let newLeave: any = null;
       try {
         const [inserted] = await db.insert(schema.leaveRequests).values(mappedData).returning();
         newLeave = inserted;
@@ -1393,7 +2453,7 @@ async function startServer() {
       const days = mappedData.daysCount || 0;
       const lType = (mappedData.leaveType || '').toLowerCase();
       if (days > 0 && mappedData.status !== 'مرفوضة' && mappedData.status !== 'rejected') {
-        const emp = inMemoryEmployees.find(e => e.id === mappedData.employeeId);
+        const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === mappedData.employeeId);
         if (emp) {
           if (lType.includes('مرض') || lType.includes('sick')) {
             const cur = parseInt(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30);
@@ -1407,8 +2467,12 @@ async function startServer() {
         }
       }
 
-      const resItem = newLeave ? mapKeys(newLeave, camelToSnake) : { id: Date.now(), ...data, created_at: new Date().toISOString() };
-      res.status(201).json(resItem);
+      const newId = newLeave?.id || (genericMemoryStores['leaves']?.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
+      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const memRecord = { ...cleanSnake, id: newId, created_at: new Date().toISOString() };
+      syncEntityRecord('leaves', memRecord, 'insert');
+
+      res.status(201).json(mapKeys(newLeave || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating leave:', error);
       res.status(500).json({ error: error.message });
@@ -1432,7 +2496,7 @@ async function startServer() {
       delete mappedData.id;
       delete mappedData.createdAt;
 
-      let updatedLeave = null;
+      let updatedLeave: any = null;
       try {
         const [updated] = await db.update(schema.leaveRequests)
           .set(mappedData)
@@ -1449,7 +2513,7 @@ async function startServer() {
         const empId = mappedData.employeeId;
         const lType = (mappedData.leaveType || '').toLowerCase();
         if (days > 0 && empId) {
-          const emp = inMemoryEmployees.find(e => e.id === empId);
+          const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empId);
           if (emp) {
             if (lType.includes('مرض') || lType.includes('sick')) {
               const cur = parseInt(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30);
@@ -1464,10 +2528,30 @@ async function startServer() {
         }
       }
 
-      const resItem = updatedLeave ? mapKeys(updatedLeave, camelToSnake) : { id, ...data };
-      res.json(resItem);
+      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const memRecord = { ...cleanSnake, id };
+      syncEntityRecord('leaves', memRecord, 'update');
+
+      res.json(mapKeys(updatedLeave || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating leave request:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/leaves/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      try {
+        await db.delete(schema.leaveRequests).where(eq(schema.leaveRequests.id, id));
+      } catch (error: any) {
+        console.warn('Database fallback for delete leave');
+      }
+      syncEntityRecord('leaves', { id }, 'delete');
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting leave:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -1482,13 +2566,18 @@ async function startServer() {
         query = db.select().from(schema.penalties).where(eq(schema.penalties.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.penalties.createdAt));
-      if (results) {
+      if (results && results.length > 0) {
         return res.json(results.map(r => mapKeys(r, camelToSnake)));
       }
     } catch (error: any) {
       console.warn('Database fallback for penalties list');
     }
-    res.json([]);
+    const empIdParam = req.query.employeeId || req.query.employee_id;
+    let memList = genericMemoryStores['penalties'] || inMemoryPenalties || [];
+    if (empIdParam) {
+      memList = memList.filter(item => String(item.employee_id || item.employeeId) === String(empIdParam));
+    }
+    res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
   });
 
   app.post('/api/penalties', requireAuth, async (req, res) => {
@@ -1505,8 +2594,24 @@ async function startServer() {
         return res.status(400).json({ error: 'employee_id is required' });
       }
 
-      const [newPenalty] = await db.insert(schema.penalties).values(mappedData).returning();
-      res.status(201).json(mapKeys(newPenalty, camelToSnake));
+      let newPenalty: any = null;
+      try {
+        const [inserted] = await db.insert(schema.penalties).values(mappedData).returning();
+        newPenalty = inserted;
+      } catch (dbErr) {
+        console.warn('Database fallback for create penalty');
+      }
+
+      const newId = newPenalty?.id || (genericMemoryStores['penalties']?.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
+      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const memRecord = { ...cleanSnake, id: newId, created_at: new Date().toISOString() };
+      syncEntityRecord('penalties', memRecord, 'insert');
+
+      if (mappedData.employeeId) {
+        triggerRecalculateEligibility(mappedData.employeeId).catch(() => {});
+      }
+
+      res.status(201).json(mapKeys(newPenalty || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating penalty:', error);
       res.status(500).json({ error: error.message });
@@ -1515,7 +2620,8 @@ async function startServer() {
 
   app.put('/api/penalties/:id', requireAuth, async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
       if (mappedData.employeeId !== undefined) {
@@ -1524,8 +2630,23 @@ async function startServer() {
       delete mappedData.id;
       delete mappedData.createdAt;
 
-      const [updated] = await db.update(schema.penalties).set(mappedData).where(eq(schema.penalties.id, parseInt(id))).returning();
-      res.json(mapKeys(updated, camelToSnake));
+      let updatedPenalty: any = null;
+      try {
+        const [updated] = await db.update(schema.penalties).set(mappedData).where(eq(schema.penalties.id, id)).returning();
+        updatedPenalty = updated;
+      } catch (dbErr) {
+        console.warn('Database fallback for update penalty');
+      }
+
+      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const memRecord = { ...cleanSnake, id };
+      syncEntityRecord('penalties', memRecord, 'update');
+
+      if (mappedData.employeeId) {
+        triggerRecalculateEligibility(mappedData.employeeId).catch(() => {});
+      }
+
+      res.json(mapKeys(updatedPenalty || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating penalty:', error);
       res.status(500).json({ error: error.message });
@@ -1534,8 +2655,21 @@ async function startServer() {
 
   app.delete('/api/penalties/:id', requireAuth, async (req, res) => {
     try {
-      const { id } = req.params;
-      await db.delete(schema.penalties).where(eq(schema.penalties.id, parseInt(id)));
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      const existing = (genericMemoryStores['penalties'] || []).find(r => String(r.id) === String(id));
+      try {
+        await db.delete(schema.penalties).where(eq(schema.penalties.id, id));
+      } catch (error: any) {
+        console.warn('Database fallback for delete penalty');
+      }
+      syncEntityRecord('penalties', { id }, 'delete');
+
+      const empId = parseInt(String(existing?.employee_id || existing?.employeeId || '0'));
+      if (empId) {
+        triggerRecalculateEligibility(empId).catch(() => {});
+      }
+
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting penalty:', error);
@@ -1553,13 +2687,18 @@ async function startServer() {
         query = db.select().from(schema.appreciations).where(eq(schema.appreciations.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.appreciations.createdAt));
-      if (results) {
+      if (results && results.length > 0) {
         return res.json(results.map(r => mapKeys(r, camelToSnake)));
       }
     } catch (error: any) {
       console.warn('Database fallback for appreciations list');
     }
-    res.json([]);
+    const empIdParam = req.query.employeeId || req.query.employee_id;
+    let memList = genericMemoryStores['appreciations'] || inMemoryAppreciations || [];
+    if (empIdParam) {
+      memList = memList.filter(item => String(item.employee_id || item.employeeId) === String(empIdParam));
+    }
+    res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
   });
 
   app.post('/api/appreciations', requireAuth, async (req, res) => {
@@ -1576,8 +2715,24 @@ async function startServer() {
         return res.status(400).json({ error: 'employee_id is required' });
       }
 
-      const [newAppreciation] = await db.insert(schema.appreciations).values(mappedData).returning();
-      res.status(201).json(mapKeys(newAppreciation, camelToSnake));
+      let newAppreciation: any = null;
+      try {
+        const [inserted] = await db.insert(schema.appreciations).values(mappedData).returning();
+        newAppreciation = inserted;
+      } catch (dbErr) {
+        console.warn('Database fallback for create appreciation');
+      }
+
+      const newId = newAppreciation?.id || (genericMemoryStores['appreciations']?.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
+      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const memRecord = { ...cleanSnake, id: newId, created_at: new Date().toISOString() };
+      syncEntityRecord('appreciations', memRecord, 'insert');
+
+      if (mappedData.employeeId) {
+        triggerRecalculateEligibility(mappedData.employeeId).catch(() => {});
+      }
+
+      res.status(201).json(mapKeys(newAppreciation || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating appreciation:', error);
       res.status(500).json({ error: error.message });
@@ -1586,7 +2741,8 @@ async function startServer() {
 
   app.put('/api/appreciations/:id', requireAuth, async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
       if (mappedData.employeeId !== undefined) {
@@ -1595,8 +2751,23 @@ async function startServer() {
       delete mappedData.id;
       delete mappedData.createdAt;
 
-      const [updated] = await db.update(schema.appreciations).set(mappedData).where(eq(schema.appreciations.id, parseInt(id))).returning();
-      res.json(mapKeys(updated, camelToSnake));
+      let updatedApprec: any = null;
+      try {
+        const [updated] = await db.update(schema.appreciations).set(mappedData).where(eq(schema.appreciations.id, id)).returning();
+        updatedApprec = updated;
+      } catch (dbErr) {
+        console.warn('Database fallback for update appreciation');
+      }
+
+      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const memRecord = { ...cleanSnake, id };
+      syncEntityRecord('appreciations', memRecord, 'update');
+
+      if (mappedData.employeeId) {
+        triggerRecalculateEligibility(mappedData.employeeId).catch(() => {});
+      }
+
+      res.json(mapKeys(updatedApprec || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating appreciation:', error);
       res.status(500).json({ error: error.message });
@@ -1605,8 +2776,21 @@ async function startServer() {
 
   app.delete('/api/appreciations/:id', requireAuth, async (req, res) => {
     try {
-      const { id } = req.params;
-      await db.delete(schema.appreciations).where(eq(schema.appreciations.id, parseInt(id)));
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      const existing = (genericMemoryStores['appreciations'] || []).find(r => String(r.id) === String(id));
+      try {
+        await db.delete(schema.appreciations).where(eq(schema.appreciations.id, id));
+      } catch (error: any) {
+        console.warn('Database fallback for delete appreciation');
+      }
+      syncEntityRecord('appreciations', { id }, 'delete');
+
+      const empId = parseInt(String(existing?.employee_id || existing?.employeeId || '0'));
+      if (empId) {
+        triggerRecalculateEligibility(empId).catch(() => {});
+      }
+
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting appreciation:', error);
@@ -1624,13 +2808,18 @@ async function startServer() {
         query = db.select().from(schema.performanceEvaluations).where(eq(schema.performanceEvaluations.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.performanceEvaluations.createdAt));
-      if (results) {
+      if (results && results.length > 0) {
         return res.json(results.map(r => mapKeys(r, camelToSnake)));
       }
     } catch (error: any) {
       console.warn('Database fallback for performance list');
     }
-    res.json([]);
+    const empIdParam = req.query.employeeId || req.query.employee_id;
+    let memList = genericMemoryStores['performance'] || inMemoryPerformanceEvaluations || [];
+    if (empIdParam) {
+      memList = memList.filter(item => String(item.employee_id || item.employeeId) === String(empIdParam));
+    }
+    res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
   });
 
   app.post('/api/performance', requireAuth, async (req, res) => {
@@ -1653,21 +2842,40 @@ async function startServer() {
       const evalYear = String(mappedData.year || (mappedData.evaluationDate ? new Date(mappedData.evaluationDate).getFullYear() : new Date().getFullYear()));
 
       // Check if duplicate evaluation exists for same employee in same year
-      const existing = await db.select().from(schema.performanceEvaluations).where(
-        and(
-          eq(schema.performanceEvaluations.employeeId, mappedData.employeeId),
-          eq(schema.performanceEvaluations.year, evalYear)
-        )
-      );
+      let existingEval = false;
+      try {
+        const existing = await db.select().from(schema.performanceEvaluations).where(
+          and(
+            eq(schema.performanceEvaluations.employeeId, mappedData.employeeId),
+            eq(schema.performanceEvaluations.year, evalYear)
+          )
+        );
+        if (existing.length > 0) existingEval = true;
+      } catch (e) {
+        const memList = genericMemoryStores['performance'] || inMemoryPerformanceEvaluations || [];
+        existingEval = memList.some(r => parseInt(String(r.employee_id || r.employeeId)) === mappedData.employeeId && String(r.year) === evalYear);
+      }
 
-      if (existing.length > 0) {
+      if (existingEval) {
         return res.status(400).json({
           error: `الموظف لديه تقييم أداء مسجل سابقاً لسنة ${evalYear}. لا يُسمح بإدخال أكثر من تقييم واحد للموظف خلال نفس السنة التقييمية.`
         });
       }
 
-      const [newEval] = await db.insert(schema.performanceEvaluations).values(mappedData).returning();
-      res.status(201).json(mapKeys(newEval, camelToSnake));
+      let newEval: any = null;
+      try {
+        const [inserted] = await db.insert(schema.performanceEvaluations).values(mappedData).returning();
+        newEval = inserted;
+      } catch (dbErr) {
+        console.warn('Database fallback for create performance evaluation');
+      }
+
+      const newId = newEval?.id || (genericMemoryStores['performance']?.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
+      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const memRecord = { ...cleanSnake, id: newId, year: evalYear, created_at: new Date().toISOString() };
+      syncEntityRecord('performance', memRecord, 'insert');
+
+      res.status(201).json(mapKeys(newEval || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating performance evaluation:', error);
       res.status(500).json({ error: error.message });
@@ -1688,11 +2896,22 @@ async function startServer() {
       delete mappedData.id;
       delete mappedData.createdAt;
 
-      const [updatedEval] = await db.update(schema.performanceEvaluations)
-        .set(mappedData)
-        .where(eq(schema.performanceEvaluations.id, id))
-        .returning();
-      res.json(mapKeys(updatedEval, camelToSnake));
+      let updatedEval: any = null;
+      try {
+        const [updated] = await db.update(schema.performanceEvaluations)
+          .set(mappedData)
+          .where(eq(schema.performanceEvaluations.id, id))
+          .returning();
+        updatedEval = updated;
+      } catch (dbErr) {
+        console.warn('Database fallback for update performance evaluation');
+      }
+
+      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const memRecord = { ...cleanSnake, id };
+      syncEntityRecord('performance', memRecord, 'update');
+
+      res.json(mapKeys(updatedEval || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating performance evaluation:', error);
       res.status(500).json({ error: error.message });
@@ -1705,7 +2924,12 @@ async function startServer() {
       if (isNaN(id)) {
         return res.status(400).json({ error: 'Invalid ID format' });
       }
-      await db.delete(schema.performanceEvaluations).where(eq(schema.performanceEvaluations.id, id));
+      try {
+        await db.delete(schema.performanceEvaluations).where(eq(schema.performanceEvaluations.id, id));
+      } catch (error: any) {
+        console.warn('Database fallback for delete performance evaluation');
+      }
+      syncEntityRecord('performance', { id }, 'delete');
       res.json({ success: true, message: 'تم حذف التقييم بنجاح' });
     } catch (error: any) {
       console.error('Error deleting performance evaluation:', error);
@@ -1750,30 +2974,39 @@ async function startServer() {
         return res.status(400).json({ error: 'employee_id is required' });
       }
 
+      let newHistory: any = null;
       try {
-        const [newHistory] = await db.insert(schema.careerHistories).values(mappedData).returning();
-        if (newHistory) {
-          return res.status(201).json(mapKeys(newHistory, camelToSnake));
-        }
+        const [inserted] = await db.insert(schema.careerHistories).values(mappedData).returning();
+        newHistory = inserted;
       } catch (dbErr) {
         console.warn('Database fallback for create career history');
       }
 
-      const store = genericMemoryStores['career'] || inMemoryCareerHistories || [];
-      const newId = store.length > 0 ? Math.max(...store.map((i: any) => parseInt(i.id) || 0)) + 1 : 1;
-      const memRecord = {
-        id: newId,
-        employee_id: mappedData.employeeId,
-        employeeId: mappedData.employeeId,
-        ...data,
-        created_at: new Date().toISOString(),
-        createdAt: new Date().toISOString()
-      };
-      store.push(memRecord);
-      saveLocalDb();
-      res.status(201).json(mapKeys(memRecord, camelToSnake));
+      const newId = newHistory?.id || (genericMemoryStores['career']?.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
+      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const memRecord = { ...cleanSnake, id: newId, created_at: new Date().toISOString() };
+      syncEntityRecord('career', memRecord, 'insert');
+
+      res.status(201).json(mapKeys(newHistory || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating career history:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/career/:id', requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      try {
+        await db.delete(schema.careerHistories).where(eq(schema.careerHistories.id, id));
+      } catch (error: any) {
+        console.warn('Database fallback for delete career history');
+      }
+      syncEntityRecord('career', { id }, 'delete');
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting career history:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -1883,6 +3116,9 @@ async function startServer() {
   // In-memory stores for training & enrollments fallback
   let inMemoryTrainings: any[] = [];
   let inMemoryEnrollments: any[] = [];
+  let inMemoryTrainers: any[] = [];
+  let inMemoryAnnualPlans: any[] = [];
+  let inMemoryAttendance: any[] = [];
 
   // Training Courses API
   app.get('/api/trainings', requireAuth, async (req, res) => {
@@ -1927,15 +3163,22 @@ async function startServer() {
     if (data.days !== undefined) data.days = parseInt(data.days) || 1;
     if (data.hours !== undefined) data.hours = parseInt(data.hours) || 0;
 
+    let newCourse: any = null;
     try {
-      const [newCourse] = await db.insert(schema.trainings).values(data).returning();
-      if (newCourse) return res.status(201).json(enhanceTrainingRecord(newCourse));
+      const [inserted] = await db.insert(schema.trainings).values(data).returning();
+      newCourse = inserted;
     } catch (error: any) {
       console.warn('Database fallback for create training course');
     }
-    const newId = inMemoryTrainings.length + 1;
-    const memCourse = { id: newId, ...data, created_at: new Date().toISOString() };
-    inMemoryTrainings.push(memCourse);
+    const newId = newCourse?.id || (inMemoryTrainings.reduce((max, c) => Math.max(max, parseInt(c.id) || 0), 0) || 0) + 1;
+    const memCourse = { id: newId, ...data, ...(newCourse || {}), created_at: new Date().toISOString() };
+    const existingIdx = inMemoryTrainings.findIndex(c => parseInt(String(c.id)) === newId);
+    if (existingIdx !== -1) {
+      inMemoryTrainings[existingIdx] = memCourse;
+    } else {
+      inMemoryTrainings.push(memCourse);
+    }
+    saveLocalDb();
     res.status(201).json(enhanceTrainingRecord(memCourse));
   });
 
@@ -1953,18 +3196,24 @@ async function startServer() {
     if (data.days !== undefined) data.days = parseInt(data.days) || 1;
     if (data.hours !== undefined) data.hours = parseInt(data.hours) || 0;
 
+    let updatedFromDb: any = null;
     try {
       const [updated] = await db.update(schema.trainings).set(data).where(eq(schema.trainings.id, id)).returning();
-      if (updated) return res.json(enhanceTrainingRecord(updated));
+      updatedFromDb = updated;
     } catch (error: any) {
       console.warn('Database fallback for update training');
     }
-    const idx = inMemoryTrainings.findIndex(c => c.id === id);
+    const idx = inMemoryTrainings.findIndex(c => parseInt(String(c.id)) === id);
+    let record: any;
     if (idx !== -1) {
-      inMemoryTrainings[idx] = { ...inMemoryTrainings[idx], ...data };
-      return res.json(enhanceTrainingRecord(inMemoryTrainings[idx]));
+      inMemoryTrainings[idx] = { ...inMemoryTrainings[idx], ...data, ...(updatedFromDb || {}) };
+      record = inMemoryTrainings[idx];
+    } else {
+      record = { id, ...data, ...(updatedFromDb || {}) };
+      inMemoryTrainings.push(record);
     }
-    res.json(enhanceTrainingRecord({ id, ...data }));
+    saveLocalDb();
+    res.json(enhanceTrainingRecord(record));
   });
 
   app.delete('/api/trainings/:id', requireAuth, async (req, res) => {
@@ -1974,7 +3223,8 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete training');
     }
-    inMemoryTrainings = inMemoryTrainings.filter(c => c.id !== id);
+    inMemoryTrainings = inMemoryTrainings.filter(c => parseInt(String(c.id)) !== id);
+    saveLocalDb();
     res.json({ success: true });
   });
 
@@ -2010,8 +3260,10 @@ async function startServer() {
     if (data.employeeId) data.employeeId = parseInt(data.employeeId) || null;
     data.enrollmentDate = data.enrollmentDate || new Date().toISOString().split('T')[0];
 
+    let newEnroll: any = null;
     try {
-      const [newEnroll] = await db.insert(schema.trainingEnrollments).values(data).returning();
+      const [inserted] = await db.insert(schema.trainingEnrollments).values(data).returning();
+      newEnroll = inserted;
       if (newEnroll) {
         if (newEnroll.employeeId && (newEnroll.result === 'اجتاز' || newEnroll.result === 'مشارك')) {
           const [course] = await db.select().from(schema.trainings).where(eq(schema.trainings.id, newEnroll.trainingId)).limit(1);
@@ -2031,14 +3283,20 @@ async function startServer() {
             }).catch(() => {});
           }
         }
-        return res.status(201).json(enhanceEnrollmentRecord(newEnroll));
       }
     } catch (error: any) {
       console.warn('Database fallback for enroll');
     }
-    const newId = inMemoryEnrollments.length + 1;
-    const memEnroll = { id: newId, ...data, created_at: new Date().toISOString() };
-    inMemoryEnrollments.push(memEnroll);
+
+    const newId = newEnroll?.id || (inMemoryEnrollments.reduce((max, e) => Math.max(max, parseInt(e.id) || 0), 0) || 0) + 1;
+    const memEnroll = { id: newId, ...data, ...(newEnroll || {}), created_at: new Date().toISOString() };
+    const existingIdx = inMemoryEnrollments.findIndex(e => parseInt(String(e.id)) === newId);
+    if (existingIdx !== -1) {
+      inMemoryEnrollments[existingIdx] = memEnroll;
+    } else {
+      inMemoryEnrollments.push(memEnroll);
+    }
+    saveLocalDb();
     res.status(201).json(enhanceEnrollmentRecord(memEnroll));
   });
 
@@ -2048,38 +3306,43 @@ async function startServer() {
     if (data.trainingId) data.trainingId = parseInt(data.trainingId);
     if (data.employeeId) data.employeeId = parseInt(data.employeeId) || null;
 
+    let updatedFromDb: any = null;
     try {
       const [updated] = await db.update(schema.trainingEnrollments).set(data).where(eq(schema.trainingEnrollments.id, id)).returning();
-      if (updated) {
-        if (updated && updated.employeeId && (updated.result === 'اجتاز' || updated.result === 'مشارك')) {
-          const [course] = await db.select().from(schema.trainings).where(eq(schema.trainings.id, updated.trainingId)).limit(1);
-          if (course) {
-            await db.insert(schema.trainingCourses).values({
-              employeeId: updated.employeeId,
-              courseName: course.courseName,
-              courseType: course.courseType || 'حضوري',
-              provider: course.provider || 'قسم التدريب والتطوير',
-              location: course.location || (course.locationType === 'موقعي' ? 'داخل الشركة' : 'خارج العراق'),
-              startDate: course.startDate,
-              endDate: course.endDate,
-              durationDays: course.days || 1,
-              average: updated.score || '',
-              grade: updated.grade || updated.result,
-              rank: 'مشارك'
-            }).catch(() => {});
-          }
+      updatedFromDb = updated;
+      if (updated && updated.employeeId && (updated.result === 'اجتاز' || updated.result === 'مشارك')) {
+        const [course] = await db.select().from(schema.trainings).where(eq(schema.trainings.id, updated.trainingId)).limit(1);
+        if (course) {
+          await db.insert(schema.trainingCourses).values({
+            employeeId: updated.employeeId,
+            courseName: course.courseName,
+            courseType: course.courseType || 'حضوري',
+            provider: course.provider || 'قسم التدريب والتطوير',
+            location: course.location || (course.locationType === 'موقعي' ? 'داخل الشركة' : 'خارج العراق'),
+            startDate: course.startDate,
+            endDate: course.endDate,
+            durationDays: course.days || 1,
+            average: updated.score || '',
+            grade: updated.grade || updated.result,
+            rank: 'مشارك'
+          }).catch(() => {});
         }
-        return res.json(enhanceEnrollmentRecord(updated));
       }
     } catch (error: any) {
       console.warn('Database fallback for update enrollment');
     }
-    const idx = inMemoryEnrollments.findIndex(e => e.id === id);
+
+    const idx = inMemoryEnrollments.findIndex(e => parseInt(String(e.id)) === id);
+    let record: any;
     if (idx !== -1) {
-      inMemoryEnrollments[idx] = { ...inMemoryEnrollments[idx], ...data };
-      return res.json(enhanceEnrollmentRecord(inMemoryEnrollments[idx]));
+      inMemoryEnrollments[idx] = { ...inMemoryEnrollments[idx], ...data, ...(updatedFromDb || {}) };
+      record = inMemoryEnrollments[idx];
+    } else {
+      record = { id, ...data, ...(updatedFromDb || {}) };
+      inMemoryEnrollments.push(record);
     }
-    res.json(enhanceEnrollmentRecord({ id, ...data }));
+    saveLocalDb();
+    res.json(enhanceEnrollmentRecord(record));
   });
 
   app.delete('/api/trainings/enrollments/:id', requireAuth, async (req, res) => {
@@ -2089,7 +3352,8 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete enrollment');
     }
-    inMemoryEnrollments = inMemoryEnrollments.filter(e => e.id !== id);
+    inMemoryEnrollments = inMemoryEnrollments.filter(e => parseInt(String(e.id)) !== id);
+    saveLocalDb();
     res.json({ success: true });
   });
 
@@ -2110,27 +3374,29 @@ async function startServer() {
   app.get('/api/trainers', requireAuth, async (req, res) => {
     try {
       const result = await pool.query('SELECT * FROM trainers ORDER BY id DESC');
-      if (result && result.rows) {
+      if (result && result.rows && result.rows.length > 0) {
         return res.json(result.rows.map(enhanceTrainerRecord));
       }
     } catch (error: any) {
       console.warn('Database fallback for trainers list');
     }
-    res.json([]);
+    res.json(inMemoryTrainers.map(enhanceTrainerRecord));
   });
 
   app.get('/api/trainers/:id', requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const result = await pool.query('SELECT * FROM trainers WHERE id = $1', [id]);
-      if (result.rows.length === 0) {
-        return res.status(404).json({ error: 'المدرب غير موجود' });
+      if (result.rows.length > 0) {
+        return res.json(enhanceTrainerRecord(result.rows[0]));
       }
-      return res.json(enhanceTrainerRecord(result.rows[0]));
     } catch (error: any) {
       console.warn('Database fallback for trainer get by id');
-      res.status(404).json({ error: 'المدرب غير موجود' });
     }
+    const id = parseInt(req.params.id);
+    const memTrainer = inMemoryTrainers.find(t => parseInt(String(t.id)) === id);
+    if (memTrainer) return res.json(enhanceTrainerRecord(memTrainer));
+    res.status(404).json({ error: 'المدرب غير موجود' });
   });
 
   app.post('/api/trainers', requireAuth, async (req, res) => {
@@ -2185,12 +3451,25 @@ async function startServer() {
       addField('specialty_details', rawData.specialty_details || rawData.specialtyDetails);
       addField('work_phone', rawData.work_phone || rawData.workPhone);
 
-      const keys = Object.keys(snakeData);
-      const values = Object.values(snakeData);
-      const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
-      const q = `INSERT INTO trainers (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`;
-      const result = await pool.query(q, values);
-      res.status(201).json(enhanceTrainerRecord(result.rows[0]));
+      let savedRow: any = null;
+      try {
+        const keys = Object.keys(snakeData);
+        const values = Object.values(snakeData);
+        const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+        const q = `INSERT INTO trainers (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`;
+        const result = await pool.query(q, values);
+        if (result && result.rows && result.rows.length > 0) {
+          savedRow = result.rows[0];
+        }
+      } catch (dbErr) {
+        console.warn('Database fallback for insert trainer');
+      }
+
+      const newId = savedRow?.id || (inMemoryTrainers.reduce((max, t) => Math.max(max, parseInt(t.id) || 0), 0) || 0) + 1;
+      const memTrainer = { id: newId, ...rawData, ...(savedRow || {}), created_at: new Date().toISOString() };
+      inMemoryTrainers.push(memTrainer);
+      saveLocalDb();
+      res.status(201).json(enhanceTrainerRecord(memTrainer));
     } catch (error: any) {
       console.warn('Database fallback for create trainer');
       res.status(201).json(enhanceTrainerRecord({ id: 1, ...req.body }));
@@ -2247,15 +3526,31 @@ async function startServer() {
       addField('specialty_details', rawData.specialty_details ?? rawData.specialtyDetails);
       addField('work_phone', rawData.work_phone ?? rawData.workPhone);
 
-      const keys = Object.keys(snakeData);
-      const values = Object.values(snakeData);
-      const setClauses = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
-      const q = `UPDATE trainers SET ${setClauses} WHERE id = $${keys.length + 1} RETURNING *`;
-      const result = await pool.query(q, [...values, id]);
-      if (result.rows.length === 0) {
-        return res.status(404).json({ error: 'المدرب غير موجود' });
+      let savedRow: any = null;
+      try {
+        const keys = Object.keys(snakeData);
+        const values = Object.values(snakeData);
+        const setClauses = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+        const q = `UPDATE trainers SET ${setClauses} WHERE id = $${keys.length + 1} RETURNING *`;
+        const result = await pool.query(q, [...values, id]);
+        if (result && result.rows && result.rows.length > 0) {
+          savedRow = result.rows[0];
+        }
+      } catch (dbErr) {
+        console.warn('Database fallback for update trainer');
       }
-      res.json(enhanceTrainerRecord(result.rows[0]));
+
+      const idx = inMemoryTrainers.findIndex(t => parseInt(String(t.id)) === id);
+      let record: any;
+      if (idx !== -1) {
+        inMemoryTrainers[idx] = { ...inMemoryTrainers[idx], ...rawData, ...(savedRow || {}) };
+        record = inMemoryTrainers[idx];
+      } else {
+        record = { id, ...rawData, ...(savedRow || {}) };
+        inMemoryTrainers.push(record);
+      }
+      saveLocalDb();
+      res.json(enhanceTrainerRecord(record));
     } catch (error: any) {
       console.warn('Database fallback for update trainer');
       res.json(enhanceTrainerRecord({ id: parseInt(req.params.id), ...req.body }));
@@ -2266,24 +3561,25 @@ async function startServer() {
     try {
       const id = parseInt(req.params.id);
       await pool.query('DELETE FROM trainers WHERE id = $1', [id]);
-      res.json({ success: true });
     } catch (error: any) {
       console.warn('Database fallback for delete trainer');
-      res.json({ success: true });
     }
+    inMemoryTrainers = inMemoryTrainers.filter(t => parseInt(String(t.id)) !== id);
+    saveLocalDb();
+    res.json({ success: true });
   });
 
   // Annual Training Plans API (خطط التدريب السنوية)
   app.get('/api/annual-plans', requireAuth, async (req, res) => {
     try {
       const plans = await db.select().from(schema.annualTrainingPlans).orderBy(desc(schema.annualTrainingPlans.year));
-      if (plans) {
+      if (plans && plans.length > 0) {
         return res.json(plans.map(enhancePlanRecord));
       }
     } catch (error: any) {
       console.warn('Database fallback for annual plans list');
     }
-    res.json([]);
+    res.json(inMemoryAnnualPlans.map(enhancePlanRecord));
   });
 
   app.post('/api/annual-plans', requireAuth, async (req, res) => {
@@ -2295,19 +3591,37 @@ async function startServer() {
       if (data.plannedBudget) data.plannedBudget = parseInt(data.plannedBudget);
 
       const { year, track } = data;
-      const existing = await db.select().from(schema.annualTrainingPlans)
-        .where(and(eq(schema.annualTrainingPlans.year, year), eq(schema.annualTrainingPlans.track, track))).limit(1);
+      let savedPlan: any = null;
+      try {
+        const existing = await db.select().from(schema.annualTrainingPlans)
+          .where(and(eq(schema.annualTrainingPlans.year, year), eq(schema.annualTrainingPlans.track, track))).limit(1);
 
-      if (existing.length > 0) {
-        const [updated] = await db.update(schema.annualTrainingPlans)
-          .set(data)
-          .where(eq(schema.annualTrainingPlans.id, existing[0].id))
-          .returning();
-        return res.json(enhancePlanRecord(updated));
+        if (existing.length > 0) {
+          const [updated] = await db.update(schema.annualTrainingPlans)
+            .set(data)
+            .where(eq(schema.annualTrainingPlans.id, existing[0].id))
+            .returning();
+          savedPlan = updated;
+        } else {
+          const [newPlan] = await db.insert(schema.annualTrainingPlans).values(data).returning();
+          savedPlan = newPlan;
+        }
+      } catch (dbErr) {
+        console.warn('Database fallback for save annual plan');
       }
 
-      const [newPlan] = await db.insert(schema.annualTrainingPlans).values(data).returning();
-      res.status(201).json(enhancePlanRecord(newPlan));
+      const idx = inMemoryAnnualPlans.findIndex(p => p.year === year && p.track === track);
+      let record: any;
+      if (idx !== -1) {
+        inMemoryAnnualPlans[idx] = { ...inMemoryAnnualPlans[idx], ...data, ...(savedPlan || {}) };
+        record = inMemoryAnnualPlans[idx];
+      } else {
+        const newId = savedPlan?.id || (inMemoryAnnualPlans.reduce((max, p) => Math.max(max, parseInt(p.id) || 0), 0) || 0) + 1;
+        record = { id: newId, ...data, ...(savedPlan || {}) };
+        inMemoryAnnualPlans.push(record);
+      }
+      saveLocalDb();
+      res.status(201).json(enhancePlanRecord(record));
     } catch (error: any) {
       console.warn('Database fallback for save annual plan');
       res.status(201).json(enhancePlanRecord({ id: 1, ...req.body }));
@@ -2541,6 +3855,27 @@ async function startServer() {
     const parentId = (data.parentId !== undefined && data.parentId !== null && data.parentId !== '') ? parseInt(data.parentId) : ((data.parent_id !== undefined && data.parent_id !== null && data.parent_id !== '') ? parseInt(data.parent_id) : null);
     const managerId = (data.managerId !== undefined && data.managerId !== null && data.managerId !== '') ? parseInt(data.managerId) : ((data.manager_id !== undefined && data.manager_id !== null && data.manager_id !== '') ? parseInt(data.manager_id) : null);
 
+    const unitName = String(data.name || '').trim();
+    if (!unitName) {
+      return res.status(400).json({ error: 'اسم الوحدة التنظيمية مطلوب' });
+    }
+    const normalize = (s: string) => s.trim().toLowerCase();
+    let existingUnits: any[] = [];
+    try {
+      existingUnits = await db.select().from(schema.orgUnits);
+    } catch (error: any) {
+      console.warn('Database fallback for org unit duplicate check');
+    }
+    const allUnits = [...existingUnits, ...inMemoryOrgUnits];
+    const samePid = (u: any) => {
+      const uPid = (u.parentId !== undefined && u.parentId !== null) ? u.parentId : (u.parent_id !== undefined ? u.parent_id : null);
+      return (uPid === null && parentId === null) || (uPid !== null && parentId !== null && parseInt(String(uPid)) === parseInt(String(parentId)));
+    };
+    const duplicateUnit = allUnits.find(u => samePid(u) && normalize(String(u.name || '')) === normalize(unitName));
+    if (duplicateUnit) {
+      return res.status(400).json({ error: `الوحدة التنظيمية (${unitName}) موجودة بالفعل ضمن نفس الجهة الأعلى` });
+    }
+
     try {
       const [newRecord] = await db.insert(schema.orgUnits).values({
         name: data.name,
@@ -2740,22 +4075,13 @@ async function startServer() {
   };
 
   let inMemoryAllowancesDeductions: any[] = [
-    { id: 1, name: 'مخصصات شهادة دكتوراه', type: 'allowance', calcType: 'percentage', value: 100, status: 'فعال' },
-    { id: 2, name: 'مخصصات شهادة ماجستير', type: 'allowance', calcType: 'percentage', value: 75, status: 'فعال' },
-    { id: 3, name: 'مخصصات شهادة دبلوم عالي', type: 'allowance', calcType: 'percentage', value: 65, status: 'فعال' },
-    { id: 4, name: 'مخصصات شهادة بكالوريوس', type: 'allowance', calcType: 'percentage', value: 45, status: 'فعال' },
-    { id: 5, name: 'مخصصات شهادة دبلوم فني', type: 'allowance', calcType: 'percentage', value: 35, status: 'فعال' },
-    { id: 6, name: 'مخصصات شهادة إعدادية', type: 'allowance', calcType: 'percentage', value: 25, status: 'فعال' },
-    { id: 7, name: 'مخصصات شهادة متوسطة', type: 'allowance', calcType: 'percentage', value: 15, status: 'فعال' },
-    { id: 8, name: 'مخصصات زوجية', type: 'allowance', calcType: 'flat', value: 50000, status: 'فعال' },
-    { id: 9, name: 'مخصصات أطفال (لكل طفل)', type: 'allowance', calcType: 'flat', value: 10000, status: 'فعال' },
-    { id: 10, name: 'مخصصات منصب مدير عام', type: 'allowance', calcType: 'percentage', value: 50, status: 'فعال' },
-    { id: 11, name: 'مخصصات منصب معاون مدير عام', type: 'allowance', calcType: 'percentage', value: 40, status: 'فعال' },
-    { id: 12, name: 'مخصصات منصب مدير قسم', type: 'allowance', calcType: 'percentage', value: 25, status: 'فعال' },
-    { id: 13, name: 'مخصصات منصب مسؤول شعبة', type: 'allowance', calcType: 'percentage', value: 20, status: 'فعال' },
-    { id: 14, name: 'مخصصات منصب مسؤول وحدة', type: 'allowance', calcType: 'percentage', value: 15, status: 'فعال' },
-    { id: 15, name: 'استقطاع التقاعد الإلزامي', type: 'deduction', calcType: 'percentage', value: 10, status: 'فعال' },
-    { id: 16, name: 'استقطاع ضريبة الدخل', type: 'deduction', calcType: 'percentage', value: 3, status: 'فعال' }
+    { id: 1, name: 'مخصصات زوجية', type: 'allowance', calcType: 'flat', value: 50000, status: 'فعال' },
+    { id: 2, name: 'مخصصات أطفال (لكل طفل)', type: 'allowance', calcType: 'flat', value: 10000, status: 'فعال' },
+    { id: 3, name: 'مخصصات خطورة مهنية', type: 'allowance', calcType: 'percentage', value: 20, status: 'فعال' },
+    { id: 4, name: 'مخصصات موقع جغرافي / نأي', type: 'allowance', calcType: 'flat', value: 50000, status: 'فعال' },
+    { id: 5, name: 'استقطاع التقاعد الإلزامي', type: 'deduction', calcType: 'percentage', value: 10, status: 'فعال' },
+    { id: 6, name: 'استقطاع ضريبة الدخل', type: 'deduction', calcType: 'percentage', value: 3, status: 'فعال' },
+    { id: 7, name: 'استقطاع صندوق التكافل الاجتماعي', type: 'deduction', calcType: 'flat', value: 10000, status: 'فعال' }
   ];
 
   let inMemoryEducationDegrees: any[] = [
@@ -2769,10 +4095,6 @@ async function startServer() {
     { id: 8, name: 'ابتدائية', allowance_rate: 0, is_higher_education: false, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1, status: 'فعال' },
     { id: 9, name: 'يقرأ ويكتب', allowance_rate: 0, is_higher_education: false, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1, status: 'فعال' }
   ];
-
-  let inMemoryDegreeTrackSnapshots: any[] = [];
-  let inMemoryDegreeTrackSimulationSteps: any[] = [];
-  let inMemorySpecializationCredits: any[] = [];
 
   let inMemoryResponsibilityAllowances: any[] = [
     { id: 1, name: 'مدير عام', allowance_rate: 50, status: 'فعال' },
@@ -2793,6 +4115,21 @@ async function startServer() {
     { id: 4, name: 'مستودع ميسان', allowance_amount: 75000, work_start_hour: '08:00', work_end_hour: '15:00' }
   ];
 
+  let inMemoryServiceTypes: any[] = [
+    { id: 1, name: 'دائم' },
+    { id: 2, name: 'عقد' },
+    { id: 3, name: 'أجر يومي' }
+  ];
+
+  let inMemoryEmployeeStatuses: any[] = [
+    { id: 1, name: 'مستمر' },
+    { id: 2, name: 'منسب' },
+    { id: 3, name: 'مجاز' },
+    { id: 4, name: 'متقاعد' },
+    { id: 5, name: 'مستقيل' },
+    { id: 6, name: 'موقوف' }
+  ];
+
   let inMemoryShiftSystems: any[] = [
     { id: 1, name: 'دوام صباحي اعتيادي (5 أيام عمل / يومين راحة)', work_days: 5, rest_days: 2, allowance_amount: 0, status: 'فعال' },
     { id: 2, name: 'نظام مناوبة حقول (14 يوم عمل / 14 يوم استراحة)', work_days: 14, rest_days: 14, allowance_amount: 100000, status: 'فعال' },
@@ -2800,42 +4137,232 @@ async function startServer() {
   ];
 
   let inMemoryLeaveTypes: any[] = [
-    { id: 1, name: 'إجازة اعتيادية براتب تام', max_days: 36, description: 'تمنح برصيد اعتيادي سنوي', status: 'فعال' },
-    { id: 2, name: 'إجازة مرضية براتب تام', max_days: 30, description: 'بتقارير طبية معتمدة', status: 'فعال' },
-    { id: 3, name: 'إجازة أمومة ورعاية طفل', max_days: 365, description: 'للموظفات بموجب القانون', status: 'فعال' },
-    { id: 4, name: 'إجازة حج بيت الله الحرام', max_days: 30, description: 'لمرة واحدة طوال الخدمة الوظيفية', status: 'فعال' },
-    { id: 5, name: 'إجازة بدون راتب', max_days: 365, description: 'بموافقة الوزير المختص', status: 'فعال' },
-    { id: 6, name: 'إجازة دراسية', max_days: 730, description: 'لإكمال الدراسات العليا', status: 'فعال' }
+    { 
+      id: 1, 
+      name: 'إجازة اعتيادية براتب تام', 
+      max_days: 36, 
+      maxDays: 36, 
+      administrative_effect: 'لا_يؤثر', 
+      administrativeEffect: 'لا_يؤثر', 
+      financial_effect: 'براتب_كامل', 
+      financialEffect: 'براتب_كامل', 
+      financial_deduction_percentage: 0,
+      financialDeductionPercentage: 0,
+      affects_increment: false,
+      affectsIncrement: false,
+      affects_promotion: false,
+      affectsPromotion: false,
+      affects_commendations: false,
+      affectsCommendations: false,
+      salary_payment_type: 'منح_الراتب_كامل',
+      salaryPaymentType: 'منح_الراتب_كامل',
+      effects_options: JSON.stringify(['منح_الراتب_كامل']),
+      effectsOptions: JSON.stringify(['منح_الراتب_كامل']),
+      description: 'تمنح برصيد اعتيادي سنوي بمعدل يومين ونصف عن كل شهر خدمة فعلي متراكم', 
+      status: 'فعال' 
+    },
+    { 
+      id: 2, 
+      name: 'إجازة مرضية براتب تام', 
+      max_days: 120, 
+      maxDays: 120, 
+      administrative_effect: 'لا_يؤثر', 
+      administrativeEffect: 'لا_يؤثر', 
+      financial_effect: 'براتب_كامل', 
+      financialEffect: 'براتب_كامل', 
+      financial_deduction_percentage: 0,
+      financialDeductionPercentage: 0,
+      affects_increment: false,
+      affectsIncrement: false,
+      affects_promotion: false,
+      affectsPromotion: false,
+      affects_commendations: false,
+      affectsCommendations: false,
+      salary_payment_type: 'منح_الراتب_كامل',
+      salaryPaymentType: 'منح_الراتب_كامل',
+      effects_options: JSON.stringify(['منح_الراتب_كامل']),
+      effectsOptions: JSON.stringify(['منح_الراتب_كامل']),
+      description: 'بتقارير طبية معتمدة من اللجان الرسمية المختصة', 
+      status: 'فعال' 
+    },
+    { 
+      id: 3, 
+      name: 'إجازة أمومة ورعاية طفل', 
+      max_days: 365, 
+      maxDays: 365, 
+      administrative_effect: 'لا_يؤثر', 
+      administrativeEffect: 'لا_يؤثر', 
+      financial_effect: 'براتب_ومخصصات_ثابتة', 
+      financialEffect: 'براتب_ومخصصات_ثابتة', 
+      financial_deduction_percentage: 0,
+      financialDeductionPercentage: 0,
+      affects_increment: false,
+      affectsIncrement: false,
+      affects_promotion: false,
+      affectsPromotion: false,
+      affects_commendations: false,
+      affectsCommendations: false,
+      salary_payment_type: 'منح_الراتب_والمخصصات_الثابتة_فقط',
+      salaryPaymentType: 'منح_الراتب_والمخصصات_الثابتة_فقط',
+      effects_options: JSON.stringify(['منح_الراتب_والمخصصات_الثابتة_فقط']),
+      effectsOptions: JSON.stringify(['منح_الراتب_والمخصصات_الثابتة_فقط']),
+      description: 'للموظفات لرعاية الطفل بموجب قانون الخدمة المدنية', 
+      status: 'فعال' 
+    },
+    { 
+      id: 4, 
+      name: 'إجازة حج بيت الله الحرام', 
+      max_days: 30, 
+      maxDays: 30, 
+      administrative_effect: 'لا_يؤثر', 
+      administrativeEffect: 'لا_يؤثر', 
+      financial_effect: 'براتب_كامل', 
+      financialEffect: 'براتب_كامل', 
+      financial_deduction_percentage: 0,
+      financialDeductionPercentage: 0,
+      affects_increment: false,
+      affectsIncrement: false,
+      affects_promotion: false,
+      affectsPromotion: false,
+      affects_commendations: false,
+      affectsCommendations: false,
+      salary_payment_type: 'منح_الراتب_كامل',
+      salaryPaymentType: 'منح_الراتب_كامل',
+      effects_options: JSON.stringify(['منح_الراتب_كامل']),
+      effectsOptions: JSON.stringify(['منح_الراتب_كامل']),
+      description: 'لمرة واحدة طوال الخدمة الوظيفية براتب تام', 
+      status: 'فعال' 
+    },
+    { 
+      id: 5, 
+      name: 'إجازة دراسية لتطوير الكفاءات', 
+      max_days: 730, 
+      maxDays: 730, 
+      administrative_effect: 'توقف_منح_كتب_الشكر', 
+      administrativeEffect: 'توقف_منح_كتب_الشكر', 
+      financial_effect: 'براتب_ومخصصات_ثابتة', 
+      financialEffect: 'براتب_ومخصصات_ثابتة', 
+      financial_deduction_percentage: 0,
+      financialDeductionPercentage: 0,
+      affects_increment: false,
+      affectsIncrement: false,
+      affects_promotion: false,
+      affectsPromotion: false,
+      affects_commendations: true,
+      affectsCommendations: true,
+      salary_payment_type: 'منح_الراتب_والمخصصات_الثابتة_فقط',
+      salaryPaymentType: 'منح_الراتب_والمخصصات_الثابتة_فقط',
+      effects_options: JSON.stringify(['كتب_الشكر', 'منح_الراتب_والمخصصات_الثابتة_فقط']),
+      effectsOptions: JSON.stringify(['كتب_الشكر', 'منح_الراتب_والمخصصات_الثابتة_فقط']),
+      description: 'لإكمال الدراسات العليا داخل أو خارج العراق وتوقف منح كتب الشكر والتقدير أثناء التمتع بها', 
+      status: 'فعال' 
+    },
+    { 
+      id: 6, 
+      name: 'إجازة بدون راتب (طارئة / مصاحبة)', 
+      max_days: 365, 
+      maxDays: 365, 
+      administrative_effect: 'يوقف_الترفيع_والعلاوة_وكتب_الشكر', 
+      administrativeEffect: 'يوقف_الترفيع_والعلاوة_وكتب_الشكر', 
+      financial_effect: 'بدون_راتب', 
+      financialEffect: 'بدون_راتب', 
+      financial_deduction_percentage: 100,
+      financialDeductionPercentage: 100,
+      affects_increment: true,
+      affectsIncrement: true,
+      affects_promotion: true,
+      affectsPromotion: true,
+      affects_commendations: true,
+      affectsCommendations: true,
+      salary_payment_type: 'بدون_راتب',
+      salaryPaymentType: 'بدون_راتب',
+      effects_options: JSON.stringify(['العلاوة_السنوية', 'الترفيع', 'كتب_الشكر', 'بدون_راتب']),
+      effectsOptions: JSON.stringify(['العلاوة_السنوية', 'الترفيع', 'كتب_الشكر', 'بدون_راتب']),
+      description: 'إجازة استثنائية بدون راتب توقف الترفيع والعلاوة وتوقف منح كتب الشكر والتقدير', 
+      status: 'فعال' 
+    }
   ];
 
+  // --- Penalty Types Canonical Data & In-Memory Store ---
+  let inMemoryPenaltyTypes: any[] = [
+    { id: 1, name: 'لفت نظر', deduction_type: 'بدون قطع مالي', deduction_value: 'بدون قطع مالي', delay_months: 0, delay_rule: 'لا يؤخر', description: 'تنبيه الموظف إلى التقصير', status: 'فعال' },
+    { id: 2, name: 'إنذار', deduction_type: 'بدون قطع مالي', deduction_value: 'بدون قطع مالي', delay_months: 0, delay_rule: 'لا يؤخر', description: 'توجيه إنذار رسمي للموظف', status: 'فعال' },
+    { id: 3, name: 'قطع راتب', deduction_type: 'قطع راتب لأيام محددة', deduction_value: 'حسب الأيام', delay_months: 0, delay_rule: 'لا يؤخر', description: 'استقطاع الراتب الاسمي لعدة أيام', status: 'فعال' },
+    { id: 4, name: 'توبيخ', deduction_type: 'بدون قطع مالي', deduction_value: 'بدون قطع مالي', delay_months: 0, delay_rule: 'لا يؤخر', description: 'توبيخ رسمي موثق في إضبارة الخدمة', status: 'فعال' },
+    { id: 5, name: 'إنقاص راتب', deduction_type: 'نسبة مئوية', deduction_value: '10%', delay_months: 6, delay_rule: 'تأخير الترفيع 6 أشهر', description: 'إنقاص الراتب بنسبة محددة لمدة معلومة', status: 'فعال' },
+    { id: 6, name: 'تنزيل درجة', deduction_type: 'تنزيل درجة وظيفية', deduction_value: 'درجة واحدة', delay_months: 24, delay_rule: 'تنزيل درجة وتأخير الترفيع سنتين', description: 'تنزيل الموظف إلى الدرجة الأدنى مباشرة', status: 'فعال' },
+    { id: 7, name: 'فصل', deduction_type: 'إنهاء خدمة مؤقت', deduction_value: 'فصل مؤقت', delay_months: 0, delay_rule: 'فصل', description: 'فصل الموظف للمدة القانونية المحددة', status: 'فعال' },
+    { id: 8, name: 'عزل', deduction_type: 'إنهاء خدمة نهائي', deduction_value: 'عزل نهائي', delay_months: 0, delay_rule: 'عزل', description: 'عزل الموظف نهائياً من الوظيفة العامة', status: 'فعال' }
+  ];
 
+  // --- Job Titles Canonical Data & In-Memory Store ---
+  const DEFAULT_JOB_TITLES = [
+    { id: 1, name: 'رئيس مهندسين أقدم', category: 'هندسي', min_grade: 1, min_step: 1, status: 'فعال', notes: '' },
+    { id: 2, name: 'رئيس مهندسين', category: 'هندسي', min_grade: 2, min_step: 1, status: 'فعال', notes: '' },
+    { id: 3, name: 'مهندس أقدم', category: 'هندسي', min_grade: 3, min_step: 1, status: 'فعال', notes: '' },
+    { id: 4, name: 'مهندس', category: 'هندسي', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 5, name: 'معاون مهندس', category: 'هندسي', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 6, name: 'رئيس مبرمجين أقدم', category: 'حاسبات وتقنية', min_grade: 1, min_step: 1, status: 'فعال', notes: '' },
+    { id: 7, name: 'رئيس مبرمجين', category: 'حاسبات وتقنية', min_grade: 2, min_step: 1, status: 'فعال', notes: '' },
+    { id: 8, name: 'مبرمج أقدم', category: 'حاسبات وتقنية', min_grade: 3, min_step: 1, status: 'فعال', notes: '' },
+    { id: 9, name: 'مبرمج', category: 'حاسبات وتقنية', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 10, name: 'معاون مبرمج', category: 'حاسبات وتقنية', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 11, name: 'مدير عام', category: 'إداري', min_grade: 1, min_step: 1, status: 'فعال', notes: '' },
+    { id: 12, name: 'مدير أقدم', category: 'إداري', min_grade: 2, min_step: 1, status: 'فعال', notes: '' },
+    { id: 13, name: 'مدير', category: 'إداري', min_grade: 3, min_step: 1, status: 'فعال', notes: '' },
+    { id: 14, name: 'رئيس ملاحظين', category: 'إداري', min_grade: 4, min_step: 1, status: 'فعال', notes: '' },
+    { id: 15, name: 'ملاحظ', category: 'إداري', min_grade: 5, min_step: 1, status: 'فعال', notes: '' },
+    { id: 16, name: 'معاون ملاحظ', category: 'إداري', min_grade: 6, min_step: 1, status: 'فعال', notes: '' },
+    { id: 17, name: 'كاتب طابعة', category: 'إداري', min_grade: 8, min_step: 1, status: 'فعال', notes: '' },
+    { id: 18, name: 'رئيس مدققين أقدم', category: 'مالي', min_grade: 1, min_step: 1, status: 'فعال', notes: '' },
+    { id: 19, name: 'رئيس مدققين', category: 'مالي', min_grade: 2, min_step: 1, status: 'فعال', notes: '' },
+    { id: 20, name: 'مدقق أقدم', category: 'مالي', min_grade: 3, min_step: 1, status: 'فعال', notes: '' },
+    { id: 21, name: 'مدقق حسابات', category: 'مالي', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 22, name: 'محاسب', category: 'مالي', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 23, name: 'معاون محاسب', category: 'مالي', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 24, name: 'رئيس مشاورين قانونيين', category: 'قانوني', min_grade: 2, min_step: 1, status: 'فعال', notes: '' },
+    { id: 25, name: 'مشاور قانوني أقدم', category: 'قانوني', min_grade: 3, min_step: 1, status: 'فعال', notes: '' },
+    { id: 26, name: 'مشاور قانوني', category: 'قانوني', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 27, name: 'معاون مشاور قانوني', category: 'قانوني', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 28, name: 'طبيب اختصاص', category: 'طبي وصحي', min_grade: 5, min_step: 1, status: 'فعال', notes: '' },
+    { id: 29, name: 'طبيب ممارس', category: 'طبي وصحي', min_grade: 6, min_step: 1, status: 'فعال', notes: '' },
+    { id: 30, name: 'ممرض جامعي', category: 'طبي وصحي', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 31, name: 'فني أقدم', category: 'فني', min_grade: 6, min_step: 1, status: 'فعال', notes: '' },
+    { id: 32, name: 'فني', category: 'فني', min_grade: 8, min_step: 1, status: 'فعال', notes: '' },
+    { id: 33, name: 'حرفي أقدم', category: 'مهني وحرفي', min_grade: 7, min_step: 1, status: 'فعال', notes: '' },
+    { id: 34, name: 'حرفي', category: 'مهني وحرفي', min_grade: 8, min_step: 1, status: 'فعال', notes: '' },
+    { id: 35, name: 'سائق', category: 'خدمات', min_grade: 8, min_step: 1, status: 'فعال', notes: '' },
+    { id: 36, name: 'حارس أمني', category: 'أمن وحماية', min_grade: 9, min_step: 1, status: 'فعال', notes: '' },
+    { id: 37, name: 'موظف خدمة', category: 'خدمات', min_grade: 10, min_step: 1, status: 'فعال', notes: '' }
+  ];
 
-  let inMemoryServiceRecords: any[] = [];
-  let inMemoryServiceCredits: any[] = [];
+  if (!inMemoryJobTitles || inMemoryJobTitles.length === 0) {
+    inMemoryJobTitles = DEFAULT_JOB_TITLES.map(t => ({ ...t, minGrade: t.min_grade, minStep: t.min_step }));
+  }
 
   function buildRefContext() {
     return {
-      employees: inMemoryEmployees,
+      employees: (typeof inMemoryEmployees !== 'undefined' && inMemoryEmployees) ? inMemoryEmployees : [],
       jobAssignments: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['job-assignments']) || (typeof inMemoryJobAssignments !== 'undefined' ? inMemoryJobAssignments : []),
       qualifications: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['qualifications']) || (typeof inMemoryQualifications !== 'undefined' ? inMemoryQualifications : []),
       penalties: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['penalties']) || (typeof inMemoryPenalties !== 'undefined' ? inMemoryPenalties : []),
       performanceEvaluations: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['performance']) || (typeof inMemoryPerformanceEvaluations !== 'undefined' ? inMemoryPerformanceEvaluations : []),
       governingCourseAssignments: (typeof inMemoryEmployeeAssignments !== 'undefined' && inMemoryEmployeeAssignments) ? Object.values(inMemoryEmployeeAssignments) : [],
       entities: {
-        'job_titles': inMemoryJobTitles,
-        'job-titles': inMemoryJobTitles,
-        'shift_systems': inMemoryShiftSystems,
-        'shift-systems': inMemoryShiftSystems,
-        'allowances_deductions': inMemoryAllowancesDeductions,
-        'allowances-deductions': inMemoryAllowancesDeductions,
-        'education_degrees': inMemoryEducationDegrees,
-        'education-degrees': inMemoryEducationDegrees,
-        'responsibility_allowances': inMemoryResponsibilityAllowances,
-        'responsibility-allowances': inMemoryResponsibilityAllowances,
-        'penalty_types': inMemoryPenaltyTypes,
-        'penalty-types': inMemoryPenaltyTypes,
-        'evaluation_forms': (typeof inMemoryEvaluationForms !== 'undefined' ? inMemoryEvaluationForms : CANONICAL_SEED_FORMS),
-        'evaluation-forms': (typeof inMemoryEvaluationForms !== 'undefined' ? inMemoryEvaluationForms : CANONICAL_SEED_FORMS),
+        'job_titles': (typeof inMemoryJobTitles !== 'undefined' && inMemoryJobTitles) ? inMemoryJobTitles : [],
+        'job-titles': (typeof inMemoryJobTitles !== 'undefined' && inMemoryJobTitles) ? inMemoryJobTitles : [],
+        'shift_systems': (typeof inMemoryShiftSystems !== 'undefined' && inMemoryShiftSystems) ? inMemoryShiftSystems : [],
+        'shift-systems': (typeof inMemoryShiftSystems !== 'undefined' && inMemoryShiftSystems) ? inMemoryShiftSystems : [],
+        'allowances_deductions': (typeof inMemoryAllowancesDeductions !== 'undefined' && inMemoryAllowancesDeductions) ? inMemoryAllowancesDeductions : [],
+        'allowances-deductions': (typeof inMemoryAllowancesDeductions !== 'undefined' && inMemoryAllowancesDeductions) ? inMemoryAllowancesDeductions : [],
+        'education_degrees': (typeof inMemoryEducationDegrees !== 'undefined' && inMemoryEducationDegrees) ? inMemoryEducationDegrees : [],
+        'education-degrees': (typeof inMemoryEducationDegrees !== 'undefined' && inMemoryEducationDegrees) ? inMemoryEducationDegrees : [],
+        'responsibility_allowances': (typeof inMemoryResponsibilityAllowances !== 'undefined' && inMemoryResponsibilityAllowances) ? inMemoryResponsibilityAllowances : [],
+        'responsibility-allowances': (typeof inMemoryResponsibilityAllowances !== 'undefined' && inMemoryResponsibilityAllowances) ? inMemoryResponsibilityAllowances : [],
+        'penalty_types': (typeof inMemoryPenaltyTypes !== 'undefined' && inMemoryPenaltyTypes) ? inMemoryPenaltyTypes : [],
+        'penalty-types': (typeof inMemoryPenaltyTypes !== 'undefined' && inMemoryPenaltyTypes) ? inMemoryPenaltyTypes : [],
+        'evaluation_forms': (typeof inMemoryEvaluationForms !== 'undefined' ? inMemoryEvaluationForms : (typeof CANONICAL_SEED_FORMS !== 'undefined' ? CANONICAL_SEED_FORMS : [])),
+        'evaluation-forms': (typeof inMemoryEvaluationForms !== 'undefined' ? inMemoryEvaluationForms : (typeof CANONICAL_SEED_FORMS !== 'undefined' ? CANONICAL_SEED_FORMS : [])),
         'governing_courses': (typeof inMemoryGoverningCourses !== 'undefined' ? inMemoryGoverningCourses : []),
         'governing-courses': (typeof inMemoryGoverningCourses !== 'undefined' ? inMemoryGoverningCourses : []),
       }
@@ -2850,9 +4377,25 @@ async function startServer() {
       if (statusParam) {
         query = query.where(eq(schema.jobTitles.status, statusParam)) as any;
       }
-      const records = await query;
+      let records = await query;
       if (records && records.length > 0) {
         return res.json(records.map(r => mapKeys(r, camelToSnake)));
+      } else if (!statusParam) {
+        // Auto-seed canonical job titles to database if empty
+        for (const t of DEFAULT_JOB_TITLES) {
+          await db.insert(schema.jobTitles).values({
+            name: t.name,
+            category: t.category,
+            minGrade: t.min_grade,
+            minStep: t.min_step,
+            status: t.status,
+            notes: t.notes
+          }).catch(() => {});
+        }
+        records = await db.select().from(schema.jobTitles).orderBy(asc(schema.jobTitles.name));
+        if (records && records.length > 0) {
+          return res.json(records.map(r => mapKeys(r, camelToSnake)));
+        }
       }
     } catch (error: any) {
       console.warn('Database fallback for job titles');
@@ -2870,13 +4413,41 @@ async function startServer() {
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'اسم العنوان الوظيفي مطلوب' });
     }
+    const trimmedName = name.trim();
+    const normalizeArabic = (text: string) => {
+      if (!text) return '';
+      return text
+        .replace(/[أإآا]/g, 'ا')
+        .replace(/[ىي]/g, 'ي')
+        .replace(/[ةه]/g, 'ه')
+        .replace(/[\u064B-\u065F]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    };
+
+    // Uniqueness validation check
+    let existingTitles: any[] = inMemoryJobTitles || [];
+    try {
+      const dbList = await db.select().from(schema.jobTitles);
+      if (dbList && dbList.length > 0) existingTitles = dbList;
+    } catch (e) {}
+
+    const normInput = normalizeArabic(trimmedName);
+    const isDuplicate = existingTitles.some(t => t.name && normalizeArabic(t.name) === normInput);
+    if (isDuplicate) {
+      return res.status(400).json({
+        error: 'اسم العنوان الوظيفي مسجل مسبقاً في النظام، يجب أن يكون كل عنوان وظيفي مميزاً وفريداً.'
+      });
+    }
+
     const mGrade = min_grade !== undefined ? parseInt(min_grade) : (minGrade !== undefined ? parseInt(minGrade) : 7);
     const mStep = min_step !== undefined ? parseInt(min_step) : (minStep !== undefined ? parseInt(minStep) : 1);
     const nxtId = next_title_id !== undefined ? (next_title_id ? parseInt(next_title_id) : null) : (nextTitleId !== undefined ? (nextTitleId ? parseInt(nextTitleId) : null) : null);
 
     try {
       const [newRecord] = await db.insert(schema.jobTitles).values({
-        name: name.trim(),
+        name: trimmedName,
         category: category || 'عام',
         minGrade: mGrade,
         minStep: mStep,
@@ -2894,7 +4465,7 @@ async function startServer() {
     const newId = inMemoryJobTitles.reduce((max, t) => Math.max(max, parseInt(t.id) || 0), 0) + 1;
     const memItem = {
       id: newId,
-      name: name.trim(),
+      name: trimmedName,
       category: category || 'عام',
       min_grade: mGrade,
       minGrade: mGrade,
@@ -2913,81 +4484,260 @@ async function startServer() {
   });
 
   app.put('/api/job-titles/:id', requireAuth, async (req, res) => {
-    const id = parseInt(req.params.id);
-    const { name, category, min_grade, minGrade, min_step, minStep, next_title_id, nextTitleId, status, notes } = req.body;
-    const mGrade = min_grade !== undefined ? parseInt(min_grade) : (minGrade !== undefined ? parseInt(minGrade) : undefined);
-    const mStep = min_step !== undefined ? parseInt(min_step) : (minStep !== undefined ? parseInt(minStep) : undefined);
-    const nxtId = next_title_id !== undefined ? (next_title_id ? parseInt(next_title_id) : null) : (nextTitleId !== undefined ? (nextTitleId ? parseInt(nextTitleId) : null) : undefined);
-
-    // Referential guard: check if deactivating an in-use job title
-    if (status === 'معطل' || status === 'غير فعال') {
-      const refCheck = checkReferentialUsage('job_titles', id, true, buildRefContext());
-      if (!refCheck.canProceed) {
-        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
-      }
-    }
-
     try {
-      const updateData: any = { updatedAt: new Date() };
-      if (name) updateData.name = name.trim();
-      if (category !== undefined) updateData.category = category;
-      if (mGrade !== undefined) updateData.minGrade = mGrade;
-      if (mStep !== undefined) updateData.minStep = mStep;
-      if (nxtId !== undefined) updateData.nextTitleId = nxtId;
-      if (status !== undefined) updateData.status = status;
-      if (notes !== undefined) updateData.notes = notes;
-
-      const [updated] = await db.update(schema.jobTitles)
-        .set(updateData)
-        .where(eq(schema.jobTitles.id, id))
-        .returning();
-      if (updated) {
-        saveLocalDb();
-        return res.json(mapKeys(updated, camelToSnake));
-      }
-    } catch (error: any) {
-      console.warn('Database fallback for update job title');
-    }
-    const idx = inMemoryJobTitles.findIndex(r => r.id === id);
-    if (idx !== -1) {
-      inMemoryJobTitles[idx] = {
-        ...inMemoryJobTitles[idx],
-        name: name ? name.trim() : inMemoryJobTitles[idx].name,
-        category: category !== undefined ? category : inMemoryJobTitles[idx].category,
-        min_grade: mGrade !== undefined ? mGrade : inMemoryJobTitles[idx].min_grade,
-        minGrade: mGrade !== undefined ? mGrade : inMemoryJobTitles[idx].minGrade,
-        min_step: mStep !== undefined ? mStep : inMemoryJobTitles[idx].min_step,
-        minStep: mStep !== undefined ? mStep : inMemoryJobTitles[idx].minStep,
-        next_title_id: nxtId !== undefined ? nxtId : inMemoryJobTitles[idx].next_title_id,
-        nextTitleId: nxtId !== undefined ? nxtId : inMemoryJobTitles[idx].nextTitleId,
-        status: status !== undefined ? status : inMemoryJobTitles[idx].status,
-        notes: notes !== undefined ? notes : inMemoryJobTitles[idx].notes,
-        updated_at: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+      const id = parseInt(req.params.id);
+      const { name, category, min_grade, minGrade, min_step, minStep, next_title_id, nextTitleId, status, notes } = req.body;
+      const normalizeArabic = (text: string) => {
+        if (!text) return '';
+        return text
+          .replace(/[أإآا]/g, 'ا')
+          .replace(/[ىي]/g, 'ي')
+          .replace(/[ةه]/g, 'ه')
+          .replace(/[\u064B-\u065F]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
       };
-      saveLocalDb();
-      return res.json(mapKeys(inMemoryJobTitles[idx], camelToSnake));
+
+      // Uniqueness validation check on rename
+      if (name && name.trim()) {
+        const trimmedName = name.trim();
+        const normInput = normalizeArabic(trimmedName);
+        let existingTitles: any[] = inMemoryJobTitles || [];
+        try {
+          const dbList = await db.select().from(schema.jobTitles);
+          if (dbList && dbList.length > 0) existingTitles = dbList;
+        } catch (e) {}
+
+        const isDuplicate = existingTitles.some(t => 
+          parseInt(t.id) !== id && t.name && normalizeArabic(t.name) === normInput
+        );
+        if (isDuplicate) {
+          return res.status(400).json({
+            error: 'اسم العنوان الوظيفي مسجل مسبقاً في النظام، يجب أن يكون كل عنوان وظيفي مميزاً وفريداً.'
+          });
+        }
+      }
+
+      const mGrade = min_grade !== undefined ? parseInt(min_grade) : (minGrade !== undefined ? parseInt(minGrade) : undefined);
+      const mStep = min_step !== undefined ? parseInt(min_step) : (minStep !== undefined ? parseInt(minStep) : undefined);
+      const nxtId = next_title_id !== undefined ? (next_title_id ? parseInt(next_title_id) : null) : (nextTitleId !== undefined ? (nextTitleId ? parseInt(nextTitleId) : null) : undefined);
+
+      // Comprehensive referential guard: check if deactivating an in-use job title
+      if (status === 'معطل' || status === 'غير فعال') {
+        let dbEmployees = inMemoryEmployees || [];
+        let dbTitles = inMemoryJobTitles || [];
+        try {
+          const dbEmpList = await db.select().from(schema.employees);
+          if (dbEmpList && dbEmpList.length > 0) dbEmployees = dbEmpList;
+          const dbTitleList = await db.select().from(schema.jobTitles);
+          if (dbTitleList && dbTitleList.length > 0) dbTitles = dbTitleList;
+        } catch (e) {}
+
+        const refCtx = {
+          ...buildRefContext(),
+          employees: dbEmployees,
+          entities: {
+            ...buildRefContext().entities,
+            'job_titles': dbTitles,
+            'job-titles': dbTitles
+          }
+        };
+
+        const refCheck = checkReferentialUsage('job_titles', id, true, refCtx);
+        if (!refCheck.canProceed) {
+          return res.status(400).json({ 
+            error: refCheck.message, 
+            details: refCheck.affectedSummary,
+            count: refCheck.count,
+            affectedEmployees: refCheck.affectedEmployees || []
+          });
+        }
+      }
+
+      // Get existing title name before updating to perform cascading rename if changed
+      let oldTitle = inMemoryJobTitles.find(t => parseInt(String(t.id)) === id);
+      try {
+        const dbList = await db.select().from(schema.jobTitles).where(eq(schema.jobTitles.id, id));
+        if (dbList && dbList.length > 0) oldTitle = dbList[0];
+      } catch (e) {}
+      const oldName = oldTitle?.name ? String(oldTitle.name).trim() : '';
+      const newName = name ? name.trim() : oldName;
+
+      try {
+        const updateData: any = { updatedAt: new Date() };
+        if (name) updateData.name = newName;
+        if (category !== undefined) updateData.category = category;
+        if (mGrade !== undefined) updateData.minGrade = mGrade;
+        if (mStep !== undefined) updateData.minStep = mStep;
+        if (nxtId !== undefined) updateData.nextTitleId = nxtId;
+        if (status !== undefined) updateData.status = status;
+        if (notes !== undefined) updateData.notes = notes;
+
+        const [updated] = await db.update(schema.jobTitles)
+          .set(updateData)
+          .where(eq(schema.jobTitles.id, id))
+          .returning();
+
+        // If title name was updated, cascade change to all employee records and job assignments in DB
+        if (oldName && newName && oldName !== newName) {
+          try {
+            await db.update(schema.employees)
+              .set({ jobTitle: newName, updatedAt: new Date() })
+              .where(or(
+                eq(schema.employees.jobTitle, oldName),
+                eq(schema.employees.jobTitleId, id)
+              ));
+            await db.update(schema.jobAssignments)
+              .set({ jobTitle: newName })
+              .where(or(
+                eq(schema.jobAssignments.jobTitle, oldName),
+                eq(schema.jobAssignments.jobTitleId, id)
+              ));
+          } catch (cascErr) {
+            console.warn('Database fallback for cascading job title rename');
+          }
+
+          // Cascade in-memory employees and job assignments
+          (inMemoryEmployees || []).forEach(emp => {
+            const curTitle = String(emp.jobTitle || emp.job_title || '').trim();
+            const curTitleId = parseInt(String(emp.jobTitleId || emp.job_title_id || '0'));
+            if ((oldName && curTitle === oldName) || (curTitleId && curTitleId === id)) {
+              emp.jobTitle = newName;
+              emp.job_title = newName;
+              emp.jobTitleId = id;
+              emp.job_title_id = id;
+              emp.updatedAt = new Date().toISOString();
+              emp.updated_at = new Date().toISOString();
+            }
+          });
+
+          const jaStore = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
+          jaStore.forEach((ja: any) => {
+            const jaTitle = String(ja.jobTitle || ja.job_title || '').trim();
+            const jaTitleId = parseInt(String(ja.jobTitleId || ja.job_title_id || '0'));
+            if ((oldName && jaTitle === oldName) || (jaTitleId && jaTitleId === id)) {
+              ja.jobTitle = newName;
+              ja.job_title = newName;
+              ja.jobTitleId = id;
+              ja.job_title_id = id;
+            }
+          });
+        }
+
+        if (updated) {
+          saveLocalDb();
+          return res.json(mapKeys(updated, camelToSnake));
+        }
+      } catch (error: any) {
+        console.warn('Database fallback for update job title');
+      }
+
+      const idx = inMemoryJobTitles.findIndex(r => parseInt(String(r.id)) === id);
+      if (idx !== -1) {
+        inMemoryJobTitles[idx] = {
+          ...inMemoryJobTitles[idx],
+          name: newName,
+          category: category !== undefined ? category : inMemoryJobTitles[idx].category,
+          min_grade: mGrade !== undefined ? mGrade : inMemoryJobTitles[idx].min_grade,
+          minGrade: mGrade !== undefined ? mGrade : inMemoryJobTitles[idx].minGrade,
+          min_step: mStep !== undefined ? mStep : inMemoryJobTitles[idx].min_step,
+          minStep: mStep !== undefined ? mStep : inMemoryJobTitles[idx].minStep,
+          next_title_id: nxtId !== undefined ? nxtId : inMemoryJobTitles[idx].next_title_id,
+          nextTitleId: nxtId !== undefined ? nxtId : inMemoryJobTitles[idx].nextTitleId,
+          status: status !== undefined ? status : inMemoryJobTitles[idx].status,
+          notes: notes !== undefined ? notes : inMemoryJobTitles[idx].notes,
+          updated_at: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        // If title name was updated, cascade in in-memory storage
+        if (oldName && newName && oldName !== newName) {
+          (inMemoryEmployees || []).forEach(emp => {
+            const curTitle = String(emp.jobTitle || emp.job_title || '').trim();
+            const curTitleId = parseInt(String(emp.jobTitleId || emp.job_title_id || '0'));
+            if ((oldName && curTitle === oldName) || (curTitleId && curTitleId === id)) {
+              emp.jobTitle = newName;
+              emp.job_title = newName;
+              emp.jobTitleId = id;
+              emp.job_title_id = id;
+              emp.updatedAt = new Date().toISOString();
+              emp.updated_at = new Date().toISOString();
+            }
+          });
+
+          const jaStore = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
+          jaStore.forEach((ja: any) => {
+            const jaTitle = String(ja.jobTitle || ja.job_title || '').trim();
+            const jaTitleId = parseInt(String(ja.jobTitleId || ja.job_title_id || '0'));
+            if ((oldName && jaTitle === oldName) || (jaTitleId && jaTitleId === id)) {
+              ja.jobTitle = newName;
+              ja.job_title = newName;
+              ja.jobTitleId = id;
+              ja.job_title_id = id;
+            }
+          });
+        }
+
+        saveLocalDb();
+        return res.json(mapKeys(inMemoryJobTitles[idx], camelToSnake));
+      }
+      res.json({ id, name: newName, category, min_grade: mGrade, min_step: mStep, next_title_id: nxtId, status, notes });
+    } catch (err: any) {
+      console.error('Error updating job title:', err);
+      res.status(500).json({ error: err.message || 'حدث خطأ أثناء تعديل العنوان الوظيفي' });
     }
-    res.json({ id, name, category, min_grade: mGrade, min_step: mStep, next_title_id: nxtId, status, notes });
   });
 
   app.delete('/api/job-titles/:id', requireAuth, async (req, res) => {
-    const id = parseInt(req.params.id);
-
-    // Referential guard: check if deleting an in-use job title
-    const refCheck = checkReferentialUsage('job_titles', id, false, buildRefContext());
-    if (!refCheck.canProceed) {
-      return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
-    }
-
     try {
-      await db.delete(schema.jobTitles).where(eq(schema.jobTitles.id, id));
-    } catch (error: any) {
-      console.warn('Database fallback for delete job title');
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: 'معرف العنوان الوظيفي غير صالح' });
+      }
+
+      // Comprehensive referential guard: check if deleting an in-use job title
+      let dbEmployees = inMemoryEmployees || [];
+      let dbTitles = inMemoryJobTitles || [];
+      try {
+        const dbEmpList = await db.select().from(schema.employees);
+        if (dbEmpList && dbEmpList.length > 0) dbEmployees = dbEmpList;
+        const dbTitleList = await db.select().from(schema.jobTitles);
+        if (dbTitleList && dbTitleList.length > 0) dbTitles = dbTitleList;
+      } catch (e) {}
+
+      const refCtx = {
+        ...buildRefContext(),
+        employees: dbEmployees,
+        entities: {
+          ...buildRefContext().entities,
+          'job_titles': dbTitles,
+          'job-titles': dbTitles
+        }
+      };
+
+      const refCheck = checkReferentialUsage('job_titles', id, false, refCtx);
+      if (!refCheck.canProceed) {
+        return res.status(400).json({ 
+          error: refCheck.message, 
+          details: refCheck.affectedSummary,
+          count: refCheck.count,
+          affectedEmployees: refCheck.affectedEmployees || []
+        });
+      }
+
+      try {
+        await db.delete(schema.jobTitles).where(eq(schema.jobTitles.id, id));
+      } catch (error: any) {
+        console.warn('Database fallback for delete job title');
+      }
+      inMemoryJobTitles = inMemoryJobTitles.filter(r => r.id !== id);
+      saveLocalDb();
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error deleting job title:', err);
+      res.status(500).json({ error: err.message || 'حدث خطأ أثناء حذف العنوان الوظيفي' });
     }
-    inMemoryJobTitles = inMemoryJobTitles.filter(r => r.id !== id);
-    saveLocalDb();
-    res.json({ success: true });
   });
 
   // --- Salary Scale API ---
@@ -3618,6 +5368,23 @@ async function startServer() {
 
   app.post('/api/work-locations', requireAuth, async (req, res) => {
     const { name, province, allowance_amount, work_start_hour, work_end_hour } = req.body;
+    const locName = String(name || '').trim();
+    if (!locName) {
+      return res.status(400).json({ error: 'اسم موقع العمل مطلوب' });
+    }
+    {
+      const normalize = (s: string) => s.trim().toLowerCase();
+      let existingLocs: any[] = [];
+      try {
+        existingLocs = await db.select().from(schema.workLocations);
+      } catch (error: any) {
+        console.warn('Database fallback for work location duplicate check');
+      }
+      const allLocs = [...existingLocs, ...inMemoryWorkLocations];
+      if (allLocs.some(l => normalize(String(l.name || '')) === normalize(locName))) {
+        return res.status(400).json({ error: `موقع العمل (${locName}) موجود بالفعل` });
+      }
+    }
     try {
       const [newRecord] = await db.insert(schema.workLocations).values({
         name,
@@ -3690,6 +5457,141 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // --- أنواع الخدمة (service types) API: قائمة قابلة للتوسيع بلا تكرار ---
+  app.get('/api/service-types', requireAuth, async (req, res) => {
+    try {
+      const records = await db.select().from(schema.serviceTypes).orderBy(asc(schema.serviceTypes.id));
+      if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
+    } catch (error: any) {
+      console.warn('Database fallback for service types');
+    }
+    res.json(inMemoryServiceTypes);
+  });
+
+  app.post('/api/service-types', requireAuth, async (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    if (!name) {
+      return res.status(400).json({ error: 'اسم نوع الخدمة مطلوب' });
+    }
+    const normalize = (s: string) => s.trim().toLowerCase();
+    let existingRows: any[] = [];
+    try {
+      existingRows = await db.select().from(schema.serviceTypes);
+    } catch (error: any) {
+      console.warn('Database fallback for service types duplicate check');
+    }
+    const allNames = [...existingRows, ...inMemoryServiceTypes].map(r => normalize(String(r.name || '')));
+    if (allNames.includes(normalize(name))) {
+      return res.status(400).json({ error: `نوع الخدمة (${name}) موجود بالفعل` });
+    }
+    let newRecord: any = null;
+    try {
+      const [inserted] = await db.insert(schema.serviceTypes).values({ name }).returning();
+      newRecord = inserted;
+    } catch (error: any) {
+      console.warn('Database fallback for create service type');
+    }
+    const memItem = newRecord || { id: (inMemoryServiceTypes.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1, name, created_at: new Date().toISOString() };
+    inMemoryServiceTypes.push(mapKeys(memItem, camelToSnake));
+    saveLocalDb();
+    res.status(201).json(mapKeys(memItem, camelToSnake));
+  });
+
+  // --- حالات الموظف (employee statuses) API: قائمة قابلة للتوسيع بلا تكرار ---
+  app.get('/api/employee-statuses', requireAuth, async (req, res) => {
+    try {
+      const records = await db.select().from(schema.employeeStatuses).orderBy(asc(schema.employeeStatuses.id));
+      if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
+    } catch (error: any) {
+      console.warn('Database fallback for employee statuses');
+    }
+    res.json(inMemoryEmployeeStatuses);
+  });
+
+  app.post('/api/employee-statuses', requireAuth, async (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    if (!name) {
+      return res.status(400).json({ error: 'اسم حالة الموظف مطلوب' });
+    }
+    const normalize = (s: string) => s.trim().toLowerCase();
+    let existingRows: any[] = [];
+    try {
+      existingRows = await db.select().from(schema.employeeStatuses);
+    } catch (error: any) {
+      console.warn('Database fallback for employee statuses duplicate check');
+    }
+    const allNames = [...existingRows, ...inMemoryEmployeeStatuses].map(r => normalize(String(r.name || '')));
+    if (allNames.includes(normalize(name))) {
+      return res.status(400).json({ error: `حالة الموظف (${name}) موجودة بالفعل` });
+    }
+    let newRecord: any = null;
+    try {
+      const [inserted] = await db.insert(schema.employeeStatuses).values({ name }).returning();
+      newRecord = inserted;
+    } catch (error: any) {
+      console.warn('Database fallback for create employee status');
+    }
+    const memItem = newRecord || { id: (inMemoryEmployeeStatuses.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1, name, created_at: new Date().toISOString() };
+    inMemoryEmployeeStatuses.push(mapKeys(memItem, camelToSnake));
+    saveLocalDb();
+    res.status(201).json(mapKeys(memItem, camelToSnake));
+  });
+
+  // حذف حالة موظف: مسموح فقط بشرط ألا يستخدمها أي موظف حالياً (سيطرة على إدارة الحالات
+  // كي لا تُحذف حالة أُضيفت بالخطأ وتؤثر على موظفين فعليين يحملونها).
+  app.delete('/api/employee-statuses/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid ID format' });
+    }
+    try {
+      let statusRecord: any = null;
+      try {
+        const [row] = await db.select().from(schema.employeeStatuses).where(eq(schema.employeeStatuses.id, id));
+        statusRecord = row || null;
+      } catch (err) {
+        console.warn('Database fallback for employee status lookup');
+      }
+      if (!statusRecord) {
+        statusRecord = inMemoryEmployeeStatuses.find(r => parseInt(String(r.id)) === id) || null;
+      }
+      if (!statusRecord) {
+        return res.status(404).json({ error: 'حالة الموظف غير موجودة' });
+      }
+      const statusName = String(statusRecord.name || '').trim();
+
+      // فحص الارتباط: هل يوجد موظف واحد أو أكثر يحمل هذه الحالة حالياً؟
+      let usedCount = 0;
+      try {
+        const rows = await db.select().from(schema.employees).where(eq(schema.employees.status, statusName));
+        usedCount = rows.length;
+      } catch (err) {
+        console.warn('Database fallback for employee status usage check');
+      }
+      if (usedCount === 0) {
+        usedCount = inMemoryEmployees.filter(e => String(e.status || '').trim() === statusName).length;
+      }
+      if (usedCount > 0) {
+        return res.status(400).json({
+          error: `لا يمكن حذف حالة (${statusName})، مستخدمة حالياً من قبل ${usedCount} موظف/ة. يجب تغيير حالة هؤلاء الموظفين أولاً قبل حذف هذه الحالة.`,
+          count: usedCount
+        });
+      }
+
+      try {
+        await db.delete(schema.employeeStatuses).where(eq(schema.employeeStatuses.id, id));
+      } catch (err) {
+        console.warn('Database fallback for delete employee status');
+      }
+      inMemoryEmployeeStatuses = inMemoryEmployeeStatuses.filter(r => parseInt(String(r.id)) !== id);
+      saveLocalDb();
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('Error deleting employee status:', error);
+      res.status(500).json({ error: error.message || 'فشل حذف حالة الموظف' });
+    }
+  });
+
   // --- Education Degrees API ---
   app.get('/api/education-degrees', requireAuth, async (req, res) => {
     try {
@@ -3702,13 +5604,29 @@ async function startServer() {
   });
 
   app.post('/api/education-degrees', requireAuth, async (req, res) => {
-    const { name, is_higher_education, allowance_rate, higher_allowance_rate } = req.body;
+    const { 
+      name, 
+      is_higher_education, isHigherEducation, 
+      allowance_rate, allowanceRate, 
+      higher_allowance_rate, higherAllowanceRate, 
+      baseline_grade, baselineGrade, 
+      baseline_step, baselineStep 
+    } = req.body;
+
+    const isHigher = is_higher_education !== undefined ? is_higher_education === true : isHigherEducation === true;
+    const allRate = allowance_rate !== undefined ? parseInt(allowance_rate) : (allowanceRate !== undefined ? parseInt(allowanceRate) : 0);
+    const hAllRate = higher_allowance_rate !== undefined ? parseInt(higher_allowance_rate) : (higherAllowanceRate !== undefined ? parseInt(higherAllowanceRate) : 0);
+    const bGrade = baseline_grade !== undefined ? parseInt(baseline_grade) : (baselineGrade !== undefined ? parseInt(baselineGrade) : 7);
+    const bStep = baseline_step !== undefined ? parseInt(baseline_step) : (baselineStep !== undefined ? parseInt(baselineStep) : 1);
+
     try {
       const [newRecord] = await db.insert(schema.educationDegrees).values({
         name,
-        isHigherEducation: is_higher_education === true,
-        allowanceRate: allowance_rate !== undefined ? parseInt(allowance_rate) : 0,
-        higherAllowanceRate: higher_allowance_rate !== undefined ? parseInt(higher_allowance_rate) : 0,
+        isHigherEducation: isHigher,
+        allowanceRate: allRate,
+        higherAllowanceRate: hAllRate,
+        baselineGrade: bGrade,
+        baselineStep: bStep,
       }).returning();
       if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
     } catch (error: any) {
@@ -3717,9 +5635,16 @@ async function startServer() {
     const memItem = {
       id: inMemoryEducationDegrees.length + 1,
       name,
-      is_higher_education: is_higher_education === true,
-      allowance_rate: allowance_rate !== undefined ? parseInt(allowance_rate) : 0,
-      higher_allowance_rate: higher_allowance_rate !== undefined ? parseInt(higher_allowance_rate) : 0,
+      is_higher_education: isHigher,
+      isHigherEducation: isHigher,
+      allowance_rate: allRate,
+      allowanceRate: allRate,
+      higher_allowance_rate: hAllRate,
+      higherAllowanceRate: hAllRate,
+      baseline_grade: bGrade,
+      baselineGrade: bGrade,
+      baseline_step: bStep,
+      baselineStep: bStep,
       status: 'فعال',
       created_at: new Date().toISOString()
     };
@@ -3730,7 +5655,15 @@ async function startServer() {
 
   app.put('/api/education-degrees/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, is_higher_education, allowance_rate, higher_allowance_rate, status } = req.body;
+    const { 
+      name, 
+      is_higher_education, isHigherEducation, 
+      allowance_rate, allowanceRate, 
+      higher_allowance_rate, higherAllowanceRate, 
+      baseline_grade, baselineGrade, 
+      baseline_step, baselineStep, 
+      status 
+    } = req.body;
 
     if (status === 'معطل' || status === 'غير فعال') {
       const refCheck = checkReferentialUsage('education_degrees', id, true, buildRefContext());
@@ -3739,17 +5672,31 @@ async function startServer() {
       }
     }
 
+    const isHigher = is_higher_education !== undefined ? is_higher_education === true : (isHigherEducation !== undefined ? isHigherEducation === true : undefined);
+    const allRate = allowance_rate !== undefined ? parseInt(allowance_rate) : (allowanceRate !== undefined ? parseInt(allowanceRate) : undefined);
+    const hAllRate = higher_allowance_rate !== undefined ? parseInt(higher_allowance_rate) : (higherAllowanceRate !== undefined ? parseInt(higherAllowanceRate) : undefined);
+    const bGrade = baseline_grade !== undefined ? parseInt(baseline_grade) : (baselineGrade !== undefined ? parseInt(baselineGrade) : undefined);
+    const bStep = baseline_step !== undefined ? parseInt(baseline_step) : (baselineStep !== undefined ? parseInt(baselineStep) : undefined);
+
     try {
+      const updateData: any = {};
+      if (name !== undefined) updateData.name = name;
+      if (isHigher !== undefined) updateData.isHigherEducation = isHigher;
+      if (allRate !== undefined) updateData.allowanceRate = allRate;
+      if (hAllRate !== undefined) updateData.higherAllowanceRate = hAllRate;
+      if (bGrade !== undefined) updateData.baselineGrade = bGrade;
+      if (bStep !== undefined) updateData.baselineStep = bStep;
+
       const [updated] = await db.update(schema.educationDegrees)
-        .set({
-          name,
-          isHigherEducation: is_higher_education !== undefined ? is_higher_education === true : undefined,
-          allowanceRate: allowance_rate !== undefined ? parseInt(allowance_rate) : undefined,
-          higherAllowanceRate: higher_allowance_rate !== undefined ? parseInt(higher_allowance_rate) : undefined,
-        })
+        .set(updateData)
         .where(eq(schema.educationDegrees.id, id))
         .returning();
-      if (updated) return res.json(mapKeys(updated, camelToSnake));
+      if (updated) {
+        const idx = inMemoryEducationDegrees.findIndex(r => r.id === id);
+        if (idx !== -1) inMemoryEducationDegrees[idx] = { ...inMemoryEducationDegrees[idx], ...mapKeys(updated, camelToSnake) };
+        saveLocalDb();
+        return res.json(mapKeys(updated, camelToSnake));
+      }
     } catch (error: any) {
       console.warn('Database fallback for update education degree');
     }
@@ -3758,14 +5705,22 @@ async function startServer() {
       inMemoryEducationDegrees[idx] = {
         ...inMemoryEducationDegrees[idx],
         name: name || inMemoryEducationDegrees[idx].name,
-        is_higher_education: is_higher_education !== undefined ? is_higher_education === true : inMemoryEducationDegrees[idx].is_higher_education,
-        allowance_rate: allowance_rate !== undefined ? parseInt(allowance_rate) : inMemoryEducationDegrees[idx].allowance_rate,
-        higher_allowance_rate: higher_allowance_rate !== undefined ? parseInt(higher_allowance_rate) : inMemoryEducationDegrees[idx].higher_allowance_rate
+        is_higher_education: isHigher !== undefined ? isHigher : inMemoryEducationDegrees[idx].is_higher_education,
+        isHigherEducation: isHigher !== undefined ? isHigher : inMemoryEducationDegrees[idx].isHigherEducation,
+        allowance_rate: allRate !== undefined ? allRate : inMemoryEducationDegrees[idx].allowance_rate,
+        allowanceRate: allRate !== undefined ? allRate : inMemoryEducationDegrees[idx].allowanceRate,
+        higher_allowance_rate: hAllRate !== undefined ? hAllRate : inMemoryEducationDegrees[idx].higher_allowance_rate,
+        higherAllowanceRate: hAllRate !== undefined ? hAllRate : inMemoryEducationDegrees[idx].higherAllowanceRate,
+        baseline_grade: bGrade !== undefined ? bGrade : (inMemoryEducationDegrees[idx].baseline_grade || inMemoryEducationDegrees[idx].baselineGrade || 7),
+        baselineGrade: bGrade !== undefined ? bGrade : (inMemoryEducationDegrees[idx].baselineGrade || inMemoryEducationDegrees[idx].baseline_grade || 7),
+        baseline_step: bStep !== undefined ? bStep : (inMemoryEducationDegrees[idx].baseline_step || inMemoryEducationDegrees[idx].baselineStep || 1),
+        baselineStep: bStep !== undefined ? bStep : (inMemoryEducationDegrees[idx].baselineStep || inMemoryEducationDegrees[idx].baseline_step || 1),
+        status: status !== undefined ? status : inMemoryEducationDegrees[idx].status,
       };
       saveLocalDb();
       return res.json(inMemoryEducationDegrees[idx]);
     }
-    res.json({ id, name, is_higher_education, allowance_rate, higher_allowance_rate });
+    res.json({ id, name, is_higher_education: isHigher, allowance_rate: allRate, higher_allowance_rate: hAllRate, baseline_grade: bGrade, baseline_step: bStep, status });
   });
 
   app.delete('/api/education-degrees/:id', requireAuth, async (req, res) => {
@@ -3874,106 +5829,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // --- Shift Systems API ---
-  app.get('/api/shift-systems', requireAuth, async (req, res) => {
-    try {
-      const records = await db.select().from(schema.shiftSystems).orderBy(asc(schema.shiftSystems.id));
-      if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
-    } catch (error: any) {
-      console.warn('Database fallback for shift systems');
-    }
-    res.json(inMemoryShiftSystems);
-  });
-
-  app.post('/api/shift-systems', requireAuth, async (req, res) => {
-    const { name, work_days, rest_days, allowance_amount, description } = req.body;
-    try {
-      const [newRecord] = await db.insert(schema.shiftSystems).values({
-        name,
-        workDays: parseInt(work_days) || 0,
-        restDays: parseInt(rest_days) || 0,
-        allowanceAmount: parseInt(allowance_amount) || 0,
-        description: description || '',
-      }).returning();
-      if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
-    } catch (error: any) {
-      console.warn('Database fallback for create shift system');
-    }
-    const memItem = {
-      id: inMemoryShiftSystems.length + 1,
-      name,
-      work_days: parseInt(work_days) || 0,
-      rest_days: parseInt(rest_days) || 0,
-      allowance_amount: parseInt(allowance_amount) || 0,
-      description: description || '',
-      status: 'فعال',
-      created_at: new Date().toISOString()
-    };
-    inMemoryShiftSystems.push(memItem);
-    saveLocalDb();
-    res.status(201).json(memItem);
-  });
-
-  app.put('/api/shift-systems/:id', requireAuth, async (req, res) => {
-    const id = parseInt(req.params.id);
-    const { name, work_days, rest_days, allowance_amount, description, status } = req.body;
-
-    if (status === 'معطل' || status === 'غير فعال') {
-      const refCheck = checkReferentialUsage('shift_systems', id, true, buildRefContext());
-      if (!refCheck.canProceed) {
-        return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
-      }
-    }
-
-    try {
-      const [updated] = await db.update(schema.shiftSystems)
-        .set({
-          name,
-          workDays: work_days !== undefined ? parseInt(work_days) : undefined,
-          restDays: rest_days !== undefined ? parseInt(rest_days) : undefined,
-          allowanceAmount: allowance_amount !== undefined ? parseInt(allowance_amount) : undefined,
-          description: description !== undefined ? description : undefined,
-        })
-        .where(eq(schema.shiftSystems.id, id))
-        .returning();
-      if (updated) return res.json(mapKeys(updated, camelToSnake));
-    } catch (error: any) {
-      console.warn('Database fallback for update shift system');
-    }
-    const idx = inMemoryShiftSystems.findIndex(r => r.id === id);
-    if (idx !== -1) {
-      inMemoryShiftSystems[idx] = {
-        ...inMemoryShiftSystems[idx],
-        name: name || inMemoryShiftSystems[idx].name,
-        work_days: work_days !== undefined ? parseInt(work_days) : inMemoryShiftSystems[idx].work_days,
-        rest_days: rest_days !== undefined ? parseInt(rest_days) : inMemoryShiftSystems[idx].rest_days,
-        allowance_amount: allowance_amount !== undefined ? parseInt(allowance_amount) : inMemoryShiftSystems[idx].allowance_amount,
-        description: description || inMemoryShiftSystems[idx].description
-      };
-      saveLocalDb();
-      return res.json(inMemoryShiftSystems[idx]);
-    }
-    res.json({ id, name, work_days, rest_days, allowance_amount, description });
-  });
-
-  app.delete('/api/shift-systems/:id', requireAuth, async (req, res) => {
-    const id = parseInt(req.params.id);
-
-    const refCheck = checkReferentialUsage('shift_systems', id, false, buildRefContext());
-    if (!refCheck.canProceed) {
-      return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
-    }
-
-    try {
-      await db.delete(schema.shiftSystems).where(eq(schema.shiftSystems.id, id));
-    } catch (error: any) {
-      console.warn('Database fallback for delete shift system');
-    }
-    inMemoryShiftSystems = inMemoryShiftSystems.filter(r => r.id !== id);
-    saveLocalDb();
-    res.json({ success: true });
-  });
-
   // --- Service Records API ---
   app.get('/api/service-records', requireAuth, async (req, res) => {
     try {
@@ -3982,11 +5837,12 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for service records');
     }
-    res.json(inMemoryServiceRecords);
+    res.json(inMemoryServiceRecords.map(r => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/service-records', requireAuth, async (req, res) => {
     const { employee_id, record_type, duration_years, duration_months, duration_days, order_number, order_date, notes } = req.body;
+    let newRec: any = null;
     try {
       const [newRecord] = await db.insert(schema.serviceRecords).values({
         employeeId: parseInt(employee_id),
@@ -3998,24 +5854,33 @@ async function startServer() {
         orderDate: order_date,
         notes: notes || '',
       }).returning();
-      if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
+      newRec = newRecord;
     } catch (error: any) {
       console.warn('Database fallback for create service record');
     }
+    const newId = newRec?.id || (inMemoryServiceRecords.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
     const memItem = {
-      id: inMemoryServiceRecords.length + 1,
+      id: newId,
       employee_id: parseInt(employee_id),
+      employeeId: parseInt(employee_id),
       record_type,
+      recordType: record_type,
       duration_years: parseInt(duration_years) || 0,
+      durationYears: parseInt(duration_years) || 0,
       duration_months: parseInt(duration_months) || 0,
+      durationMonths: parseInt(duration_months) || 0,
       duration_days: parseInt(duration_days) || 0,
+      durationDays: parseInt(duration_days) || 0,
       order_number,
+      orderNumber: order_number,
       order_date,
+      orderDate: order_date,
       notes: notes || '',
       created_at: new Date().toISOString()
     };
     inMemoryServiceRecords.push(memItem);
-    res.status(201).json(memItem);
+    saveLocalDb();
+    res.status(201).json(mapKeys(newRec || memItem, camelToSnake));
   });
 
   app.delete('/api/service-records/:id', requireAuth, async (req, res) => {
@@ -4025,8 +5890,8 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete service record');
     }
-    const idx = inMemoryServiceRecords.findIndex(r => r.id === id);
-    if (idx !== -1) inMemoryServiceRecords.splice(idx, 1);
+    inMemoryServiceRecords = inMemoryServiceRecords.filter(r => parseInt(String(r.id)) !== id);
+    saveLocalDb();
     res.json({ success: true });
   });
 
@@ -4042,12 +5907,38 @@ async function startServer() {
   });
 
   app.post('/api/leave-types', requireAuth, async (req, res) => {
-    const { name, maxDays, max_days, description, status, administrativeEffect, administrative_effect, financialEffect, financial_effect, financialDeductionPercentage, financial_deduction_percentage } = req.body;
-    const mDays = maxDays !== undefined ? (maxDays ? parseInt(maxDays) : null) : (max_days !== undefined ? (max_days ? parseInt(max_days) : null) : null);
-    const adminEff = administrativeEffect || administrative_effect || 'لا_يؤثر';
-    const finEff = financialEffect || financial_effect || 'براتب_كامل';
-    const finDedPct = parseInt(financialDeductionPercentage ?? financial_deduction_percentage ?? 0) || 0;
+    const { 
+      name, maxDays, max_days, description, status, 
+      administrativeEffect, administrative_effect, 
+      financialEffect, financial_effect, 
+      financialDeductionPercentage, financial_deduction_percentage,
+      affectsIncrement, affects_increment,
+      affectsPromotion, affects_promotion,
+      affectsCommendations, affects_commendations,
+      salaryPaymentType, salary_payment_type,
+      effectsOptions, effects_options
+    } = req.body;
 
+    const mDays = maxDays !== undefined ? (maxDays ? parseInt(maxDays) : null) : (max_days !== undefined ? (max_days ? parseInt(max_days) : null) : null);
+    const affInc = Boolean(affectsIncrement ?? affects_increment ?? false);
+    const affPromo = Boolean(affectsPromotion ?? affects_promotion ?? false);
+    const affComm = Boolean(affectsCommendations ?? affects_commendations ?? false);
+    const salType = salaryPaymentType || salary_payment_type || (financialEffect === 'بدون_راتب' ? 'بدون_راتب' : financialEffect === 'براتب_ومخصصات_ثابتة' ? 'منح_الراتب_والمخصصات_الثابتة_فقط' : financialEffect === 'استقطاع_جزئي' ? 'استقطاع_جزئي' : 'منح_الراتب_كامل');
+
+    let adminEff = administrativeEffect || administrative_effect || '';
+    if (!adminEff || adminEff === 'لا_يؤثر') {
+      const parts: string[] = [];
+      if (affPromo) parts.push('يوقف الترفيع');
+      if (affInc) parts.push('يؤخر العلاوة');
+      if (affComm) parts.push('يوقف كتب الشكر');
+      adminEff = parts.length > 0 ? parts.join(' و ') : 'لا_يؤثر';
+    }
+
+    const finEff = financialEffect || financial_effect || (salType === 'بدون_راتب' ? 'بدون_راتب' : salType === 'منح_الراتب_والمخصصات_الثابتة_فقط' ? 'براتب_ومخصصات_ثابتة' : salType === 'استقطاع_جزئي' ? 'استقطاع_جزئي' : 'براتب_كامل');
+    const finDedPct = parseInt(financialDeductionPercentage ?? financial_deduction_percentage ?? (salType === 'بدون_راتب' ? 100 : 0)) || 0;
+    const effOptsStr = typeof effectsOptions === 'string' ? effectsOptions : typeof effects_options === 'string' ? effects_options : JSON.stringify(effectsOptions || effects_options || []);
+
+    let newRec: any = null;
     try {
       const [newRecord] = await db.insert(schema.leaveTypes).values({
         name,
@@ -4055,19 +5946,22 @@ async function startServer() {
         administrativeEffect: adminEff,
         financialEffect: finEff,
         financialDeductionPercentage: finDedPct,
+        affectsIncrement: affInc,
+        affectsPromotion: affPromo,
+        affectsCommendations: affComm,
+        salaryPaymentType: salType,
+        effectsOptions: effOptsStr,
         description,
         status: status || 'فعال',
       }).returning();
-      if (newRecord) {
-        inMemoryLeaveTypes.push(mapKeys(newRecord, camelToSnake));
-        saveLocalDb();
-        return res.status(201).json(mapKeys(newRecord, camelToSnake));
-      }
+      newRec = newRecord;
     } catch (error: any) {
       console.warn('Database fallback for create leave type');
     }
+
+    const newId = newRec?.id || (inMemoryLeaveTypes.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
     const memItem = {
-      id: inMemoryLeaveTypes.length + 1,
+      id: newId,
       name,
       max_days: mDays,
       maxDays: mDays,
@@ -4077,23 +5971,62 @@ async function startServer() {
       financialEffect: finEff,
       financial_deduction_percentage: finDedPct,
       financialDeductionPercentage: finDedPct,
+      affects_increment: affInc,
+      affectsIncrement: affInc,
+      affects_promotion: affPromo,
+      affectsPromotion: affPromo,
+      affects_commendations: affComm,
+      affectsCommendations: affComm,
+      salary_payment_type: salType,
+      salaryPaymentType: salType,
+      effects_options: effOptsStr,
+      effectsOptions: effOptsStr,
       description,
       status: status || 'فعال',
       createdAt: new Date().toISOString()
     };
     inMemoryLeaveTypes.push(memItem);
     saveLocalDb();
-    res.status(201).json(memItem);
+    res.status(201).json(mapKeys(newRec || memItem, camelToSnake));
   });
 
   app.put('/api/leave-types/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, maxDays, max_days, description, status, administrativeEffect, administrative_effect, financialEffect, financial_effect, financialDeductionPercentage, financial_deduction_percentage } = req.body;
-    const mDays = maxDays !== undefined ? (maxDays ? parseInt(maxDays) : null) : (max_days !== undefined ? (max_days ? parseInt(max_days) : null) : undefined);
-    const adminEff = administrativeEffect !== undefined ? administrativeEffect : administrative_effect;
-    const finEff = financialEffect !== undefined ? financialEffect : financial_effect;
-    const finDedPct = financialDeductionPercentage !== undefined ? parseInt(financialDeductionPercentage) : (financial_deduction_percentage !== undefined ? parseInt(financial_deduction_percentage) : undefined);
+    const { 
+      name, maxDays, max_days, description, status, 
+      administrativeEffect, administrative_effect, 
+      financialEffect, financial_effect, 
+      financialDeductionPercentage, financial_deduction_percentage,
+      affectsIncrement, affects_increment,
+      affectsPromotion, affects_promotion,
+      affectsCommendations, affects_commendations,
+      salaryPaymentType, salary_payment_type,
+      effectsOptions, effects_options
+    } = req.body;
 
+    const mDays = maxDays !== undefined ? (maxDays ? parseInt(maxDays) : null) : (max_days !== undefined ? (max_days ? parseInt(max_days) : null) : undefined);
+    const affInc = affectsIncrement !== undefined ? Boolean(affectsIncrement) : (affects_increment !== undefined ? Boolean(affects_increment) : undefined);
+    const affPromo = affectsPromotion !== undefined ? Boolean(affectsPromotion) : (affects_promotion !== undefined ? Boolean(affects_promotion) : undefined);
+    const affComm = affectsCommendations !== undefined ? Boolean(affectsCommendations) : (affects_commendations !== undefined ? Boolean(affects_commendations) : undefined);
+    const salType = salaryPaymentType !== undefined ? salaryPaymentType : salary_payment_type;
+    const effOptsStr = effectsOptions !== undefined ? (typeof effectsOptions === 'string' ? effectsOptions : JSON.stringify(effectsOptions)) : (effects_options !== undefined ? (typeof effects_options === 'string' ? effects_options : JSON.stringify(effects_options)) : undefined);
+
+    let adminEff = administrativeEffect !== undefined ? administrativeEffect : administrative_effect;
+    if (adminEff === undefined && (affInc !== undefined || affPromo !== undefined || affComm !== undefined)) {
+      const parts: string[] = [];
+      if (affPromo) parts.push('يوقف الترفيع');
+      if (affInc) parts.push('يؤخر العلاوة');
+      if (affComm) parts.push('يوقف كتب الشكر');
+      adminEff = parts.length > 0 ? parts.join(' و ') : 'لا_يؤثر';
+    }
+
+    let finEff = financialEffect !== undefined ? financialEffect : financial_effect;
+    if (finEff === undefined && salType !== undefined) {
+      finEff = salType === 'بدون_راتب' ? 'بدون_راتب' : salType === 'منح_الراتب_والمخصصات_الثابتة_فقط' ? 'براتب_ومخصصات_ثابتة' : salType === 'استقطاع_جزئي' ? 'استقطاع_جزئي' : 'براتب_كامل';
+    }
+    const finDedPct = financialDeductionPercentage !== undefined ? parseInt(financialDeductionPercentage) : (financial_deduction_percentage !== undefined ? parseInt(financial_deduction_percentage) : (salType === 'بدون_راتب' ? 100 : undefined));
+
+    let updatedRec: any = null;
     try {
       const updateData: any = { updatedAt: new Date() };
       if (name !== undefined) updateData.name = name;
@@ -4101,6 +6034,11 @@ async function startServer() {
       if (adminEff !== undefined) updateData.administrativeEffect = adminEff;
       if (finEff !== undefined) updateData.financialEffect = finEff;
       if (finDedPct !== undefined) updateData.financialDeductionPercentage = finDedPct;
+      if (affInc !== undefined) updateData.affectsIncrement = affInc;
+      if (affPromo !== undefined) updateData.affectsPromotion = affPromo;
+      if (affComm !== undefined) updateData.affectsCommendations = affComm;
+      if (salType !== undefined) updateData.salaryPaymentType = salType;
+      if (effOptsStr !== undefined) updateData.effectsOptions = effOptsStr;
       if (description !== undefined) updateData.description = description;
       if (status !== undefined) updateData.status = status;
 
@@ -4108,15 +6046,11 @@ async function startServer() {
         .set(updateData)
         .where(eq(schema.leaveTypes.id, id))
         .returning();
-      if (updated) {
-        const idx = inMemoryLeaveTypes.findIndex(r => r.id === id);
-        if (idx !== -1) inMemoryLeaveTypes[idx] = { ...inMemoryLeaveTypes[idx], ...mapKeys(updated, camelToSnake) };
-        saveLocalDb();
-        return res.json(mapKeys(updated, camelToSnake));
-      }
+      updatedRec = updated;
     } catch (error: any) {
       console.warn('Database fallback for update leave type');
     }
+
     const idx = inMemoryLeaveTypes.findIndex(r => r.id === id);
     if (idx !== -1) {
       inMemoryLeaveTypes[idx] = {
@@ -4130,13 +6064,24 @@ async function startServer() {
         financialEffect: finEff !== undefined ? finEff : inMemoryLeaveTypes[idx].financialEffect,
         financial_deduction_percentage: finDedPct !== undefined ? finDedPct : inMemoryLeaveTypes[idx].financial_deduction_percentage,
         financialDeductionPercentage: finDedPct !== undefined ? finDedPct : inMemoryLeaveTypes[idx].financialDeductionPercentage,
+        affects_increment: affInc !== undefined ? affInc : inMemoryLeaveTypes[idx].affects_increment,
+        affectsIncrement: affInc !== undefined ? affInc : inMemoryLeaveTypes[idx].affectsIncrement,
+        affects_promotion: affPromo !== undefined ? affPromo : inMemoryLeaveTypes[idx].affects_promotion,
+        affectsPromotion: affPromo !== undefined ? affPromo : inMemoryLeaveTypes[idx].affectsPromotion,
+        affects_commendations: affComm !== undefined ? affComm : inMemoryLeaveTypes[idx].affects_commendations,
+        affectsCommendations: affComm !== undefined ? affComm : inMemoryLeaveTypes[idx].affectsCommendations,
+        salary_payment_type: salType !== undefined ? salType : inMemoryLeaveTypes[idx].salary_payment_type,
+        salaryPaymentType: salType !== undefined ? salType : inMemoryLeaveTypes[idx].salaryPaymentType,
+        effects_options: effOptsStr !== undefined ? effOptsStr : inMemoryLeaveTypes[idx].effects_options,
+        effectsOptions: effOptsStr !== undefined ? effOptsStr : inMemoryLeaveTypes[idx].effectsOptions,
         description: description !== undefined ? description : inMemoryLeaveTypes[idx].description,
         status: status !== undefined ? status : inMemoryLeaveTypes[idx].status
       };
       saveLocalDb();
-      return res.json(inMemoryLeaveTypes[idx]);
+      return res.json(mapKeys(inMemoryLeaveTypes[idx], camelToSnake));
     }
-    res.json({ id, name, maxDays: mDays, description, status });
+    saveLocalDb();
+    res.json(mapKeys(updatedRec || { id, name, maxDays: mDays, description, status }, camelToSnake));
   });
 
   app.delete('/api/leave-types/:id', requireAuth, async (req, res) => {
@@ -4292,7 +6237,7 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for penalty types');
     }
-    res.json(mapKeys(LEGAL_ARTICLE_8_PENALTIES.map(enrichPenaltyRecord), camelToSnake));
+    res.json(mapKeys((inMemoryPenaltyTypes && inMemoryPenaltyTypes.length > 0 ? inMemoryPenaltyTypes : LEGAL_ARTICLE_8_PENALTIES).map(enrichPenaltyRecord), camelToSnake));
   });
 
   app.post('/api/penalty-types/reset-legal', requireAuth, async (req, res) => {
@@ -4303,6 +6248,8 @@ async function startServer() {
       }
       const records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
       const enrichedRecords = records.map(enrichPenaltyRecord);
+      inMemoryPenaltyTypes = enrichedRecords;
+      saveLocalDb();
       res.json(mapKeys(enrichedRecords, camelToSnake));
     } catch (error: any) {
       console.error('Error resetting penalty types:', error);
@@ -4315,14 +6262,35 @@ async function startServer() {
       const data = mapKeys(req.body, snakeToCamel);
       const { name, delayMonths, description, salaryDeductionDays, status } = data;
       if (!name) return res.status(400).json({ error: 'اسم نوع العقوبة مطلوب' });
-      const [newRecord] = await db.insert(schema.penaltyTypes).values({
+      let savedRecord: any = null;
+      try {
+        const [newRecord] = await db.insert(schema.penaltyTypes).values({
+          name,
+          delayMonths: delayMonths ? parseInt(delayMonths) : 0,
+          description: description || '',
+          salaryDeductionDays: salaryDeductionDays ? parseInt(salaryDeductionDays) : 0,
+          status: status || 'فعال',
+        }).returning();
+        savedRecord = newRecord;
+      } catch (dbErr) {
+        console.warn('Database fallback for create penalty type');
+      }
+
+      const newId = savedRecord?.id || (inMemoryPenaltyTypes.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
+      const memItem = {
+        id: newId,
         name,
+        delay_months: delayMonths ? parseInt(delayMonths) : 0,
         delayMonths: delayMonths ? parseInt(delayMonths) : 0,
         description: description || '',
+        salary_deduction_days: salaryDeductionDays ? parseInt(salaryDeductionDays) : 0,
         salaryDeductionDays: salaryDeductionDays ? parseInt(salaryDeductionDays) : 0,
         status: status || 'فعال',
-      }).returning();
-      res.status(201).json(mapKeys(enrichPenaltyRecord(newRecord), camelToSnake));
+        created_at: new Date().toISOString()
+      };
+      inMemoryPenaltyTypes.push(memItem);
+      saveLocalDb();
+      res.status(201).json(mapKeys(enrichPenaltyRecord(savedRecord || memItem), camelToSnake));
     } catch (error: any) {
       console.error('Error creating penalty type:', error);
       res.status(500).json({ error: error.message });
@@ -4343,18 +6311,38 @@ async function startServer() {
         }
       }
 
-      const [updated] = await db.update(schema.penaltyTypes)
-        .set({
-          name: name !== undefined ? name : undefined,
-          delayMonths: delayMonths !== undefined ? (delayMonths ? parseInt(delayMonths) : 0) : undefined,
-          description: description !== undefined ? description : undefined,
-          salaryDeductionDays: salaryDeductionDays !== undefined ? (salaryDeductionDays ? parseInt(salaryDeductionDays) : 0) : undefined,
-          status: status !== undefined ? status : undefined,
-        })
-        .where(eq(schema.penaltyTypes.id, id))
-        .returning();
-      if (!updated) return res.status(404).json({ error: 'نوع العقوبة غير موجود' });
-      res.json(mapKeys(enrichPenaltyRecord(updated), camelToSnake));
+      let updatedRecord: any = null;
+      try {
+        const [updated] = await db.update(schema.penaltyTypes)
+          .set({
+            name: name !== undefined ? name : undefined,
+            delayMonths: delayMonths !== undefined ? (delayMonths ? parseInt(delayMonths) : 0) : undefined,
+            description: description !== undefined ? description : undefined,
+            salaryDeductionDays: salaryDeductionDays !== undefined ? (salaryDeductionDays ? parseInt(salaryDeductionDays) : 0) : undefined,
+            status: status !== undefined ? status : undefined,
+          })
+          .where(eq(schema.penaltyTypes.id, id))
+          .returning();
+        updatedRecord = updated;
+      } catch (dbErr) {
+        console.warn('Database fallback for update penalty type');
+      }
+
+      const idx = inMemoryPenaltyTypes.findIndex(r => r.id === id);
+      if (idx !== -1) {
+        inMemoryPenaltyTypes[idx] = {
+          ...inMemoryPenaltyTypes[idx],
+          name: name !== undefined ? name : inMemoryPenaltyTypes[idx].name,
+          delay_months: delayMonths !== undefined ? parseInt(delayMonths) : inMemoryPenaltyTypes[idx].delay_months,
+          delayMonths: delayMonths !== undefined ? parseInt(delayMonths) : inMemoryPenaltyTypes[idx].delayMonths,
+          description: description !== undefined ? description : inMemoryPenaltyTypes[idx].description,
+          salary_deduction_days: salaryDeductionDays !== undefined ? parseInt(salaryDeductionDays) : inMemoryPenaltyTypes[idx].salary_deduction_days,
+          salaryDeductionDays: salaryDeductionDays !== undefined ? parseInt(salaryDeductionDays) : inMemoryPenaltyTypes[idx].salaryDeductionDays,
+          status: status !== undefined ? status : inMemoryPenaltyTypes[idx].status,
+        };
+      }
+      saveLocalDb();
+      res.json(mapKeys(enrichPenaltyRecord(updatedRecord || inMemoryPenaltyTypes[idx] || { id, ...data }), camelToSnake));
     } catch (error: any) {
       console.error('Error updating penalty type:', error);
       res.status(500).json({ error: error.message });
@@ -4371,7 +6359,13 @@ async function startServer() {
         return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
       }
 
-      await db.delete(schema.penaltyTypes).where(eq(schema.penaltyTypes.id, id));
+      try {
+        await db.delete(schema.penaltyTypes).where(eq(schema.penaltyTypes.id, id));
+      } catch (dbErr) {
+        console.warn('Database fallback for delete penalty type');
+      }
+      inMemoryPenaltyTypes = inMemoryPenaltyTypes.filter(r => r.id !== id);
+      saveLocalDb();
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting penalty type:', error);
@@ -4698,9 +6692,9 @@ async function startServer() {
 
   // --- Shift Systems API ---
   const DEFAULT_SHIFT_SYSTEMS = [
-    { id: 1, name: 'شفت 24/72 (يوم عمل مقابل 3 أيام استراحة)', work_days: 1, rest_days: 3, shift_hours_type: '24h', daily_hours: 24, description: 'نظام المناوبة المستمرة 24 ساعة عمل يعقبها 72 ساعة راحة', allowance_percentage: 0, allowance_flat_amount: 0, overtime_factor: 1.0, notes: '' },
-    { id: 2, name: 'شفت 12/24 (12 ساعة عمل مقابل 24 ساعة استراحة)', work_days: 1, rest_days: 1, shift_hours_type: '12h', daily_hours: 12, description: 'نظام مناوبة 12 ساعة', allowance_percentage: 0, allowance_flat_amount: 0, overtime_factor: 1.0, notes: '' },
-    { id: 3, name: 'دوام صباحي اعتيادي (8 ساعات)', work_days: 5, rest_days: 2, shift_hours_type: '8h', daily_hours: 8, description: 'الدوام الصباحي الرسمي المعتاد', allowance_percentage: 0, allowance_flat_amount: 0, overtime_factor: 1.0, notes: '' }
+    { id: 1, name: 'شفت 24/72 (يوم عمل مقابل 3 أيام استراحة)', work_days: 1, rest_days: 3, shift_hours_type: '24h', daily_hours: 24, description: 'نظام المناوبة المستمرة 24 ساعة عمل يعقبها 72 ساعة راحة' },
+    { id: 2, name: 'شفت 12/24 (12 ساعة عمل مقابل 24 ساعة استراحة)', work_days: 1, rest_days: 1, shift_hours_type: '12h', daily_hours: 12, description: 'نظام مناوبة 12 ساعة' },
+    { id: 3, name: 'دوام صباحي اعتيادي (8 ساعات)', work_days: 5, rest_days: 2, shift_hours_type: '8h', daily_hours: 8, description: 'الدوام الصباحي الرسمي المعتاد' }
   ];
 
   app.get('/api/shift-systems', requireAuth, async (req, res) => {
@@ -4724,10 +6718,6 @@ async function startServer() {
         shift_hours_type,
         daily_hours,
         description,
-        allowance_percentage,
-        allowance_flat_amount,
-        overtime_factor,
-        notes,
       } = req.body;
 
       try {
@@ -4738,10 +6728,6 @@ async function startServer() {
           shiftHoursType: shift_hours_type || '24h',
           dailyHours: daily_hours !== undefined ? parseInt(daily_hours) : 24,
           description: description || '',
-          allowancePercentage: allowance_percentage !== undefined ? parseFloat(allowance_percentage) : 0,
-          allowanceFlatAmount: allowance_flat_amount !== undefined ? parseInt(allowance_flat_amount) : 0,
-          overtimeFactor: overtime_factor !== undefined ? parseFloat(overtime_factor) : 1.0,
-          notes: notes || '',
         }).returning();
 
         if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
@@ -4768,10 +6754,6 @@ async function startServer() {
         shift_hours_type,
         daily_hours,
         description,
-        allowance_percentage,
-        allowance_flat_amount,
-        overtime_factor,
-        notes,
         status
       } = req.body;
 
@@ -4791,10 +6773,6 @@ async function startServer() {
             shiftHoursType: shift_hours_type !== undefined ? shift_hours_type : undefined,
             dailyHours: daily_hours !== undefined ? parseInt(daily_hours) : undefined,
             description: description !== undefined ? description : undefined,
-            allowancePercentage: allowance_percentage !== undefined ? parseFloat(allowance_percentage) : undefined,
-            allowanceFlatAmount: allowance_flat_amount !== undefined ? parseInt(allowance_flat_amount) : undefined,
-            overtimeFactor: overtime_factor !== undefined ? parseFloat(overtime_factor) : undefined,
-            notes: notes !== undefined ? notes : undefined,
           })
           .where(eq(schema.shiftSystems.id, id))
           .returning();
@@ -4908,6 +6886,66 @@ async function startServer() {
 
   // --- New Iraqi Civil Service Modules Endpoints ---
 
+  // Helper to determine the new Job Title when promoting an employee to targetGrade within their career category/track
+  function findMatchingJobTitleForPromotion(emp: any, targetGrade: number, jobTitlesList: any[]) {
+    if (!emp || !targetGrade || !Array.isArray(jobTitlesList)) return null;
+
+    const currentTitleName = String(emp.jobTitle || emp.job_title || '').trim();
+    const currentTitleObj = jobTitlesList.find(t => 
+      (t.name && String(t.name).trim() === currentTitleName) || 
+      (emp.jobTitleId && String(t.id) === String(emp.jobTitleId))
+    );
+
+    const category = currentTitleObj?.category || emp.track_category || emp.trackCategory || 'عام';
+
+    // 1. First priority: Same category matching targetGrade
+    const exactCategoryMatches = jobTitlesList.filter(t => 
+      (t.status === 'فعال' || !t.status) &&
+      t.category === category &&
+      (parseInt(t.minGrade || t.min_grade) === targetGrade)
+    );
+    if (exactCategoryMatches.length === 1) {
+      return exactCategoryMatches[0];
+    }
+    if (exactCategoryMatches.length > 1) {
+      // Try matching career sub-family (e.g. 'مبرمج' vs 'محلل نظم', 'محاسب' vs 'مدقق')
+      if (currentTitleName) {
+        const words = currentTitleName.split(/\s+/);
+        const keyword = words.find(w => !['رئيس', 'معاون', 'أقدم', 'مساعد'].includes(w));
+        if (keyword) {
+          const matchWithKeyword = exactCategoryMatches.find(t => t.name && t.name.includes(keyword));
+          if (matchWithKeyword) return matchWithKeyword;
+        }
+      }
+      return exactCategoryMatches[0];
+    }
+
+    // 2. Second priority: If currentTitleObj had a nextTitleId configured and its minGrade matches
+    if (currentTitleObj?.nextTitleId || currentTitleObj?.next_title_id) {
+      const nextId = parseInt(currentTitleObj.nextTitleId || currentTitleObj.next_title_id);
+      const nextObj = jobTitlesList.find(t => t.id === nextId);
+      if (nextObj && (parseInt(nextObj.minGrade || nextObj.min_grade) === targetGrade)) {
+        return nextObj;
+      }
+    }
+
+    // 3. Third priority: Any title with the same keyword across categories
+    if (currentTitleName) {
+      const words = currentTitleName.split(/\s+/);
+      const keyword = words.find(w => !['رئيس', 'معاون', 'أقدم', 'مساعد'].includes(w));
+      if (keyword) {
+        const familyMatch = jobTitlesList.find(t => 
+          (t.status === 'فعال' || !t.status) &&
+          t.name && t.name.includes(keyword) &&
+          (parseInt(t.minGrade || t.min_grade) === targetGrade)
+        );
+        if (familyMatch) return familyMatch;
+      }
+    }
+
+    return null;
+  }
+
   // Helper to sync employee primary education_level with the latest active qualification
   async function syncEmployeeEducationQualification(employeeId: number) {
     if (!employeeId || isNaN(employeeId)) return;
@@ -5001,12 +7039,12 @@ async function startServer() {
       console.warn('Database fallback for qualifications');
     }
 
-    let list = inMemoryQualifications;
+    let list = genericMemoryStores['qualifications'] || inMemoryQualifications || [];
     if (employeeId) {
-      list = list.filter(q => q.employee_id === employeeId || q.employeeId === employeeId);
+      list = list.filter(q => parseInt(String(q.employee_id || q.employeeId)) === employeeId);
     }
     res.json(list.map(q => {
-      const emp = inMemoryEmployees.find(e => e.id === (q.employee_id || q.employeeId));
+      const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === parseInt(String(q.employee_id || q.employeeId)));
       let ord = q.equation_number || q.equationNumber || q.evaluation_order || q.evaluationOrder || q.education_order || q.educationOrder || '';
       if ((!ord || ord === 'لا يوجد' || ord === 'غير متوفر') && emp && (q.education_level === emp.education_level || q.level === emp.education_level || list.length === 1)) {
         const empOrd = emp.education_order || emp.educationOrder || emp.evaluation_order || emp.evaluationOrder || emp.equation_number || emp.equationNumber || '';
@@ -5044,8 +7082,9 @@ async function startServer() {
     const orderNum = data.equation_number || data.equationNumber || data.evaluation_order || data.evaluationOrder || data.education_order || data.educationOrder || data.order_number || data.orderNumber || '';
     const orderDate = data.equation_date || data.equationDate || data.order_date || data.orderDate || '';
 
+    let record: any = null;
     try {
-      const [record] = await db.insert(schema.qualifications).values({
+      const [inserted] = await db.insert(schema.qualifications).values({
         employeeId,
         level,
         specialization: data.specialization,
@@ -5059,33 +7098,13 @@ async function startServer() {
         equationDate: orderDate,
         isActive: isActiveVal,
       }).returning();
-
-      if (record) {
-        await syncEmployeeEducationQualification(employeeId);
-        const recordMapped = {
-          ...record,
-          education_level: record.level,
-          level: record.level,
-          institution: record.university,
-          university: record.university,
-          graduation_year: record.graduationYear,
-          graduationYear: record.graduationYear,
-          evaluation_order: record.equationNumber || orderNum,
-          evaluationOrder: record.equationNumber || orderNum,
-          equation_number: record.equationNumber || orderNum,
-          equationNumber: record.equationNumber || orderNum,
-          education_order: record.equationNumber || orderNum,
-          educationOrder: record.equationNumber || orderNum,
-          is_active: record.isActive ?? true,
-          isActive: record.isActive ?? true,
-        };
-        return res.status(201).json(recordMapped);
-      }
+      record = inserted;
     } catch (error: any) {
       console.warn('Database fallback for create qualification');
     }
 
-    const newId = inMemoryQualifications.length + 1;
+    const store = genericMemoryStores['qualifications'] || inMemoryQualifications || [];
+    const newId = record?.id || (store.reduce((max, q) => Math.max(max, parseInt(q.id) || 0), 0) || 0) + 1;
     const memItem = {
       id: newId,
       employee_id: employeeId,
@@ -5112,9 +7131,28 @@ async function startServer() {
       isActive: isActiveVal,
       created_at: new Date().toISOString()
     };
-    inMemoryQualifications.push(memItem);
+    syncEntityRecord('qualifications', memItem, 'insert');
     await syncEmployeeEducationQualification(employeeId);
-    res.status(201).json(memItem);
+
+    const recordMapped = {
+      ...memItem,
+      ...(record || {}),
+      education_level: record?.level || level,
+      level: record?.level || level,
+      institution: record?.university || memItem.university,
+      university: record?.university || memItem.university,
+      graduation_year: record?.graduationYear || memItem.graduation_year,
+      graduationYear: record?.graduationYear || memItem.graduation_year,
+      evaluation_order: record?.equationNumber || orderNum,
+      evaluationOrder: record?.equationNumber || orderNum,
+      equation_number: record?.equationNumber || orderNum,
+      equationNumber: record?.equationNumber || orderNum,
+      education_order: record?.equationNumber || orderNum,
+      educationOrder: record?.equationNumber || orderNum,
+      is_active: record?.isActive ?? isActiveVal,
+      isActive: record?.isActive ?? isActiveVal,
+    };
+    res.status(201).json(recordMapped);
   });
 
   app.put('/api/qualifications/:id', requireAuth, async (req, res) => {
@@ -5124,6 +7162,7 @@ async function startServer() {
     const orderNum = data.equation_number ?? data.equationNumber ?? data.evaluation_order ?? data.evaluationOrder ?? data.education_order ?? data.educationOrder ?? data.order_number ?? data.orderNumber;
     const orderDt = data.equation_date ?? data.equationDate ?? data.order_date ?? data.orderDate;
 
+    let updatedRec: any = null;
     try {
       const updateValues: any = {};
       if (data.level || data.education_level) updateValues.level = data.level || data.education_level;
@@ -5141,123 +7180,142 @@ async function startServer() {
         .set(updateValues)
         .where(eq(schema.qualifications.id, id))
         .returning();
-
-      if (updated) {
-        await syncEmployeeEducationQualification(updated.employeeId);
-        return res.json({
-          ...updated,
-          education_level: updated.level,
-          level: updated.level,
-          institution: updated.university,
-          university: updated.university,
-          graduation_year: updated.graduationYear,
-          graduationYear: updated.graduationYear,
-          evaluation_order: updated.equationNumber || orderNum || '',
-          evaluationOrder: updated.equationNumber || orderNum || '',
-          equation_number: updated.equationNumber || orderNum || '',
-          equationNumber: updated.equationNumber || orderNum || '',
-          education_order: updated.equationNumber || orderNum || '',
-          educationOrder: updated.equationNumber || orderNum || '',
-          is_active: updated.isActive ?? true,
-          isActive: updated.isActive ?? true,
-        });
-      }
+      updatedRec = updated;
     } catch (error: any) {
       console.warn('Database fallback for update qualification');
     }
 
-    const idx = inMemoryQualifications.findIndex(q => q.id === id);
-    if (idx !== -1) {
-      const resolvedOrder = orderNum !== undefined ? orderNum : (inMemoryQualifications[idx].equation_number || inMemoryQualifications[idx].evaluation_order || '');
-      inMemoryQualifications[idx] = { 
-        ...inMemoryQualifications[idx], 
-        ...data,
-        level: data.education_level || data.level || inMemoryQualifications[idx].level,
-        education_level: data.education_level || data.level || inMemoryQualifications[idx].education_level,
-        university: data.institution || data.university || inMemoryQualifications[idx].university,
-        institution: data.institution || data.university || inMemoryQualifications[idx].institution,
-        graduation_year: data.graduation_year || data.graduationYear || inMemoryQualifications[idx].graduation_year,
-        graduationYear: data.graduation_year || data.graduationYear || inMemoryQualifications[idx].graduationYear,
-        equation_number: resolvedOrder,
-        equationNumber: resolvedOrder,
-        evaluation_order: resolvedOrder,
-        evaluationOrder: resolvedOrder,
-        education_order: resolvedOrder,
-        educationOrder: resolvedOrder,
-      };
-      if (inMemoryQualifications[idx].employee_id || inMemoryQualifications[idx].employeeId) {
-        await syncEmployeeEducationQualification(inMemoryQualifications[idx].employee_id || inMemoryQualifications[idx].employeeId);
-      }
-      return res.json(inMemoryQualifications[idx]);
+    const store = genericMemoryStores['qualifications'] || inMemoryQualifications || [];
+    const existing = store.find(q => parseInt(String(q.id)) === id);
+    const resolvedOrder = orderNum !== undefined ? orderNum : (existing?.equation_number || existing?.evaluation_order || '');
+    const memItem = {
+      ...(existing || {}),
+      ...data,
+      id,
+      level: data.education_level || data.level || existing?.level,
+      education_level: data.education_level || data.level || existing?.education_level,
+      university: data.institution || data.university || existing?.university,
+      institution: data.institution || data.university || existing?.institution,
+      graduation_year: data.graduation_year || data.graduationYear || existing?.graduation_year,
+      graduationYear: data.graduation_year || data.graduationYear || existing?.graduationYear,
+      equation_number: resolvedOrder,
+      equationNumber: resolvedOrder,
+      evaluation_order: resolvedOrder,
+      evaluationOrder: resolvedOrder,
+      education_order: resolvedOrder,
+      educationOrder: resolvedOrder,
+    };
+    syncEntityRecord('qualifications', memItem, 'update');
+
+    const empId = parseInt(String(updatedRec?.employeeId || memItem.employee_id || memItem.employeeId));
+    if (empId) {
+      await syncEmployeeEducationQualification(empId);
     }
-    res.json({ id, ...data });
+
+    res.json({
+      ...memItem,
+      ...(updatedRec || {}),
+      education_level: updatedRec?.level || memItem.level,
+      level: updatedRec?.level || memItem.level,
+      institution: updatedRec?.university || memItem.university,
+      university: updatedRec?.university || memItem.university,
+      graduation_year: updatedRec?.graduationYear || memItem.graduation_year,
+      graduationYear: updatedRec?.graduationYear || memItem.graduation_year,
+      evaluation_order: updatedRec?.equationNumber || resolvedOrder,
+      evaluationOrder: updatedRec?.equationNumber || resolvedOrder,
+      equation_number: updatedRec?.equationNumber || resolvedOrder,
+      equationNumber: updatedRec?.equationNumber || resolvedOrder,
+      education_order: updatedRec?.equationNumber || resolvedOrder,
+      educationOrder: updatedRec?.equationNumber || resolvedOrder,
+      is_active: updatedRec?.isActive ?? (memItem.is_active !== false && memItem.isActive !== false),
+      isActive: updatedRec?.isActive ?? (memItem.is_active !== false && memItem.isActive !== false),
+    });
   });
 
   app.patch('/api/qualifications/:id/toggle', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
 
+    let updatedRec: any = null;
+    let empId: number = 0;
     try {
       const existing = await db.select().from(schema.qualifications).where(eq(schema.qualifications.id, id));
       if (existing.length > 0) {
+        empId = existing[0].employeeId;
         const newActiveState = !(existing[0].isActive ?? true);
         const [updated] = await db.update(schema.qualifications)
           .set({ isActive: newActiveState })
           .where(eq(schema.qualifications.id, id))
           .returning();
-
-        if (updated) {
-          await syncEmployeeEducationQualification(existing[0].employeeId);
-          return res.json({
-            ...updated,
-            education_level: updated.level,
-            level: updated.level,
-            institution: updated.university,
-            university: updated.university,
-            graduation_year: updated.graduationYear,
-            graduationYear: updated.graduationYear,
-            evaluation_order: updated.equationNumber || '',
-            evaluationOrder: updated.equationNumber || '',
-            equation_number: updated.equationNumber || '',
-            equationNumber: updated.equationNumber || '',
-            education_order: updated.equationNumber || '',
-            educationOrder: updated.equationNumber || '',
-            is_active: updated.isActive ?? true,
-            isActive: updated.isActive ?? true,
-          });
-        }
+        updatedRec = updated;
       }
     } catch (error: any) {
       console.warn('Database fallback for toggle qualification');
     }
 
-    const idx = inMemoryQualifications.findIndex(q => q.id === id);
-    if (idx !== -1) {
-      const currentActive = inMemoryQualifications[idx].is_active !== false && inMemoryQualifications[idx].isActive !== false;
-      inMemoryQualifications[idx].is_active = !currentActive;
-      inMemoryQualifications[idx].isActive = !currentActive;
-      if (inMemoryQualifications[idx].employee_id || inMemoryQualifications[idx].employeeId) {
-        await syncEmployeeEducationQualification(inMemoryQualifications[idx].employee_id || inMemoryQualifications[idx].employeeId);
-      }
-      return res.json(inMemoryQualifications[idx]);
+    const store = genericMemoryStores['qualifications'] || inMemoryQualifications || [];
+    const existing = store.find(q => parseInt(String(q.id)) === id);
+    if (existing) {
+      const currentActive = existing.is_active !== false && existing.isActive !== false;
+      const newActive = !currentActive;
+      existing.is_active = newActive;
+      existing.isActive = newActive;
+      if (!empId) empId = parseInt(String(existing.employee_id || existing.employeeId));
+      syncEntityRecord('qualifications', existing, 'update');
     }
+
+    if (empId) {
+      await syncEmployeeEducationQualification(empId);
+    }
+
+    if (updatedRec) {
+      return res.json({
+        ...updatedRec,
+        education_level: updatedRec.level,
+        level: updatedRec.level,
+        institution: updatedRec.university,
+        university: updatedRec.university,
+        graduation_year: updatedRec.graduationYear,
+        graduationYear: updatedRec.graduationYear,
+        evaluation_order: updatedRec.equationNumber || '',
+        evaluationOrder: updatedRec.equationNumber || '',
+        equation_number: updatedRec.equationNumber || '',
+        equationNumber: updatedRec.equationNumber || '',
+        education_order: updatedRec.equationNumber || '',
+        educationOrder: updatedRec.equationNumber || '',
+        is_active: updatedRec.isActive ?? true,
+        isActive: updatedRec.isActive ?? true,
+      });
+    }
+
+    if (existing) return res.json(existing);
     res.status(404).json({ error: 'Qualification not found' });
   });
 
   app.delete('/api/qualifications/:id', requireAuth, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    let empId: number = 0;
     try {
       const existing = await db.select().from(schema.qualifications).where(eq(schema.qualifications.id, id));
       if (existing.length > 0) {
-        const empId = existing[0].employeeId;
+        empId = existing[0].employeeId;
         await db.delete(schema.qualifications).where(eq(schema.qualifications.id, id));
-        await syncEmployeeEducationQualification(empId);
       }
     } catch (error: any) {
       console.warn('Database fallback for delete qualification');
     }
-    inMemoryQualifications = inMemoryQualifications.filter(q => q.id !== id);
+
+    const store = genericMemoryStores['qualifications'] || inMemoryQualifications || [];
+    const memItem = store.find(q => parseInt(String(q.id)) === id);
+    if (!empId && memItem) empId = parseInt(String(memItem.employee_id || memItem.employeeId));
+
+    syncEntityRecord('qualifications', { id }, 'delete');
+
+    if (empId) {
+      await syncEmployeeEducationQualification(empId);
+    }
+
     res.json({ success: true });
   });
 
@@ -5276,9 +7334,9 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for job assignments');
     }
-    let list = inMemoryJobAssignments;
-    if (employeeId) list = list.filter(j => j.employee_id === employeeId || j.employeeId === employeeId);
-    res.json(list);
+    let list = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
+    if (employeeId) list = list.filter(j => parseInt(String(j.employee_id || j.employeeId)) === employeeId);
+    res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/job-assignments', requireAuth, async (req, res) => {
@@ -5286,7 +7344,7 @@ async function startServer() {
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
 
-    let record = null;
+    let record: any = null;
     try {
       const [inserted] = await db.insert(schema.jobAssignments).values({
         employeeId,
@@ -5329,24 +7387,36 @@ async function startServer() {
     if (data.deputy_level || data.deputyLevel) {
       empUpdate.deputyLevel = data.deputy_level || data.deputyLevel;
     }
-    if (data.department) empUpdate.department = data.department;
-    if (data.section) empUpdate.section = data.section;
-    if (data.responsibility) {
-      empUpdate.jobResponsibility = data.responsibility;
-      empUpdate.primaryResponsibility = data.responsibility;
-    }
     if (data.grade) empUpdate.grade = data.grade;
     if (data.step) empUpdate.step = parseInt(data.step);
     if (data.confirmation_date || data.confirmationDate) empUpdate.currentAppointmentDate = data.confirmation_date || data.confirmationDate;
     if (data.order_number || data.orderNumber) empUpdate.appointmentOrder = data.order_number || data.orderNumber;
     await updateEmployeeCentralRecord(employeeId, empUpdate);
 
-    const newId = inMemoryJobAssignments.length + 1;
-    const memItem = { id: newId, employee_id: employeeId, ...data, created_at: new Date().toISOString() };
-    inMemoryJobAssignments.push(memItem);
+    const store = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
+    const newId = record?.id || (store.reduce((max, j) => Math.max(max, parseInt(j.id) || 0), 0) || 0) + 1;
+    const memItem = { id: newId, employee_id: employeeId, employeeId, ...data, created_at: new Date().toISOString() };
+    syncEntityRecord('job-assignments', memItem, 'insert');
 
-    if (record) return res.status(201).json(mapKeys(record, camelToSnake));
-    res.status(201).json(memItem);
+    res.status(201).json(mapKeys(record || memItem, camelToSnake));
+  });
+
+  app.put('/api/job-assignments/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    const data = req.body;
+    let updatedRec: any = null;
+    try {
+      const mappedData = mapKeys(data, snakeToCamel);
+      delete mappedData.id;
+      const [updated] = await db.update(schema.jobAssignments).set(mappedData).where(eq(schema.jobAssignments.id, id)).returning();
+      updatedRec = updated;
+    } catch (err) {
+      console.warn('Database fallback for update job assignment');
+    }
+    const memItem = { id, ...data };
+    syncEntityRecord('job-assignments', memItem, 'update');
+    res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
   app.delete('/api/job-assignments/:id', requireAuth, async (req, res) => {
@@ -5357,7 +7427,7 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete job assignment');
     }
-    inMemoryJobAssignments = inMemoryJobAssignments.filter(j => j.id !== id);
+    syncEntityRecord('job-assignments', { id }, 'delete');
     res.json({ success: true });
   });
 
@@ -5376,9 +7446,9 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for promotions');
     }
-    let list = inMemoryPromotions;
-    if (employeeId) list = list.filter(p => p.employee_id === employeeId || p.employeeId === employeeId);
-    res.json(list);
+    let list = genericMemoryStores['promotions'] || inMemoryPromotions || [];
+    if (employeeId) list = list.filter(p => parseInt(String(p.employee_id || p.employeeId)) === employeeId);
+    res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/promotions', requireAuth, async (req, res) => {
@@ -5386,7 +7456,7 @@ async function startServer() {
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
 
-    let record = null;
+    let record: any = null;
     try {
       const [inserted] = await db.insert(schema.promotionsIncrements).values({
         employeeId,
@@ -5419,11 +7489,19 @@ async function startServer() {
       empUpdate.gradeDate = actionDate;
     }
 
-    // Specific field update based on movement type:
-    // "ترفيع درجة" -> updates lastPromotionDate (preserves lastIncrementDate)
-    // "علاوة سنوية" -> updates lastIncrementDate (preserves lastPromotionDate)
     if (movementType.includes('ترفيع')) {
       if (actionDate) empUpdate.lastPromotionDate = actionDate;
+      const targetGradeNum = parseInt(String(data.grade_after || data.gradeAfter));
+      if (!isNaN(targetGradeNum)) {
+        const curEmp = inMemoryEmployees.find(e => parseInt(String(e.id)) === employeeId);
+        const resolvedTitle = findMatchingJobTitleForPromotion(curEmp, targetGradeNum, inMemoryJobTitles);
+        if (resolvedTitle) {
+          empUpdate.jobTitle = resolvedTitle.name;
+          empUpdate.job_title = resolvedTitle.name;
+          empUpdate.jobTitleId = resolvedTitle.id;
+          empUpdate.job_title_id = resolvedTitle.id;
+        }
+      }
     } else if (movementType.includes('علاوة')) {
       if (actionDate) empUpdate.lastIncrementDate = actionDate;
     } else {
@@ -5434,12 +7512,30 @@ async function startServer() {
     }
     await updateEmployeeCentralRecord(employeeId, empUpdate);
 
-    const newId = inMemoryPromotions.length + 1;
-    const memItem = { id: newId, employee_id: employeeId, ...data, created_at: new Date().toISOString() };
-    inMemoryPromotions.push(memItem);
+    const store = genericMemoryStores['promotions'] || inMemoryPromotions || [];
+    const newId = record?.id || (store.reduce((max, p) => Math.max(max, parseInt(p.id) || 0), 0) || 0) + 1;
+    const memItem = { id: newId, employee_id: employeeId, employeeId, ...data, created_at: new Date().toISOString() };
+    syncEntityRecord('promotions', memItem, 'insert');
 
-    if (record) return res.status(201).json(mapKeys(record, camelToSnake));
-    res.status(201).json(memItem);
+    res.status(201).json(mapKeys(record || memItem, camelToSnake));
+  });
+
+  app.put('/api/promotions/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    const data = req.body;
+    let updatedRec: any = null;
+    try {
+      const mappedData = mapKeys(data, snakeToCamel);
+      delete mappedData.id;
+      const [updated] = await db.update(schema.promotionsIncrements).set(mappedData).where(eq(schema.promotionsIncrements.id, id)).returning();
+      updatedRec = updated;
+    } catch (err) {
+      console.warn('Database fallback for update promotion');
+    }
+    const memItem = { id, ...data };
+    syncEntityRecord('promotions', memItem, 'update');
+    res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
   app.delete('/api/promotions/:id', requireAuth, async (req, res) => {
@@ -5450,7 +7546,7 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete promotion');
     }
-    inMemoryPromotions = inMemoryPromotions.filter(p => p.id !== id);
+    syncEntityRecord('promotions', { id }, 'delete');
     res.json({ success: true });
   });
 
@@ -5476,9 +7572,9 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for salary allowances');
     }
-    let list = inMemorySalaryAllowances;
-    if (employeeId) list = list.filter(s => s.employee_id === employeeId || s.employeeId === employeeId);
-    res.json(list);
+    let list = genericMemoryStores['salary-allowances'] || inMemorySalaryAllowances || [];
+    if (employeeId) list = list.filter(s => parseInt(String(s.employee_id || s.employeeId)) === employeeId);
+    res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/salary-allowances', requireAuth, async (req, res) => {
@@ -5486,6 +7582,7 @@ async function startServer() {
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
 
+    let record: any = null;
     try {
       const values = {
         employeeId,
@@ -5509,23 +7606,36 @@ async function startServer() {
         status: data.status || 'مستمر',
       };
 
-      const [record] = await db.insert(schema.salaryAllowances).values(values).returning();
-      if (record) {
-        return res.status(201).json({
-          ...record,
-          allowance_type: record.allowanceType,
-          order_number: record.orderNumber,
-          employee_id: record.employeeId,
-        });
-      }
+      const [inserted] = await db.insert(schema.salaryAllowances).values(values).returning();
+      record = inserted;
     } catch (error: any) {
       console.warn('Database fallback for create salary allowance');
     }
 
-    const newId = inMemorySalaryAllowances.length + 1;
-    const memItem = { id: newId, employee_id: employeeId, ...data, created_at: new Date().toISOString() };
-    inMemorySalaryAllowances.push(memItem);
-    res.status(201).json(memItem);
+    const store = genericMemoryStores['salary-allowances'] || inMemorySalaryAllowances || [];
+    const newId = record?.id || (store.reduce((max, s) => Math.max(max, parseInt(s.id) || 0), 0) || 0) + 1;
+    const memItem = { id: newId, employee_id: employeeId, employeeId, ...data, created_at: new Date().toISOString() };
+    syncEntityRecord('salary-allowances', memItem, 'insert');
+
+    res.status(201).json(mapKeys(record || memItem, camelToSnake));
+  });
+
+  app.put('/api/salary-allowances/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    const data = req.body;
+    let updatedRec: any = null;
+    try {
+      const mappedData = mapKeys(data, snakeToCamel);
+      delete mappedData.id;
+      const [updated] = await db.update(schema.salaryAllowances).set(mappedData).where(eq(schema.salaryAllowances.id, id)).returning();
+      updatedRec = updated;
+    } catch (err) {
+      console.warn('Database fallback for update salary allowance');
+    }
+    const memItem = { id, ...data };
+    syncEntityRecord('salary-allowances', memItem, 'update');
+    res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
   app.delete('/api/salary-allowances/:id', requireAuth, async (req, res) => {
@@ -5536,7 +7646,7 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete salary allowance');
     }
-    inMemorySalaryAllowances = inMemorySalaryAllowances.filter(s => s.id !== id);
+    syncEntityRecord('salary-allowances', { id }, 'delete');
     res.json({ success: true });
   });
 
@@ -5555,9 +7665,9 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for annual evaluations');
     }
-    let list = inMemoryAnnualEvaluations;
-    if (employeeId) list = list.filter(e => e.employee_id === employeeId || e.employeeId === employeeId);
-    res.json(list);
+    let list = genericMemoryStores['annual-evaluations'] || inMemoryAnnualEvaluations || [];
+    if (employeeId) list = list.filter(e => parseInt(String(e.employee_id || e.employeeId)) === employeeId);
+    res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/annual-evaluations', requireAuth, async (req, res) => {
@@ -5565,8 +7675,9 @@ async function startServer() {
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
 
+    let record: any = null;
     try {
-      const [record] = await db.insert(schema.annualEvaluations).values({
+      const [inserted] = await db.insert(schema.annualEvaluations).values({
         employeeId,
         year: parseInt(data.year || '2026'),
         grade: data.grade || 'كفوء',
@@ -5577,15 +7688,35 @@ async function startServer() {
         employeeOpinion: data.employee_opinion || data.employeeOpinion,
         notes: data.notes,
       }).returning();
-      if (record) return res.status(201).json(mapKeys(record, camelToSnake));
+      record = inserted;
     } catch (error: any) {
       console.warn('Database fallback for create annual evaluation');
     }
 
-    const newId = inMemoryAnnualEvaluations.length + 1;
-    const memItem = { id: newId, employee_id: employeeId, ...data, created_at: new Date().toISOString() };
-    inMemoryAnnualEvaluations.push(memItem);
-    res.status(201).json(memItem);
+    const store = genericMemoryStores['annual-evaluations'] || inMemoryAnnualEvaluations || [];
+    const newId = record?.id || (store.reduce((max, e) => Math.max(max, parseInt(e.id) || 0), 0) || 0) + 1;
+    const memItem = { id: newId, employee_id: employeeId, employeeId, ...data, created_at: new Date().toISOString() };
+    syncEntityRecord('annual-evaluations', memItem, 'insert');
+
+    res.status(201).json(mapKeys(record || memItem, camelToSnake));
+  });
+
+  app.put('/api/annual-evaluations/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    const data = req.body;
+    let updatedRec: any = null;
+    try {
+      const mappedData = mapKeys(data, snakeToCamel);
+      delete mappedData.id;
+      const [updated] = await db.update(schema.annualEvaluations).set(mappedData).where(eq(schema.annualEvaluations.id, id)).returning();
+      updatedRec = updated;
+    } catch (err) {
+      console.warn('Database fallback for update annual evaluation');
+    }
+    const memItem = { id, ...data };
+    syncEntityRecord('annual-evaluations', memItem, 'update');
+    res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
   app.delete('/api/annual-evaluations/:id', requireAuth, async (req, res) => {
@@ -5596,7 +7727,7 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete annual evaluation');
     }
-    inMemoryAnnualEvaluations = inMemoryAnnualEvaluations.filter(e => e.id !== id);
+    syncEntityRecord('annual-evaluations', { id }, 'delete');
     res.json({ success: true });
   });
 
@@ -5615,9 +7746,9 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for training courses');
     }
-    let list = inMemoryTrainingCourses;
-    if (employeeId) list = list.filter(t => t.employee_id === employeeId || t.employeeId === employeeId);
-    res.json(list);
+    let list = genericMemoryStores['training-courses'] || inMemoryTrainingCourses || [];
+    if (employeeId) list = list.filter(t => parseInt(String(t.employee_id || t.employeeId)) === employeeId);
+    res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/training-courses', requireAuth, async (req, res) => {
@@ -5625,8 +7756,9 @@ async function startServer() {
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
 
+    let record: any = null;
     try {
-      const [record] = await db.insert(schema.trainingCourses).values({
+      const [inserted] = await db.insert(schema.trainingCourses).values({
         employeeId,
         courseName: data.course_name || data.courseName || '',
         courseType: data.course_type || data.courseType || 'حضوري',
@@ -5639,15 +7771,35 @@ async function startServer() {
         grade: data.grade,
         rank: data.rank,
       }).returning();
-      if (record) return res.status(201).json(mapKeys(record, camelToSnake));
+      record = inserted;
     } catch (error: any) {
       console.warn('Database fallback for create training course');
     }
 
-    const newId = inMemoryTrainingCourses.length + 1;
-    const memItem = { id: newId, employee_id: employeeId, ...data, created_at: new Date().toISOString() };
-    inMemoryTrainingCourses.push(memItem);
-    res.status(201).json(memItem);
+    const store = genericMemoryStores['training-courses'] || inMemoryTrainingCourses || [];
+    const newId = record?.id || (store.reduce((max, t) => Math.max(max, parseInt(t.id) || 0), 0) || 0) + 1;
+    const memItem = { id: newId, employee_id: employeeId, employeeId, ...data, created_at: new Date().toISOString() };
+    syncEntityRecord('training-courses', memItem, 'insert');
+
+    res.status(201).json(mapKeys(record || memItem, camelToSnake));
+  });
+
+  app.put('/api/training-courses/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    const data = req.body;
+    let updatedRec: any = null;
+    try {
+      const mappedData = mapKeys(data, snakeToCamel);
+      delete mappedData.id;
+      const [updated] = await db.update(schema.trainingCourses).set(mappedData).where(eq(schema.trainingCourses.id, id)).returning();
+      updatedRec = updated;
+    } catch (err) {
+      console.warn('Database fallback for update training course');
+    }
+    const memItem = { id, ...data };
+    syncEntityRecord('training-courses', memItem, 'update');
+    res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
   app.delete('/api/training-courses/:id', requireAuth, async (req, res) => {
@@ -5658,7 +7810,7 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete training course');
     }
-    inMemoryTrainingCourses = inMemoryTrainingCourses.filter(t => t.id !== id);
+    syncEntityRecord('training-courses', { id }, 'delete');
     res.json({ success: true });
   });
 
@@ -5677,9 +7829,9 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for transfers');
     }
-    let list = inMemoryTransfers;
-    if (employeeId) list = list.filter(t => t.employee_id === employeeId || t.employeeId === employeeId);
-    res.json(list);
+    let list = genericMemoryStores['transfers'] || inMemoryTransfers || [];
+    if (employeeId) list = list.filter(t => parseInt(String(t.employee_id || t.employeeId)) === employeeId);
+    res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/transfers', requireAuth, async (req, res) => {
@@ -5687,7 +7839,7 @@ async function startServer() {
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
 
-    let record = null;
+    let record: any = null;
     try {
       const [inserted] = await db.insert(schema.transfers).values({
         employeeId,
@@ -5712,12 +7864,30 @@ async function startServer() {
       });
     }
 
-    const newId = inMemoryTransfers.length + 1;
-    const memItem = { id: newId, employee_id: employeeId, ...data, created_at: new Date().toISOString() };
-    inMemoryTransfers.push(memItem);
+    const store = genericMemoryStores['transfers'] || inMemoryTransfers || [];
+    const newId = record?.id || (store.reduce((max, t) => Math.max(max, parseInt(t.id) || 0), 0) || 0) + 1;
+    const memItem = { id: newId, employee_id: employeeId, employeeId, ...data, created_at: new Date().toISOString() };
+    syncEntityRecord('transfers', memItem, 'insert');
 
-    if (record) return res.status(201).json(mapKeys(record, camelToSnake));
-    res.status(201).json(memItem);
+    res.status(201).json(mapKeys(record || memItem, camelToSnake));
+  });
+
+  app.put('/api/transfers/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    const data = req.body;
+    let updatedRec: any = null;
+    try {
+      const mappedData = mapKeys(data, snakeToCamel);
+      delete mappedData.id;
+      const [updated] = await db.update(schema.transfers).set(mappedData).where(eq(schema.transfers.id, id)).returning();
+      updatedRec = updated;
+    } catch (err) {
+      console.warn('Database fallback for update transfer');
+    }
+    const memItem = { id, ...data };
+    syncEntityRecord('transfers', memItem, 'update');
+    res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
   app.delete('/api/transfers/:id', requireAuth, async (req, res) => {
@@ -5728,7 +7898,7 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete transfer');
     }
-    inMemoryTransfers = inMemoryTransfers.filter(t => t.id !== id);
+    syncEntityRecord('transfers', { id }, 'delete');
     res.json({ success: true });
   });
 
@@ -5747,9 +7917,9 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for retirements');
     }
-    let list = inMemoryRetirements;
-    if (employeeId) list = list.filter(r => r.employee_id === employeeId || r.employeeId === employeeId);
-    res.json(list);
+    let list = genericMemoryStores['retirements'] || inMemoryRetirements || [];
+    if (employeeId) list = list.filter(r => parseInt(String(r.employee_id || r.employeeId)) === employeeId);
+    res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/retirements', requireAuth, async (req, res) => {
@@ -5757,7 +7927,7 @@ async function startServer() {
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
 
-    let record = null;
+    let record: any = null;
     try {
       const [existing] = await db.select().from(schema.retirements).where(eq(schema.retirements.employeeId, employeeId));
       const values = {
@@ -5788,16 +7958,25 @@ async function startServer() {
       retirementNumber: data.pension_order_number || data.pensionOrderNumber || 'إحالة إلى التقاعد'
     });
 
-    const idx = inMemoryRetirements.findIndex(r => r.employee_id === employeeId || r.employeeId === employeeId);
-    if (idx !== -1) {
-      inMemoryRetirements[idx] = { ...inMemoryRetirements[idx], ...data };
-      return res.json(inMemoryRetirements[idx]);
+    const store = genericMemoryStores['retirements'] || inMemoryRetirements || [];
+    const existingIdx = store.findIndex(r => parseInt(String(r.employee_id || r.employeeId)) === employeeId);
+    const newId = record?.id || (existingIdx !== -1 ? store[existingIdx].id : ((store.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1));
+    const memItem = { id: newId, employee_id: employeeId, employeeId, ...data, created_at: new Date().toISOString() };
+    syncEntityRecord('retirements', memItem, existingIdx !== -1 ? 'update' : 'insert');
+
+    res.json(mapKeys(record || memItem, camelToSnake));
+  });
+
+  app.delete('/api/retirements/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    try {
+      await db.delete(schema.retirements).where(eq(schema.retirements.id, id));
+    } catch (error: any) {
+      console.warn('Database fallback for delete retirement');
     }
-    const newId = inMemoryRetirements.length + 1;
-    const memItem = { id: newId, employee_id: employeeId, ...data, created_at: new Date().toISOString() };
-    inMemoryRetirements.push(memItem);
-    if (record) return res.json(mapKeys(record, camelToSnake));
-    res.json(memItem);
+    syncEntityRecord('retirements', { id }, 'delete');
+    res.json({ success: true });
   });
 
 
@@ -5815,9 +7994,9 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for documents');
     }
-    let list = inMemoryDocuments;
-    if (employeeId) list = list.filter(d => d.employee_id === employeeId || d.employeeId === employeeId);
-    res.json(list);
+    let list = genericMemoryStores['documents'] || inMemoryDocuments || [];
+    if (employeeId) list = list.filter(d => parseInt(String(d.employee_id || d.employeeId)) === employeeId);
+    res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
   app.post('/api/documents', requireAuth, async (req, res) => {
@@ -5825,22 +8004,25 @@ async function startServer() {
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
 
+    let record: any = null;
     try {
-      const [record] = await db.insert(schema.documents).values({
+      const [inserted] = await db.insert(schema.documents).values({
         employeeId,
         docType: data.doc_type || data.docType || 'أخرى',
         filePath: data.file_path || data.filePath || '',
         entryDate: data.entry_date || data.entryDate || new Date().toISOString().split('T')[0],
       }).returning();
-      if (record) return res.status(201).json(mapKeys(record, camelToSnake));
+      record = inserted;
     } catch (error: any) {
       console.warn('Database fallback for create document');
     }
 
-    const newId = inMemoryDocuments.length + 1;
-    const memItem = { id: newId, employee_id: employeeId, ...data, created_at: new Date().toISOString() };
-    inMemoryDocuments.push(memItem);
-    res.status(201).json(memItem);
+    const store = genericMemoryStores['documents'] || inMemoryDocuments || [];
+    const newId = record?.id || (store.reduce((max, d) => Math.max(max, parseInt(d.id) || 0), 0) || 0) + 1;
+    const memItem = { id: newId, employee_id: employeeId, employeeId, ...data, created_at: new Date().toISOString() };
+    syncEntityRecord('documents', memItem, 'insert');
+
+    res.status(201).json(mapKeys(record || memItem, camelToSnake));
   });
 
   app.delete('/api/documents/:id', requireAuth, async (req, res) => {
@@ -5851,44 +8033,54 @@ async function startServer() {
     } catch (error: any) {
       console.warn('Database fallback for delete document');
     }
-    inMemoryDocuments = inMemoryDocuments.filter(d => d.id !== id);
+    syncEntityRecord('documents', { id }, 'delete');
     res.json({ success: true });
   });
 
   // --- Service Records (احتساب الخدمة وتمديد الخدمة) API ---
   app.get('/api/service-records', requireAuth, async (req, res) => {
+    const empIdParam = req.query.employeeId || req.query.employee_id;
+    const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
     try {
-      const { employeeId } = req.query;
       let query = db.select().from(schema.serviceRecords);
-      if (employeeId) {
-        const empId = parseInt(employeeId as string);
-        if (!isNaN(empId)) {
-          query = db.select().from(schema.serviceRecords).where(eq(schema.serviceRecords.employeeId, empId)) as any;
-        }
+      if (employeeId && !isNaN(employeeId)) {
+        query = db.select().from(schema.serviceRecords).where(eq(schema.serviceRecords.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.serviceRecords.createdAt));
-      res.json(results);
+      if (results && results.length > 0) {
+        return res.json(results.map(r => ({
+          ...r,
+          employee_id: r.employeeId,
+          record_type: r.recordType,
+          order_number: r.orderNumber,
+          order_date: r.orderDate,
+          created_at: r.createdAt
+        })));
+      }
     } catch (error: any) {
-      console.error('Error fetching service records:', error);
-      res.status(500).json({ error: error.message });
+      console.warn('Database fallback for service records');
     }
+    let list = inMemoryServiceRecords;
+    if (employeeId) list = list.filter(r => r.employee_id === employeeId || r.employeeId === employeeId);
+    res.json(list);
   });
 
   app.post('/api/service-records', requireAuth, async (req, res) => {
+    const data = req.body;
+    const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
+    if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
+
+    const recordType = data.record_type || data.recordType || 'احتساب خدمة';
+    const orderNumber = data.order_number || data.orderNumber || '';
+    const orderDate = data.order_date || data.orderDate || '';
+    const years = parseInt(data.years) || 0;
+    const months = parseInt(data.months) || 0;
+    const days = parseInt(data.days) || 0;
+    const reason = data.reason || '';
+
+    let record = null;
     try {
-      const data = req.body;
-      const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
-      if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
-
-      const recordType = data.record_type || data.recordType || 'احتساب خدمة';
-      const orderNumber = data.order_number || data.orderNumber || '';
-      const orderDate = data.order_date || data.orderDate || '';
-      const years = parseInt(data.years) || 0;
-      const months = parseInt(data.months) || 0;
-      const days = parseInt(data.days) || 0;
-      const reason = data.reason || '';
-
-      const [record] = await db.insert(schema.serviceRecords).values({
+      const [inserted] = await db.insert(schema.serviceRecords).values({
         employeeId,
         recordType,
         orderNumber,
@@ -5900,6 +8092,7 @@ async function startServer() {
         reason,
         notes: data.notes || '',
       }).returning();
+      record = inserted;
 
       // Sync employee record if record type is extension
       if (recordType === 'تمديد خدمة') {
@@ -5917,92 +8110,151 @@ async function startServer() {
           }).where(eq(schema.employees.id, employeeId));
         }
       }
-
-      triggerRecalculateEligibility(employeeId).catch(() => {});
-      res.json(record);
     } catch (error: any) {
-      console.error('Error creating service record:', error);
-      res.status(500).json({ error: error.message });
+      console.warn('Database fallback for create service record');
     }
+
+    const newId = inMemoryServiceRecords.length > 0 ? Math.max(...inMemoryServiceRecords.map(r => r.id || 0)) + 1 : 1;
+    const memRecord = {
+      id: record?.id || newId,
+      employee_id: employeeId,
+      employeeId,
+      record_type: recordType,
+      recordType,
+      order_number: orderNumber,
+      orderNumber,
+      order_date: orderDate,
+      orderDate,
+      years,
+      months,
+      days,
+      purpose: data.purpose || 'promotion_allowance_pension',
+      reason,
+      notes: data.notes || '',
+      created_at: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
+    inMemoryServiceRecords.push(memRecord);
+    saveLocalDb();
+
+    triggerRecalculateEligibility(employeeId).catch(() => {});
+    const formatted = record ? {
+      ...record,
+      employee_id: record.employeeId,
+      record_type: record.recordType,
+      order_number: record.orderNumber,
+      order_date: record.orderDate,
+      created_at: record.createdAt
+    } : memRecord;
+    res.json(formatted);
   });
 
   app.put('/api/service-records/:id', requireAuth, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
-      const data = req.body;
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    const data = req.body;
+    const updateData: any = {};
+    if (data.record_type !== undefined || data.recordType !== undefined) {
+      updateData.recordType = data.record_type || data.recordType;
+    }
+    if (data.order_number !== undefined || data.orderNumber !== undefined) {
+      updateData.orderNumber = data.order_number || data.orderNumber;
+    }
+    if (data.order_date !== undefined || data.orderDate !== undefined) {
+      updateData.orderDate = data.order_date || data.orderDate;
+    }
+    if (data.years !== undefined) updateData.years = parseInt(data.years) || 0;
+    if (data.months !== undefined) updateData.months = parseInt(data.months) || 0;
+    if (data.days !== undefined) updateData.days = parseInt(data.days) || 0;
+    if (data.purpose !== undefined) updateData.purpose = data.purpose;
+    if (data.reason !== undefined) updateData.reason = data.reason;
+    if (data.notes !== undefined) updateData.notes = data.notes;
 
-      const [updated] = await db.update(schema.serviceRecords)
-        .set({
-          orderNumber: data.order_number || data.orderNumber,
-          orderDate: data.order_date || data.orderDate,
-          years: data.years !== undefined ? parseInt(data.years) : undefined,
-          months: data.months !== undefined ? parseInt(data.months) : undefined,
-          days: data.days !== undefined ? parseInt(data.days) : undefined,
-          purpose: data.purpose,
-          reason: data.reason,
-          notes: data.notes,
-        })
+    let updated = null;
+    try {
+      const [resDb] = await db.update(schema.serviceRecords)
+        .set(updateData)
         .where(eq(schema.serviceRecords.id, id))
         .returning();
-
-      if (updated?.employeeId) {
-        triggerRecalculateEligibility(updated.employeeId).catch(() => {});
-      }
-      res.json(updated);
+      updated = resDb;
     } catch (error: any) {
-      console.error('Error updating service record:', error);
-      res.status(500).json({ error: error.message });
+      console.warn('Database fallback for update service record');
     }
+
+    const idx = inMemoryServiceRecords.findIndex(r => r.id === id);
+    if (idx !== -1) {
+      inMemoryServiceRecords[idx] = {
+        ...inMemoryServiceRecords[idx],
+        ...updateData,
+        ...data,
+        id
+      };
+      saveLocalDb();
+      if (!updated) updated = inMemoryServiceRecords[idx];
+    }
+
+    if (updated?.employeeId || updated?.employee_id) {
+      triggerRecalculateEligibility(updated.employeeId || updated.employee_id).catch(() => {});
+    }
+    const formatted = updated ? {
+      ...updated,
+      employee_id: updated.employeeId || updated.employee_id,
+      record_type: updated.recordType || updated.record_type,
+      order_number: updated.orderNumber || updated.order_number,
+      order_date: updated.orderDate || updated.order_date,
+      created_at: updated.createdAt || updated.created_at
+    } : updated;
+    res.json(formatted);
   });
 
   app.delete('/api/service-records/:id', requireAuth, async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+    
+    let recordToDelete = inMemoryServiceRecords.find(r => r.id === id);
     try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
-      
       const existing = await db.select().from(schema.serviceRecords).where(eq(schema.serviceRecords.id, id));
-      if (existing.length === 0) {
-        return res.json({ success: true });
-      }
+      if (existing.length > 0) {
+        recordToDelete = existing[0];
+        await db.delete(schema.serviceRecords).where(eq(schema.serviceRecords.id, id));
 
-      const recordToDelete = existing[0];
-      await db.delete(schema.serviceRecords).where(eq(schema.serviceRecords.id, id));
+        if (recordToDelete.recordType === 'تمديد خدمة') {
+          const remainingExts = await db.select().from(schema.serviceRecords).where(and(
+            eq(schema.serviceRecords.employeeId, recordToDelete.employeeId),
+            eq(schema.serviceRecords.recordType, 'تمديد خدمة')
+          ));
 
-      if (recordToDelete.recordType === 'تمديد خدمة') {
-        const remainingExts = await db.select().from(schema.serviceRecords).where(and(
-          eq(schema.serviceRecords.employeeId, recordToDelete.employeeId),
-          eq(schema.serviceRecords.recordType, 'تمديد خدمة')
-        ));
-
-        if (remainingExts.length === 0) {
-          await db.update(schema.employees).set({
-            retirementExtensionOrderNumber: null,
-            retirementExtensionOrderDate: null,
-            retirementExtensionYears: 0,
-            retirementExtensionMonths: 0,
-            retirementExtensionNote: null,
-          }).where(eq(schema.employees.id, recordToDelete.employeeId));
-        } else {
-          const latest = remainingExts[remainingExts.length - 1];
-          await db.update(schema.employees).set({
-            retirementExtensionOrderNumber: latest.orderNumber,
-            retirementExtensionOrderDate: latest.orderDate,
-            retirementExtensionYears: latest.years,
-            retirementExtensionMonths: latest.months,
-            retirementExtensionNote: latest.reason || latest.notes,
-          }).where(eq(schema.employees.id, recordToDelete.employeeId));
+          if (remainingExts.length === 0) {
+            await db.update(schema.employees).set({
+              retirementExtensionOrderNumber: null,
+              retirementExtensionOrderDate: null,
+              retirementExtensionYears: 0,
+              retirementExtensionMonths: 0,
+              retirementExtensionNote: null,
+            }).where(eq(schema.employees.id, recordToDelete.employeeId));
+          } else {
+            const latest = remainingExts[remainingExts.length - 1];
+            await db.update(schema.employees).set({
+              retirementExtensionOrderNumber: latest.orderNumber,
+              retirementExtensionOrderDate: latest.orderDate,
+              retirementExtensionYears: latest.years,
+              retirementExtensionMonths: latest.months,
+              retirementExtensionNote: latest.reason || latest.notes,
+            }).where(eq(schema.employees.id, recordToDelete.employeeId));
+          }
         }
       }
-
-      if (recordToDelete?.employeeId) {
-        triggerRecalculateEligibility(recordToDelete.employeeId).catch(() => {});
-      }
-      res.json({ success: true });
     } catch (error: any) {
-      console.error('Error deleting service record:', error);
-      res.status(500).json({ error: error.message });
+      console.warn('Database fallback for delete service record');
     }
+
+    inMemoryServiceRecords = inMemoryServiceRecords.filter(r => r.id !== id);
+    saveLocalDb();
+
+    if (recordToDelete?.employeeId || recordToDelete?.employee_id) {
+      triggerRecalculateEligibility(recordToDelete.employeeId || recordToDelete.employee_id).catch(() => {});
+    }
+    res.json({ success: true });
   });
 
 
@@ -6458,6 +8710,138 @@ async function startServer() {
     return res.json(inMemoryExemptionRules);
   });
 
+  // --- Promotion Paths & Required Governing Courses Matrix ---
+  let inMemoryPromotionPathsMatrix: any[] = [
+    {
+      id: 'mat_2_1',
+      trackName: 'الثانية ← الأولى',
+      fromGrade: 2,
+      toGrade: 1,
+      requiredCoursesText: '1) اختصاص متقدمة (أسبوعين - 10 أيام)\n2) إدارية متقدمة / إدارة وقيادة (أسبوع على الأقل)\n3) تفاوض — يمكن تعويضها بلجان/اجتماعات مع شركات أجنبية بكتاب رسمي مؤيد',
+      alternativeText: 'دورة تطويرية قيادية عليا معتمدة',
+      notes: 'الدرجة 2 إلى 1 (التطوير القيادي المتقدم)'
+    },
+    {
+      id: 'mat_3_2',
+      trackName: 'الثالثة ← الثانية',
+      fromGrade: 3,
+      toGrade: 2,
+      requiredCoursesText: '1) اختصاص (أسبوعين - 10 أيام)\n2) (إدارية متقدمة) أو (حاسبة) أو (لغة إنكليزية) بمجموع شهر تدريبي',
+      alternativeText: '💡 بديل كامل: للعنوان الإداري (مدير / مدير أقدم) دورة واحدة ≥ شهر تغني عن كل الحتميات',
+      notes: 'الدرجة 3 إلى 2'
+    },
+    {
+      id: 'mat_4_3',
+      trackName: 'الرابعة ← الثالثة',
+      fromGrade: 4,
+      toGrade: 3,
+      requiredCoursesText: 'نفس متطلبات الترفيع (3 ← 2): دورة اختصاص (أسبوعين) + (إدارية متقدمة/حاسبة/إنكليزي مجموع شهر) أو البديل الإداري الكامل',
+      alternativeText: '💡 بديل كامل: للعنوان الإداري دورة تدريبية واحدة مدتها شهر فأكثر',
+      notes: 'الدرجة 4 إلى 3'
+    },
+    {
+      id: 'mat_5_4',
+      trackName: 'الخامسة ← الرابعة',
+      fromGrade: 5,
+      toGrade: 4,
+      requiredCoursesText: '1) اختصاص (أسبوعين)\n2) إدارية أو حاسبة (أسبوع)\n3) السلامة والصحة المهنية والبيئة (H.S.E)',
+      alternativeText: '',
+      notes: 'الدرجة 5 إلى 4'
+    },
+    {
+      id: 'mat_6_5',
+      trackName: 'السادسة ← الخامسة',
+      fromGrade: 6,
+      toGrade: 5,
+      requiredCoursesText: 'نفس متطلبات الترفيع (5 ← 4): دورة اختصاص (أسبوعين) + إدارية/حاسبة (أسبوع) + H.S.E',
+      alternativeText: '',
+      notes: 'الدرجة 6 إلى 5'
+    },
+    {
+      id: 'mat_7_6',
+      trackName: 'السابعة ← السادسة',
+      fromGrade: 7,
+      toGrade: 6,
+      requiredCoursesText: '1) اختصاص (أسبوع)   2) إدارية (أسبوع)\n3) H.S.E (أسبوع)   4) حاسبة (أسبوع)',
+      alternativeText: '',
+      notes: 'الدرجة 7 إلى 6'
+    },
+    {
+      id: 'mat_8_7',
+      trackName: 'الثامنة ← السابعة',
+      fromGrade: 8,
+      toGrade: 7,
+      requiredCoursesText: 'نفس متطلبات الترفيع (7 ← 6): اختصاص (أسبوع) + إدارية (أسبوع) + H.S.E + حاسبة',
+      alternativeText: '',
+      notes: 'الدرجة 8 إلى 7'
+    }
+  ];
+
+  app.get('/api/governing-courses/matrix', requireAuth, async (req, res) => {
+    res.json(inMemoryPromotionPathsMatrix);
+  });
+
+  app.post('/api/governing-courses/matrix', requireAuth, async (req, res) => {
+    if (Array.isArray(req.body)) {
+      inMemoryPromotionPathsMatrix = req.body;
+      res.json(inMemoryPromotionPathsMatrix);
+    } else {
+      res.status(400).json({ error: 'Invalid matrix data' });
+    }
+  });
+
+  // --- Grade Requirements for Promotion Training Packs (تصنيفات وساعات وأيام الحتميات للدرجات) ---
+  let inMemoryGradeRequirements: Record<string, any[]> = {
+    '8': [
+      { id: 'gr_8_1', category: 'اختصاص', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'دورة اختصاص للدرجة 8' },
+      { id: 'gr_8_2', category: 'إدارية', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'دورة إدارية' },
+      { id: 'gr_8_3', category: 'سلامة وبيئة (H.S.E)', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'السلامة والصحة المهنية والبيئة' },
+      { id: 'gr_8_4', category: 'حاسوب وتكنولوجيا', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'حاسبة وتطبيقات مكتبية' }
+    ],
+    '7': [
+      { id: 'gr_7_1', category: 'اختصاص', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'دورة اختصاص للدرجة 7' },
+      { id: 'gr_7_2', category: 'إدارية', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'دورة إدارية' },
+      { id: 'gr_7_3', category: 'سلامة وبيئة (H.S.E)', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'السلامة والصحة المهنية والبيئة' },
+      { id: 'gr_7_4', category: 'حاسوب وتكنولوجيا', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'حاسبة وتطبيقات مكتبية' }
+    ],
+    '6': [
+      { id: 'gr_6_1', category: 'اختصاص', requiredDays: 10, requiredHours: 40, isMandatory: true, alternativeTo: '', notes: 'دورة اختصاص (أسبوعين - 10 أيام)' },
+      { id: 'gr_6_2', category: 'إدارية أو حاسوب', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'إدارية أو حاسبة (أسبوع)' },
+      { id: 'gr_6_3', category: 'سلامة وبيئة (H.S.E)', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'السلامة والصحة المهنية والبيئة (أسبوع)' }
+    ],
+    '5': [
+      { id: 'gr_5_1', category: 'اختصاص', requiredDays: 10, requiredHours: 40, isMandatory: true, alternativeTo: '', notes: 'دورة اختصاص (أسبوعين - 10 أيام)' },
+      { id: 'gr_5_2', category: 'إدارية أو حاسوب', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'إدارية أو حاسبة (أسبوع)' },
+      { id: 'gr_5_3', category: 'سلامة وبيئة (H.S.E)', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'السلامة والصحة المهنية والبيئة (أسبوع)' }
+    ],
+    '4': [
+      { id: 'gr_4_1', category: 'اختصاص', requiredDays: 10, requiredHours: 40, isMandatory: true, alternativeTo: '', notes: 'دورة اختصاص (أسبوعين - 10 أيام)' },
+      { id: 'gr_4_2', category: 'إدارية متقدمة أو حاسوب أو لغة إنكليزية', requiredDays: 20, requiredHours: 80, isMandatory: true, alternativeTo: 'بديل إداري', notes: 'مجموع شهر تدريبي (20 يوم / 80 ساعة)' }
+    ],
+    '3': [
+      { id: 'gr_3_1', category: 'اختصاص', requiredDays: 10, requiredHours: 40, isMandatory: true, alternativeTo: '', notes: 'دورة اختصاص (أسبوعين - 10 أيام)' },
+      { id: 'gr_3_2', category: 'إدارية متقدمة أو حاسوب أو لغة إنكليزية', requiredDays: 20, requiredHours: 80, isMandatory: true, alternativeTo: 'بديل إداري', notes: 'مجموع شهر تدريبي (20 يوم / 80 ساعة) أو بديل إداري كامل' }
+    ],
+    '2': [
+      { id: 'gr_2_1', category: 'اختصاص متقدمة', requiredDays: 10, requiredHours: 40, isMandatory: true, alternativeTo: '', notes: 'اختصاص متقدمة (أسبوعين - 10 أيام)' },
+      { id: 'gr_2_2', category: 'إدارية متقدمة / إدارة وقيادة', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: '', notes: 'إدارية متقدمة أو قيادة (أسبوع على الأقل)' },
+      { id: 'gr_2_3', category: 'تفاوض ولجان خارجية', requiredDays: 5, requiredHours: 20, isMandatory: true, alternativeTo: 'لجان واجتماعات شركات أجنبية', notes: 'تفاوض أو تعويض بلجان رسمية مؤيدة' }
+    ]
+  };
+
+  app.get('/api/governing-courses/grade-requirements', requireAuth, async (req, res) => {
+    res.json(inMemoryGradeRequirements);
+  });
+
+  app.post('/api/governing-courses/grade-requirements', requireAuth, async (req, res) => {
+    if (req.body && typeof req.body === 'object') {
+      inMemoryGradeRequirements = req.body;
+      saveLocalDb();
+      return res.json(inMemoryGradeRequirements);
+    }
+    return res.status(400).json({ error: 'Invalid grade requirements data' });
+  });
+
   app.get('/api/governing-courses/employee-assignments', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.governingCourseEmployeeAssignments);
@@ -6537,6 +8921,7 @@ async function startServer() {
       console.error('Error persisting employee assignment to database:', err);
     }
 
+    saveLocalDb();
     return res.json(assignmentObj);
   });
 
@@ -6563,30 +8948,6 @@ async function startServer() {
     'specialization-credits': 'specializationCourseCredits',
     'promotion-delay-reasons': 'promotionDelayReasons',
     'promotion_delay_reasons': 'promotionDelayReasons'
-  };
-
-  const genericMemoryStores: Record<string, any[]> = {
-    'career': inMemoryCareerHistories,
-    'job-assignments': inMemoryJobAssignments,
-    'qualifications': inMemoryQualifications,
-    'promotions': inMemoryPromotions,
-    'salary-allowances': inMemorySalaryAllowances,
-    'annual-evaluations': inMemoryAnnualEvaluations,
-    'training-courses': inMemoryTrainingCourses,
-    'transfers': inMemoryTransfers,
-    'retirements': inMemoryRetirements,
-    'documents': inMemoryDocuments,
-    'service-records': inMemoryServiceRecords,
-    'service-credits': inMemoryServiceCredits,
-    'leaves': inMemoryLeaves,
-    'penalties': inMemoryPenalties,
-    'appreciations': inMemoryAppreciations,
-    'performance': inMemoryPerformanceEvaluations,
-    'degree-track-snapshots': inMemoryDegreeTrackSnapshots,
-    'degree-track-simulation-steps': inMemoryDegreeTrackSimulationSteps,
-    'specialization-credits': inMemorySpecializationCredits,
-    'promotion-delay-reasons': inMemoryPromotionDelayReasons,
-    'promotion_delay_reasons': inMemoryPromotionDelayReasons
   };
 
   // --- Local Disk Persistence Engine ---
@@ -6631,13 +8992,25 @@ async function startServer() {
         inMemoryResponsibilityAllowances,
         inMemoryWorkLocations,
         inMemoryShiftSystems,
+        inMemoryServiceTypes,
+        inMemoryEmployeeStatuses,
         inMemoryLeaveTypes,
+        inMemoryPenaltyTypes,
         inMemorySalaryScale,
         inMemoryGradePromotionRules,
         inMemoryCommendationTypes,
         inMemoryEmployeeCommendations,
         inMemoryCommendationRulesSettings,
         inMemoryJobTitles,
+        inMemoryExemptionRules,
+        inMemoryGradeRequirements,
+        inMemoryEmployeeAssignments,
+        inMemoryTrainings,
+        inMemoryEnrollments,
+        inMemoryTrainers,
+        inMemoryAnnualPlans,
+        inMemoryAttendance,
+        inMemoryOrgUnits,
         systemSettingsStore,
         leaveAccrualLogs,
         genericMemoryStores
@@ -6783,18 +9156,94 @@ async function startServer() {
           genericMemoryStores['promotion-delay-reasons'] = state.inMemoryPromotionDelayReasons;
           genericMemoryStores['promotion_delay_reasons'] = state.inMemoryPromotionDelayReasons;
         }
-        if (Array.isArray(state.inMemoryAllowancesDeductions) && state.inMemoryAllowancesDeductions.length > 0) inMemoryAllowancesDeductions = state.inMemoryAllowancesDeductions;
-        if (Array.isArray(state.inMemoryEducationDegrees) && state.inMemoryEducationDegrees.length > 0) inMemoryEducationDegrees = state.inMemoryEducationDegrees;
+        if (Array.isArray(state.inMemoryAllowancesDeductions) && state.inMemoryAllowancesDeductions.length > 0) {
+          inMemoryAllowancesDeductions = state.inMemoryAllowancesDeductions.filter((item: any) => {
+            if (!item) return false;
+            const name = String(item.name || '');
+            const isDegree = (name.includes('شهادة') || name.includes('الشهادة') || name.includes('دكتوراه') || name.includes('ماجستير') || name.includes('دبلوم') || name.includes('بكالوريوس') || name.includes('إعدادية') || name.includes('متوسطة'));
+            const isResp = (name.includes('منصب') || name.includes('مسؤولية') || name.includes('إشرافية'));
+            return !isDegree && !isResp;
+          });
+        }
+        if (Array.isArray(state.inMemoryEducationDegrees) && state.inMemoryEducationDegrees.length > 0) {
+          inMemoryEducationDegrees = state.inMemoryEducationDegrees.map((r: any) => ({
+            ...r,
+            baseline_grade: r.baseline_grade !== undefined ? parseInt(r.baseline_grade) : (r.baselineGrade !== undefined ? parseInt(r.baselineGrade) : 7),
+            baselineGrade: r.baseline_grade !== undefined ? parseInt(r.baseline_grade) : (r.baselineGrade !== undefined ? parseInt(r.baselineGrade) : 7),
+            baseline_step: r.baseline_step !== undefined ? parseInt(r.baseline_step) : (r.baselineStep !== undefined ? parseInt(r.baselineStep) : 1),
+            baselineStep: r.baseline_step !== undefined ? parseInt(r.baseline_step) : (r.baselineStep !== undefined ? parseInt(r.baselineStep) : 1),
+          }));
+        }
         if (Array.isArray(state.inMemoryResponsibilityAllowances) && state.inMemoryResponsibilityAllowances.length > 0) inMemoryResponsibilityAllowances = state.inMemoryResponsibilityAllowances;
         if (Array.isArray(state.inMemoryWorkLocations) && state.inMemoryWorkLocations.length > 0) inMemoryWorkLocations = state.inMemoryWorkLocations;
         if (Array.isArray(state.inMemoryShiftSystems) && state.inMemoryShiftSystems.length > 0) inMemoryShiftSystems = state.inMemoryShiftSystems;
-        if (Array.isArray(state.inMemoryLeaveTypes) && state.inMemoryLeaveTypes.length > 0) inMemoryLeaveTypes = state.inMemoryLeaveTypes;
+        if (Array.isArray(state.inMemoryServiceTypes) && state.inMemoryServiceTypes.length > 0) inMemoryServiceTypes = state.inMemoryServiceTypes;
+        if (Array.isArray(state.inMemoryEmployeeStatuses) && state.inMemoryEmployeeStatuses.length > 0) inMemoryEmployeeStatuses = state.inMemoryEmployeeStatuses;
+        if (Array.isArray(state.inMemoryPenaltyTypes) && state.inMemoryPenaltyTypes.length > 0) inMemoryPenaltyTypes = state.inMemoryPenaltyTypes;
         if (Array.isArray(state.inMemorySalaryScale) && state.inMemorySalaryScale.length > 0) inMemorySalaryScale = state.inMemorySalaryScale;
+        if (Array.isArray(state.inMemoryTrainings)) inMemoryTrainings = state.inMemoryTrainings;
+        if (Array.isArray(state.inMemoryEnrollments)) inMemoryEnrollments = state.inMemoryEnrollments;
+        if (Array.isArray(state.inMemoryTrainers)) inMemoryTrainers = state.inMemoryTrainers;
+        if (Array.isArray(state.inMemoryAnnualPlans)) inMemoryAnnualPlans = state.inMemoryAnnualPlans;
+        if (Array.isArray(state.inMemoryAttendance)) {
+          inMemoryAttendance = state.inMemoryAttendance;
+          genericMemoryStores['attendance'] = state.inMemoryAttendance;
+        }
+        if (Array.isArray(state.inMemoryOrgUnits)) inMemoryOrgUnits = state.inMemoryOrgUnits;
+
+        if (Array.isArray(state.inMemoryLeaveTypes) && state.inMemoryLeaveTypes.length > 0) {
+          inMemoryLeaveTypes = state.inMemoryLeaveTypes.map((r: any) => {
+            const isInc = Boolean(r.affectsIncrement ?? r.affects_increment ?? (
+              r.administrativeEffect === 'يؤخر_العلاوة' || 
+              r.administrative_effect === 'يؤخر_العلاوة' || 
+              (r.administrative_effect && r.administrative_effect.includes('العلاوة'))
+            ));
+            const isPromo = Boolean(r.affectsPromotion ?? r.affects_promotion ?? (
+              r.administrativeEffect === 'يوقف_الترفيع' || 
+              r.administrative_effect === 'يوقف_الترفيع' || 
+              (r.administrative_effect && r.administrative_effect.includes('الترفيع'))
+            ));
+            const isComm = Boolean(r.affectsCommendations ?? r.affects_commendations ?? (
+              (r.administrative_effect && r.administrative_effect.includes('الشكر')) ||
+              (r.effects_options && r.effects_options.includes('كتب_الشكر'))
+            ));
+            let salType = r.salaryPaymentType || r.salary_payment_type;
+            if (!salType) {
+              const fin = r.financialEffect || r.financial_effect;
+              if (fin === 'بدون_راتب') salType = 'بدون_راتب';
+              else if (fin === 'براتب_ومخصصات_ثابتة') salType = 'منح_الراتب_والمخصصات_الثابتة_فقط';
+              else if (fin === 'استقطاع_جزئي') salType = 'استقطاع_جزئي';
+              else salType = 'منح_الراتب_كامل';
+            }
+            return {
+              ...r,
+              affects_increment: isInc,
+              affectsIncrement: isInc,
+              affects_promotion: isPromo,
+              affectsPromotion: isPromo,
+              affects_commendations: isComm,
+              affectsCommendations: isComm,
+              salary_payment_type: salType,
+              salaryPaymentType: salType,
+              administrative_effect: r.administrative_effect || r.administrativeEffect || (isPromo || isInc || isComm ? [isPromo && 'يوقف الترفيع', isInc && 'يؤخر العلاوة', isComm && 'يوقف كتب الشكر'].filter(Boolean).join(' و ') : 'لا_يؤثر'),
+              financial_effect: r.financial_effect || r.financialEffect || (salType === 'بدون_راتب' ? 'بدون_راتب' : salType === 'منح_الراتب_والمخصصات_الثابتة_فقط' ? 'براتب_ومخصصات_ثابتة' : salType === 'استقطاع_جزئي' ? 'استقطاع_جزئي' : 'براتب_كامل'),
+            };
+          });
+        }
         if (Array.isArray(state.inMemoryGradePromotionRules) && state.inMemoryGradePromotionRules.length > 0) inMemoryGradePromotionRules = state.inMemoryGradePromotionRules;
         if (Array.isArray(state.inMemoryCommendationTypes) && state.inMemoryCommendationTypes.length > 0) inMemoryCommendationTypes = state.inMemoryCommendationTypes;
         if (Array.isArray(state.inMemoryEmployeeCommendations)) inMemoryEmployeeCommendations = state.inMemoryEmployeeCommendations;
         if (state.inMemoryCommendationRulesSettings && typeof state.inMemoryCommendationRulesSettings === 'object') inMemoryCommendationRulesSettings = state.inMemoryCommendationRulesSettings;
         if (Array.isArray(state.inMemoryJobTitles) && state.inMemoryJobTitles.length > 0) inMemoryJobTitles = state.inMemoryJobTitles;
+        if (state.inMemoryExemptionRules && typeof state.inMemoryExemptionRules === 'object') {
+          inMemoryExemptionRules = { ...inMemoryExemptionRules, ...state.inMemoryExemptionRules };
+        }
+        if (state.inMemoryGradeRequirements && typeof state.inMemoryGradeRequirements === 'object') {
+          inMemoryGradeRequirements = { ...inMemoryGradeRequirements, ...state.inMemoryGradeRequirements };
+        }
+        if (state.inMemoryEmployeeAssignments && typeof state.inMemoryEmployeeAssignments === 'object') {
+          inMemoryEmployeeAssignments = { ...inMemoryEmployeeAssignments, ...state.inMemoryEmployeeAssignments };
+        }
         if (state.systemSettingsStore && typeof state.systemSettingsStore === 'object') {
           systemSettingsStore = { ...systemSettingsStore, ...state.systemSettingsStore };
         }
@@ -7620,7 +10069,36 @@ async function startServer() {
     }
   });
 
-  // 4. Promotions, Increments & Degree Recognition Due List (قوائم المستحقين الثلاث)
+  // Helper to resolve promotion target job title
+  function resolveTargetJobTitle(emp: any, targetGrade: number): string {
+    const currentTitleName = String(emp.jobTitle || emp.job_title || '').trim();
+    const allTitles = genericMemoryStores['job-titles'] || inMemoryJobTitles || [];
+    
+    if (allTitles.length > 0) {
+      const currentTitleObj = allTitles.find((t: any) => 
+        (emp.jobTitleId && String(t.id) === String(emp.jobTitleId)) ||
+        (t.name && t.name.trim() === currentTitleName)
+      );
+      
+      if (currentTitleObj && (currentTitleObj.nextTitleId || currentTitleObj.next_title_id)) {
+        const nextId = currentTitleObj.nextTitleId || currentTitleObj.next_title_id;
+        const nextTitleObj = allTitles.find((t: any) => String(t.id) === String(nextId));
+        if (nextTitleObj?.name) return nextTitleObj.name;
+      }
+      
+      if (currentTitleObj?.category) {
+        const matched = allTitles.find((t: any) => 
+          t.category === currentTitleObj.category && 
+          (parseInt(String(t.minGrade || t.min_grade)) === targetGrade || parseInt(String(t.grade)) === targetGrade)
+        );
+        if (matched?.name) return matched.name;
+      }
+    }
+    
+    return currentTitleName || `العنوان المستحق للدرجة ${targetGrade}`;
+  }
+
+  // 4. Promotions, Increments & Degree Recognition Due List (قوائم المستحقين الثلاث مع كافة المؤثرات والتواريخ)
   app.get('/api/promotions/due-list', requireAuth, async (req, res) => {
     try {
       const dueForIncrement: any[] = [];
@@ -7641,6 +10119,10 @@ async function startServer() {
           // Recalculate standard eligibility
           const eligibility = await triggerRecalculateEligibility(empId);
 
+          const currentTitle = emp.jobTitle || emp.job_title || 'موظف';
+          const basePromotionDate = emp.lastPromotionDate || emp.last_promotion_date || emp.gradeDate || emp.grade_date || emp.currentAppointmentDate || emp.current_appointment_date || emp.appointmentDate || emp.appointment_date || emp.firstAppointmentDate || emp.first_appointment_date || '';
+          const baseIncrementDate = emp.lastIncrementDate || emp.last_increment_date || emp.gradeDate || emp.grade_date || emp.currentAppointmentDate || emp.current_appointment_date || emp.appointmentDate || emp.appointment_date || emp.firstAppointmentDate || emp.first_appointment_date || '';
+
           // 1. Check Increment Eligibility (علاوة سنوية)
           if (
             eligibility?.increment?.eligibilityStatus === 'مستحق_للعلاوة' &&
@@ -7648,13 +10130,33 @@ async function startServer() {
           ) {
             const currentStep = parseInt(String(emp.step)) || 1;
             const targetStep = Math.min(11, currentStep + 1);
+            const incCommCount = eligibility.increment.appliedCommendationsCount || 0;
+            const incCommMonths = eligibility.increment.commendationMonthsDeducted || 0;
+            const incPenCount = eligibility.increment.appliedPenaltiesCount || 0;
+            const incPenMonths = eligibility.increment.penaltyMonthsAdded || 0;
+            const incAbsenceDays = eligibility.increment.appliedAbsenceDays || 0;
+            const incServiceCredit = eligibility.increment.serviceCreditDurationDeducted || { years: 0, months: 0, days: 0 };
+            const incServiceMonths = (incServiceCredit.years || 0) * 12 + (incServiceCredit.months || 0);
+
+            // Construct readable other factors for increment
+            const incOtherFactors: string[] = [];
+            if (incServiceMonths > 0 || (incServiceCredit.days || 0) > 0) {
+              incOtherFactors.push(`خدمة مضافة: ${incServiceCredit.years > 0 ? `${incServiceCredit.years} سنة و ` : ''}${incServiceCredit.months > 0 ? `${incServiceCredit.months} شهر` : ''}${incServiceCredit.days > 0 ? ` و ${incServiceCredit.days} يوم` : ''}`);
+            }
+            if (incAbsenceDays > 0) {
+              incOtherFactors.push(`أيام غياب/إجازات غير اعتيادية: ${incAbsenceDays} يوم`);
+            }
+            if (incOtherFactors.length === 0) {
+              incOtherFactors.push('استيفاء كامل المدة الزمنية والضوابط القانونية');
+            }
+
             dueForIncrement.push({
               employeeId: empId,
               employee_id: empId,
               name: emp.fullName || emp.full_name || emp.name,
               fullName: emp.fullName || emp.full_name || emp.name,
               department: emp.department || 'عام',
-              jobTitle: emp.jobTitle || emp.job_title || 'موظف',
+              jobTitle: currentTitle,
               currentGrade: emp.grade,
               current_grade: emp.grade,
               currentStep: currentStep,
@@ -7663,8 +10165,38 @@ async function startServer() {
               target_grade: emp.grade,
               targetStep: targetStep,
               target_step: targetStep,
+              // Previous and Next Dates
+              lastIncrementDate: eligibility.increment.lastIncrementDate || baseIncrementDate,
+              last_increment_date: eligibility.increment.lastIncrementDate || baseIncrementDate,
+              nextIncrementDueDate: eligibility.increment.nextIncrementDueDate,
+              next_increment_due_date: eligibility.increment.nextIncrementDueDate,
               dueDate: eligibility.increment.nextIncrementDueDate,
               due_date: eligibility.increment.nextIncrementDueDate,
+              baseDueDate: eligibility.increment.baseDueDate || eligibility.increment.nextIncrementDueDate,
+              base_due_date: eligibility.increment.baseDueDate || eligibility.increment.nextIncrementDueDate,
+              // Commendation Letters & Impact
+              commendationsCount: incCommCount,
+              commendations_count: incCommCount,
+              commendationMonths: incCommMonths,
+              commendation_months: incCommMonths,
+              commendationImpactText: incCommCount > 0 ? `${incCommCount} كتاب شكر (تقديم ${incCommMonths} شهر)` : 'لا يوجد',
+              commendation_impact_text: incCommCount > 0 ? `${incCommCount} كتاب شكر (تقديم ${incCommMonths} شهر)` : 'لا يوجد',
+              // Penalties & Impact
+              penaltiesCount: incPenCount,
+              penalties_count: incPenCount,
+              penaltyDelayMonths: incPenMonths,
+              penalty_delay_months: incPenMonths,
+              penaltyImpactText: incPenCount > 0 ? `${incPenCount} عقوبة (تأخير ${incPenMonths} شهر)` : 'سجل نظيف',
+              penalty_impact_text: incPenCount > 0 ? `${incPenCount} عقوبة (تأخير ${incPenMonths} شهر)` : 'سجل نظيف',
+              // Other Factors
+              serviceCreditDuration: incServiceCredit,
+              service_credit_duration: incServiceCredit,
+              serviceCreditMonths: incServiceMonths,
+              service_credit_months: incServiceMonths,
+              absenceDays: incAbsenceDays,
+              absence_days: incAbsenceDays,
+              otherFactors: incOtherFactors,
+              other_factors: incOtherFactors,
               trackType: 'المسار_الاعتيادي',
               track_type: 'المسار_الاعتيادي',
               actionType: 'علاوة',
@@ -7691,13 +10223,28 @@ async function startServer() {
             if (sim.hasDeficit) {
               hasHandledDegreeTrack = true;
               if (sim.realTimeNextPromotion?.isEligible && sim.realTimeNextPromotion?.eligibilityStatus === 'مستحق_للترفيع') {
+                const settCommCount = sim.realTimeNextPromotion.appliedCommendationsCount || 0;
+                const settCommMonths = sim.realTimeNextPromotion.commendationMonthsDeducted || 0;
+                const settPenCount = sim.realTimeNextPromotion.appliedPenaltiesCount || 0;
+                const settPenMonths = sim.realTimeNextPromotion.penaltyMonthsAdded || 0;
+                const settServiceCredit = sim.realTimeNextPromotion.serviceCreditDurationDeducted || { years: 0, months: 0, days: 0 };
+                const settServiceMonths = (settServiceCredit.years || 0) * 12 + (settServiceCredit.months || 0);
+
+                const settOtherFactors: string[] = [
+                  'استيفاء مدة العجز بسنتين خدمة فعلية في الدرجة الحالية',
+                  sim.specializationCourseCompleted ? 'اجتياز دورة الاختصاص بنجاح' : 'دورة الاختصاص مستوفاة'
+                ];
+                if (settServiceMonths > 0) {
+                  settOtherFactors.push(`خدمة محتسبة: ${settServiceCredit.years > 0 ? `${settServiceCredit.years} سنة و ` : ''}${settServiceCredit.months} شهر`);
+                }
+
                 dueForSettlement.push({
                   employeeId: empId,
                   employee_id: empId,
                   name: emp.fullName || emp.full_name || emp.name,
                   fullName: emp.fullName || emp.full_name || emp.name,
                   department: emp.department || 'عام',
-                  jobTitle: emp.jobTitle || emp.job_title || 'موظف',
+                  jobTitle: currentTitle,
                   currentGrade: emp.grade || activeSnap.actualGradeBefore,
                   current_grade: emp.grade || activeSnap.actualGradeBefore,
                   currentStep: emp.step || activeSnap.actualStepBefore,
@@ -7706,8 +10253,36 @@ async function startServer() {
                   target_grade: emp.grade || activeSnap.actualGradeBefore,
                   targetStep: emp.step || activeSnap.actualStepBefore,
                   target_step: emp.step || activeSnap.actualStepBefore,
+                  // Dates
+                  lastPromotionDate: activeSnap.actualPromotionDateBefore || basePromotionDate,
+                  last_promotion_date: activeSnap.actualPromotionDateBefore || basePromotionDate,
+                  nextPromotionDueDate: sim.realTimeNextPromotion.nextPromotionDueDate,
+                  next_promotion_due_date: sim.realTimeNextPromotion.nextPromotionDueDate,
                   dueDate: sim.realTimeNextPromotion.nextPromotionDueDate,
                   due_date: sim.realTimeNextPromotion.nextPromotionDueDate,
+                  baseDueDate: sim.realTimeNextPromotion.baseDueDate || sim.realTimeNextPromotion.nextPromotionDueDate,
+                  base_due_date: sim.realTimeNextPromotion.baseDueDate || sim.realTimeNextPromotion.nextPromotionDueDate,
+                  // Commendation Letters & Impact
+                  commendationsCount: settCommCount,
+                  commendations_count: settCommCount,
+                  commendationMonths: settCommMonths,
+                  commendation_months: settCommMonths,
+                  commendationImpactText: settCommCount > 0 ? `${settCommCount} كتاب شكر (تقديم ${settCommMonths} شهر)` : 'لا يوجد',
+                  commendation_impact_text: settCommCount > 0 ? `${settCommCount} كتاب شكر (تقديم ${settCommMonths} شهر)` : 'لا يوجد',
+                  // Penalties & Impact
+                  penaltiesCount: settPenCount,
+                  penalties_count: settPenCount,
+                  penaltyDelayMonths: settPenMonths,
+                  penalty_delay_months: settPenMonths,
+                  penaltyImpactText: settPenCount > 0 ? `${settPenCount} عقوبة (تأخير ${settPenMonths} شهر)` : 'سجل نظيف',
+                  penalty_impact_text: settPenCount > 0 ? `${settPenCount} عقوبة (تأخير ${settPenMonths} شهر)` : 'سجل نظيف',
+                  // Other Factors
+                  serviceCreditDuration: settServiceCredit,
+                  service_credit_duration: settServiceCredit,
+                  specializationCoursesSatisfied: Boolean(sim.specializationCourseCompleted),
+                  specialization_courses_satisfied: Boolean(sim.specializationCourseCompleted),
+                  otherFactors: settOtherFactors,
+                  other_factors: settOtherFactors,
                   trackType: 'مسار_احتساب_الشهادات',
                   track_type: 'مسار_احتساب_الشهادات',
                   actionType: 'تسوية',
@@ -7726,13 +10301,57 @@ async function startServer() {
           if (!hasHandledDegreeTrack && eligibility?.promotion?.eligibilityStatus === 'مستحق_للترفيع' && eligibility?.promotion?.isPromotionEligible) {
             const currentGrade = parseInt(String(emp.grade)) || 10;
             const targetGrade = Math.max(1, currentGrade - 1);
+            const targetTitle = resolveTargetJobTitle(emp, targetGrade);
+            
+            const promoCommCount = eligibility.promotion.appliedCommendationsCount || 0;
+            const promoCommMonths = eligibility.promotion.commendationMonthsDeducted || 0;
+            const promoPenCount = eligibility.promotion.appliedPenaltiesCount || 0;
+            const promoPenMonths = eligibility.promotion.penaltyMonthsAdded || 0;
+            const promoAbsenceDays = eligibility.promotion.appliedAbsenceDays || 0;
+            const promoServiceCredit = eligibility.promotion.serviceCreditDurationDeducted || { years: 0, months: 0, days: 0 };
+            const promoServiceMonths = (promoServiceCredit.years || 0) * 12 + (promoServiceCredit.months || 0);
+            const gateChecks = eligibility.promotion.gateCheckResults || { governingCoursesSatisfied: true, missingGoverningCourses: [], evaluationsSatisfied: true };
+
+            // Construct readable other factors for promotion
+            const promoOtherFactors: string[] = [];
+            
+            // Governing courses
+            if (gateChecks.governingCoursesSatisfied) {
+              promoOtherFactors.push('الدورات الحتمية: مستوفاة بالكامل');
+            } else if (gateChecks.missingGoverningCourses && gateChecks.missingGoverningCourses.length > 0) {
+              promoOtherFactors.push(`الدورات الحتمية: متبقي (${gateChecks.missingGoverningCourses.join(', ')})`);
+            }
+
+            // Evaluations
+            if (gateChecks.evaluationsSatisfied) {
+              promoOtherFactors.push('تقييم الأداء: مستوفٍ لآخر سنتين بدرجة كفوء فأعلى');
+            }
+
+            // Service additions
+            if (promoServiceMonths > 0 || (promoServiceCredit.days || 0) > 0) {
+              promoOtherFactors.push(`خدمة محتسبة: ${promoServiceCredit.years > 0 ? `${promoServiceCredit.years} سنة و ` : ''}${promoServiceCredit.months > 0 ? `${promoServiceCredit.months} شهر` : ''}${promoServiceCredit.days > 0 ? ` و ${promoServiceCredit.days} يوم` : ''}`);
+            }
+
+            // Absences / pauses
+            if (promoAbsenceDays > 0) {
+              promoOtherFactors.push(`أيام غياب/إجازات مخصومة: ${promoAbsenceDays} يوم`);
+            }
+
+            if (promoOtherFactors.length === 0) {
+              promoOtherFactors.push('استيفاء المدة القانونية وشروط الترقية المعتمدة لسلم 2023');
+            }
+
             dueForPromotion.push({
               employeeId: empId,
               employee_id: empId,
               name: emp.fullName || emp.full_name || emp.name,
               fullName: emp.fullName || emp.full_name || emp.name,
               department: emp.department || 'عام',
-              jobTitle: emp.jobTitle || emp.job_title || 'موظف',
+              jobTitle: currentTitle,
+              currentJobTitle: currentTitle,
+              current_job_title: currentTitle,
+              targetJobTitle: targetTitle,
+              target_job_title: targetTitle,
               currentGrade: currentGrade,
               current_grade: currentGrade,
               currentStep: emp.step || 1,
@@ -7741,8 +10360,44 @@ async function startServer() {
               target_grade: targetGrade,
               targetStep: 1,
               target_step: 1,
+              // Previous and Next Dates
+              lastPromotionDate: eligibility.promotion.lastPromotionDate || basePromotionDate,
+              last_promotion_date: eligibility.promotion.lastPromotionDate || basePromotionDate,
+              nextPromotionDueDate: eligibility.promotion.nextPromotionDueDate,
+              next_promotion_due_date: eligibility.promotion.nextPromotionDueDate,
               dueDate: eligibility.promotion.nextPromotionDueDate,
               due_date: eligibility.promotion.nextPromotionDueDate,
+              baseDueDate: eligibility.promotion.baseDueDate || eligibility.promotion.nextPromotionDueDate,
+              base_due_date: eligibility.promotion.baseDueDate || eligibility.promotion.nextPromotionDueDate,
+              requiredYears: eligibility.promotion.requiredYears || 4,
+              required_years: eligibility.promotion.requiredYears || 4,
+              // Commendation Letters & Impact
+              commendationsCount: promoCommCount,
+              commendations_count: promoCommCount,
+              commendationMonths: promoCommMonths,
+              commendation_months: promoCommMonths,
+              commendationImpactText: promoCommCount > 0 ? `${promoCommCount} كتاب شكر (تقديم ${promoCommMonths} شهر)` : 'لا يوجد',
+              commendation_impact_text: promoCommCount > 0 ? `${promoCommCount} كتاب شكر (تقديم ${promoCommMonths} شهر)` : 'لا يوجد',
+              // Penalties & Impact
+              penaltiesCount: promoPenCount,
+              penalties_count: promoPenCount,
+              penaltyDelayMonths: promoPenMonths,
+              penalty_delay_months: promoPenMonths,
+              penaltyImpactText: promoPenCount > 0 ? `${promoPenCount} عقوبة (تأخير ${promoPenMonths} شهر)` : 'سجل نظيف',
+              penalty_impact_text: promoPenCount > 0 ? `${promoPenCount} عقوبة (تأخير ${promoPenMonths} شهر)` : 'سجل نظيف',
+              // Other Factors
+              serviceCreditDuration: promoServiceCredit,
+              service_credit_duration: promoServiceCredit,
+              serviceCreditMonths: promoServiceMonths,
+              service_credit_months: promoServiceMonths,
+              absenceDays: promoAbsenceDays,
+              absence_days: promoAbsenceDays,
+              gateCheckResults: gateChecks,
+              gate_check_results: gateChecks,
+              governingCoursesSatisfied: gateChecks.governingCoursesSatisfied,
+              evaluationsSatisfied: gateChecks.evaluationsSatisfied,
+              otherFactors: promoOtherFactors,
+              other_factors: promoOtherFactors,
               trackType: 'المسار_الاعتيادي',
               track_type: 'المسار_الاعتيادي',
               actionType: 'ترفيع',
@@ -7872,6 +10527,7 @@ async function startServer() {
           const targetGrade = Math.max(1, curGrade - 1);
           const targetStep = 1;
           const calculatedDueDate = eligibility.promotion.nextPromotionDueDate || finalOrderDate;
+          const resolvedTitleObj = findMatchingJobTitleForPromotion(emp, targetGrade, inMemoryJobTitles);
 
           validatedBatch.push({
             empId,
@@ -7882,7 +10538,9 @@ async function startServer() {
             stepBefore: curStep,
             stepAfter: targetStep,
             movementType: 'ترفيع درجة',
-            dueDate: calculatedDueDate
+            dueDate: calculatedDueDate,
+            newJobTitle: resolvedTitleObj?.name || null,
+            newJobTitleId: resolvedTitleObj?.id || null
           });
         } else if (type === 'تسوية') {
           const activeSnap = (genericMemoryStores['degree-track-snapshots'] || []).find(
@@ -7936,7 +10594,8 @@ async function startServer() {
               await tx.update(schema.employees).set({
                 grade: item.gradeAfter,
                 step: item.stepAfter,
-                lastPromotionDate: item.dueDate
+                lastPromotionDate: item.dueDate,
+                ...(item.newJobTitle ? { jobTitle: item.newJobTitle, jobTitleId: item.newJobTitleId } : {})
               }).where(eq(schema.employees.id, item.empId));
             } else if (item.type === 'تسوية') {
               await tx.update(schema.employees).set({
@@ -7993,6 +10652,12 @@ async function startServer() {
             inMemoryEmployees[empIdx].step = item.stepAfter;
             inMemoryEmployees[empIdx].lastPromotionDate = item.dueDate;
             inMemoryEmployees[empIdx].last_promotion_date = item.dueDate;
+            if (item.newJobTitle) {
+              inMemoryEmployees[empIdx].jobTitle = item.newJobTitle;
+              inMemoryEmployees[empIdx].job_title = item.newJobTitle;
+              inMemoryEmployees[empIdx].jobTitleId = item.newJobTitleId;
+              inMemoryEmployees[empIdx].job_title_id = item.newJobTitleId;
+            }
           } else if (item.type === 'تسوية') {
             inMemoryEmployees[empIdx].lastPromotionDate = item.dueDate;
             inMemoryEmployees[empIdx].last_promotion_date = item.dueDate;

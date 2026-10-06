@@ -114,7 +114,7 @@ export default function PrintBatchEmployeesFormsModal({
   const currentPreviewEmp = targetEmployees[activePreviewIndex] || targetEmployees[0];
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-2 md:p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0 print:z-auto">
+    <div className="fixed inset-0 pointer-events-auto z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-2 md:p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0 print:z-auto">
       
       {/* Print-specific style override */}
       <style>{`

@@ -938,7 +938,7 @@ export default function OrgChart() {
 
     {/* Custom Delete Confirmation Modal */}
     {deleteConfirm.isOpen && (
-      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4" dir="rtl">
+      <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4" dir="rtl">
         <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden text-right p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200">
           <div className="flex items-center gap-3 border-b border-slate-100 pb-3">
             <div className={`w-10 h-10 rounded-full flex items-center justify-center ${deleteConfirm.hasChildren ? 'bg-amber-50 text-amber-600' : 'bg-red-50 text-red-600'}`}>

@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { apiClient } from '@/api/apiClient';
+import { apiClient, request } from '@/api/apiClient';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Edit, Plus, Trash2, Calendar, FileText, GraduationCap, DollarSign, Clock, Briefcase, Heart, MapPin, ClipboardList, CheckCircle2, XCircle, Power, ShieldCheck, QrCode, Award, ShieldAlert, User, Baby, Eye, EyeOff, Bell, AlertTriangle } from 'lucide-react';
+import { Edit, Plus, Trash2, Calendar, FileText, GraduationCap, DollarSign, Clock, Briefcase, Heart, MapPin, ClipboardList, CheckCircle2, XCircle, Power, ShieldCheck, QrCode, Award, ShieldAlert, User, Baby, Eye, EyeOff, Bell, AlertTriangle, Search, Filter, Sparkles, CheckCheck, Check } from 'lucide-react';
 import { formatCurrency, calculateSalary, getGradeLabel, getStepLabel, getActiveFinancialRates, checkEmployeeMatchesRule } from '@/lib/salaryTable';
+import { calculateEmployeeGoverningFulfillment, getUnifiedEmployeeCourses, DEFAULT_GRADE_TRAINING_REQUIREMENTS } from '@/lib/governingCoursesEngine';
 import { useToast } from '@/components/ui/use-toast';
 import EmployeeQuickAccessQR from '@/components/employee/EmployeeQuickAccessQR';
 import { fetchEducationDegreesSorted, fetchPenaltyTypesSorted, subscribeToSettingsUpdates, notifySettingsChanged } from '@/lib/settingsUtils';
@@ -276,6 +277,19 @@ export default function EmployeeDetail() {
   const [commendationTypes, setCommendationTypes] = useState([]);
   const [specializationCredits, setSpecializationCredits] = useState([]);
 
+  // Governing Courses & Central Trainings Integration
+  const [trainingsList, setTrainingsList] = useState([]);
+  const [gradeRequirements, setGradeRequirements] = useState(DEFAULT_GRADE_TRAINING_REQUIREMENTS);
+  const [exemptionRules, setExemptionRules] = useState(null);
+  const [employeeAssignments, setEmployeeAssignments] = useState({});
+
+  // Advanced Training Tab Filters
+  const [trainingYearFilter, setTrainingYearFilter] = useState('all');
+  const [trainingGradeFilter, setTrainingGradeFilter] = useState('all');
+  const [trainingCategoryFilter, setTrainingCategoryFilter] = useState('all');
+  const [trainingStatusFilter, setTrainingStatusFilter] = useState('all');
+  const [trainingSearch, setTrainingSearch] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [showQRModal, setShowQRModal] = useState(false);
   
@@ -378,7 +392,8 @@ export default function EmployeeDetail() {
   const fetchData = async () => {
     try {
       const [
-        empRes, lvRes, penRes, apprRes, evRes, trRes, qualRes, jobRes, promRes, salRes, tcRes, transRes, retRes, docRes, sRecsRes, presetsRes, delayReasonsRes, commendationTypesRes, specCreditsRes
+        empRes, lvRes, penRes, apprRes, evRes, trRes, qualRes, jobRes, promRes, salRes, tcRes, transRes, retRes, docRes, sRecsRes, presetsRes, delayReasonsRes, commendationTypesRes, specCreditsRes,
+        trainingsListRes, gradeReqsRes, exemptionRulesRes, assignmentsRes
       ] = await Promise.allSettled([
         apiClient.entities.Employee.get(id),
         apiClient.entities.LeaveRequest.filter({ employee_id: id }),
@@ -398,7 +413,11 @@ export default function EmployeeDetail() {
         apiClient.entities.AllowanceDeduction.list(),
         apiClient.promotionDelayReasons.getByEmployee(id),
         apiClient.entities.CommendationType.list().catch(() => []),
-        apiClient.entities.SpecializationCredit.filter({ employee_id: id }).catch(() => [])
+        apiClient.entities.SpecializationCredit.filter({ employee_id: id }).catch(() => []),
+        apiClient.entities.Training.list().catch(() => []),
+        request('/api/governing-courses/grade-requirements').catch(() => null),
+        request('/api/governing-courses/exemption-rules').catch(() => null),
+        request('/api/governing-courses/employee-assignments').catch(() => ({}))
       ]);
 
       if (empRes.status === 'fulfilled' && empRes.value) setEmployee(empRes.value);
@@ -419,6 +438,10 @@ export default function EmployeeDetail() {
       if (delayReasonsRes.status === 'fulfilled') setDelayReasons(delayReasonsRes.value || []);
       if (commendationTypesRes.status === 'fulfilled') setCommendationTypes(commendationTypesRes.value || []);
       if (specCreditsRes.status === 'fulfilled') setSpecializationCredits(specCreditsRes.value || []);
+      if (trainingsListRes.status === 'fulfilled' && Array.isArray(trainingsListRes.value)) setTrainingsList(trainingsListRes.value);
+      if (gradeReqsRes.status === 'fulfilled' && gradeReqsRes.value && typeof gradeReqsRes.value === 'object') setGradeRequirements(gradeReqsRes.value);
+      if (exemptionRulesRes.status === 'fulfilled' && exemptionRulesRes.value) setExemptionRules(exemptionRulesRes.value);
+      if (assignmentsRes.status === 'fulfilled' && assignmentsRes.value) setEmployeeAssignments(assignmentsRes.value);
       if (presetsRes.status === 'fulfilled') {
         setAllowanceDeductionPresets(presetsRes.value || []);
         if (presetsRes.value) {
@@ -672,14 +695,20 @@ export default function EmployeeDetail() {
     return () => unsubscribe();
   }, [id]);
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-8 h-8 border-4 border-[#1B3A6B]/20 border-t-[#1B3A6B] rounded-full animate-spin" />
-    </div>
-  );
-  if (!employee) return <div className="text-center py-12 text-slate-400">الموظف غير موجود</div>;
-
-  const salaryCalc = calculateSalary(employee);
+  const salaryCalc = employee ? calculateSalary(employee) : {
+    base_salary: 0,
+    degree_allowance: 0,
+    higher_degree_allowance: 0,
+    spouse_allowance: 0,
+    children_allowance: 0,
+    position_allowance: 0,
+    region_allowance: 0,
+    retirement_deduction: 0,
+    tax_deduction: 0,
+    absence_deduction: 0,
+    penalty_deduction: 0,
+    loan_deduction: 0
+  };
   const financialRates = getActiveFinancialRates();
 
   const classifiedCustomItems = (() => {
@@ -846,10 +875,10 @@ export default function EmployeeDetail() {
 
   // Compute leave balances dynamically
   const approvedRegularLeaves = leaves.filter(l => l.leave_type === 'اعتيادية' && l.status === 'معتمد').reduce((sum, l) => sum + (l.days_count || 0), 0);
-  const regularLeaveBalance = (employee.initial_regular_leave_balance || 0) - approvedRegularLeaves;
+  const regularLeaveBalance = (employee?.initial_regular_leave_balance || 0) - approvedRegularLeaves;
 
   const approvedSickLeaves = leaves.filter(l => l.leave_type === 'مرضية' && l.status === 'معتمد').reduce((sum, l) => sum + (l.days_count || 0), 0);
-  const sickLeaveBalance = (employee.initial_sick_leave_balance || 0) - approvedSickLeaves;
+  const sickLeaveBalance = (employee?.initial_sick_leave_balance || 0) - approvedSickLeaves;
 
   // Durations of service & Added Service records calculation
   const addedServiceRecords = serviceRecords.filter(r => (r.recordType || r.record_type) !== 'تمديد خدمة');
@@ -860,9 +889,9 @@ export default function EmployeeDetail() {
   let totalAddedDays = 0;
 
   addedServiceRecords.forEach(r => {
-    totalAddedYears += parseInt(r.years || 0) || 0;
-    totalAddedMonths += parseInt(r.months || 0) || 0;
-    totalAddedDays += parseInt(r.days || 0) || 0;
+    totalAddedYears += parseInt(r.years ?? r.calculated_years ?? r.calculatedYears ?? 0) || 0;
+    totalAddedMonths += parseInt(r.months ?? r.calculated_months ?? r.calculatedMonths ?? 0) || 0;
+    totalAddedDays += parseInt(r.days ?? r.calculated_days ?? r.calculatedDays ?? 0) || 0;
   });
 
   if (totalAddedDays >= 30) {
@@ -895,27 +924,91 @@ export default function EmployeeDetail() {
   const hasExtensionService = (finalExtYears > 0 || finalExtMonths > 0 || finalExtDays > 0);
   const hasAddedOrExtension = hasAddedService || hasExtensionService;
 
-  const actualServiceDuration = calculateServiceDuration(employee.first_appointment_date);
-  const totalServiceDuration = calculateTotalCumulativeService(
+  const actualServiceDuration = calculateServiceDuration(employee?.first_appointment_date);
+  const totalServiceDuration = employee ? calculateTotalCumulativeService(
     employee.first_appointment_date,
     totalAddedYears,
     totalAddedMonths,
     totalAddedDays
-  );
-  const companyServiceDuration = calculateServiceDuration(employee.current_appointment_date);
-  const oilSectorServiceDuration = calculateServiceDuration(employee.oil_sector_start_date);
+  ) : '—';
+  const companyServiceDuration = calculateServiceDuration(employee?.current_appointment_date);
+  const oilSectorServiceDuration = calculateServiceDuration(employee?.oil_sector_start_date);
+
+  // Unified Training Courses from all sources (Direct, Central Trainings & Specialization Credits)
+  const unifiedEmployeeCourses = useMemo(() => {
+    return getUnifiedEmployeeCourses(employee, trainingCourses, trainingsList, trainings, specializationCredits);
+  }, [employee, trainingCourses, trainingsList, trainings, specializationCredits]);
+
+  // Distinct training years for filtering
+  const distinctTrainingYears = useMemo(() => {
+    const set = new Set();
+    unifiedEmployeeCourses.forEach((c) => {
+      if (c.year) set.add(String(c.year));
+      else if (c.startDate) set.add(String(c.startDate).substring(0, 4));
+    });
+    return Array.from(set).filter(Boolean).sort((a, b) => b.localeCompare(a));
+  }, [unifiedEmployeeCourses]);
+
+  // Distinct training grades for filtering
+  const distinctTrainingGrades = useMemo(() => {
+    const set = new Set();
+    if (employee?.grade) set.add(parseInt(employee.grade));
+    unifiedEmployeeCourses.forEach((c) => {
+      if (c.gradeAtTime) set.add(parseInt(c.gradeAtTime));
+    });
+    return Array.from(set).filter(Boolean).sort((a, b) => a - b);
+  }, [employee, unifiedEmployeeCourses]);
+
+  // Filtered Training Courses for Tab display
+  const filteredTrainingCourses = useMemo(() => {
+    return unifiedEmployeeCourses.filter((c) => {
+      const matchYear = trainingYearFilter === 'all' || String(c.year) === String(trainingYearFilter) || (c.startDate && String(c.startDate).startsWith(String(trainingYearFilter)));
+      const matchGrade = trainingGradeFilter === 'all' || parseInt(c.gradeAtTime) === parseInt(trainingGradeFilter);
+      const matchCategory = trainingCategoryFilter === 'all' || (c.category && c.category.includes(trainingCategoryFilter));
+      
+      let matchStatus = true;
+      if (trainingStatusFilter === 'passed') matchStatus = c.isPassed;
+      if (trainingStatusFilter === 'ongoing') matchStatus = !c.isPassed && (c.result === 'مستمر' || c.result === 'مشارك');
+      if (trainingStatusFilter === 'failed') matchStatus = !c.isPassed && c.result === 'لم يجتز';
+
+      const q = trainingSearch.toLowerCase().trim();
+      const matchSearch = !q || 
+        (c.courseName && c.courseName.toLowerCase().includes(q)) || 
+        (c.institution && c.institution.toLowerCase().includes(q)) || 
+        (c.category && c.category.toLowerCase().includes(q)) || 
+        (c.orderNumber && String(c.orderNumber).toLowerCase().includes(q));
+
+      return matchYear && matchGrade && matchCategory && matchStatus && matchSearch;
+    });
+  }, [unifiedEmployeeCourses, trainingYearFilter, trainingGradeFilter, trainingCategoryFilter, trainingStatusFilter, trainingSearch]);
+
+  // Cumulative Governing Courses Fulfillment for Promotion
+  const governingFulfillment = useMemo(() => {
+    if (!employee) return null;
+    return calculateEmployeeGoverningFulfillment({
+      emp: employee,
+      gradeRequirements,
+      exemptionRules,
+      employeeAssignments,
+      trainingCourses,
+      trainingsList,
+      enrollmentsList: trainings,
+      specializationCredits,
+    });
+  }, [employee, gradeRequirements, exemptionRules, employeeAssignments, trainingCourses, trainingsList, trainings, specializationCredits]);
 
   // Workplace representation
-  const workplace = employee.section || employee.department || 'غير محدد';
+  const workplace = employee?.section || employee?.department || 'غير محدد';
 
   // Active qualification representation
-  const activeQualification = qualifications.find(q => (q.is_active !== false && q.isActive !== false) && (q.education_level === employee.education_level || q.level === employee.education_level))
+  const activeQualification = employee ? (qualifications.find(q => (q.is_active !== false && q.isActive !== false) && (q.education_level === employee.education_level || q.level === employee.education_level))
     || qualifications.find(q => q.is_active !== false && q.isActive !== false) 
     || qualifications[0] 
-    || null;
+    || null) : null;
 
   // Qualification Order Display
   const qualificationOrderDisplay = (() => {
+    if (!employee) return '—';
     const raw = activeQualification?.evaluation_order || 
                 activeQualification?.evaluationOrder || 
                 activeQualification?.equation_number || 
@@ -1056,7 +1149,7 @@ export default function EmployeeDetail() {
       defaultValues = { document_name: '', document_type: 'أمر إداري', issue_date: '', issue_authority: '', file_path: '', notes: '' };
     } else if (type === 'service_record') {
       defaultValues = { 
-        record_type: 'خدمة محتسبة', 
+        record_type: 'خدمة عسكرية إلزامية (خدمة العلم)', 
         order_number: '', 
         order_date: new Date().toISOString().split('T')[0], 
         years: 1, 
@@ -1193,14 +1286,14 @@ export default function EmployeeDetail() {
       };
     } else if (type === 'service_record') {
       editValues = {
-        record_type: record.record_type || record.recordType || 'خدمة محتسبة',
+        record_type: record.record_type || record.recordType || 'خدمة عسكرية إلزامية (خدمة العلم)',
         order_number: record.order_number || record.orderNumber || '',
         order_date: record.order_date || record.orderDate || new Date().toISOString().split('T')[0],
-        years: record.years !== undefined ? record.years : 1,
-        months: record.months !== undefined ? record.months : 0,
-        days: record.days !== undefined ? record.days : 0,
-        purpose: record.purpose || 'promotion_allowance_pension',
-        reason: record.reason || '',
+        years: record.years !== undefined ? record.years : (record.calculated_years || record.calculatedYears || 0),
+        months: record.months !== undefined ? record.months : (record.calculated_months || record.calculatedMonths || 0),
+        days: record.days !== undefined ? record.days : (record.calculated_days || record.calculatedDays || 0),
+        purpose: record.purpose || (record.is_counted_for_promotion === false ? 'pension_only' : 'promotion_allowance_pension'),
+        reason: record.reason || record.notes || '',
         notes: record.notes || ''
       };
     } else if (type === 'appreciation') {
@@ -1386,22 +1479,68 @@ export default function EmployeeDetail() {
       }
       else if (activeModal === 'promotion') clientName = 'PromotionIncrement';
       else if (activeModal === 'evaluation') clientName = 'AnnualEvaluation';
-      else if (activeModal === 'training_course') clientName = 'TrainingCourse';
+      else if (activeModal === 'training_course') {
+        clientName = 'TrainingCourse';
+        if (!modalForm.course_name) {
+          toast({ title: 'تنبيه', description: 'يرجى إدخال اسم الدورة التدريبية', variant: 'destructive' });
+          setModalSaving(false);
+          return;
+        }
+        const days = parseInt(modalForm.days) || (modalForm.duration ? parseInt(modalForm.duration) : 5);
+        const hours = parseInt(modalForm.hours) || (days * 4);
+        const yr = modalForm.year || (modalForm.start_date ? modalForm.start_date.substring(0, 4) : new Date().getFullYear().toString());
+        payload.course_name = modalForm.course_name;
+        payload.category = modalForm.category || 'اختصاص';
+        payload.days = days;
+        payload.hours = hours;
+        payload.year = yr;
+        payload.grade_at_time = parseInt(modalForm.grade_at_time) || parseInt(employee?.grade) || 8;
+        payload.institution = modalForm.institution || 'مركز التدريب والتطوير';
+        payload.start_date = modalForm.start_date || '';
+        payload.end_date = modalForm.end_date || '';
+        payload.order_number = modalForm.order_number || '';
+        payload.order_date = modalForm.order_date || '';
+        payload.result = modalForm.result || 'اجتاز';
+        payload.notes = modalForm.notes || '';
+      }
       else if (activeModal === 'transfer') clientName = 'Transfer';
       else if (activeModal === 'retirement') clientName = 'Retirement';
       else if (activeModal === 'document') clientName = 'Document';
       else if (activeModal === 'service_record') {
         clientName = 'ServiceRecord';
+        if (!modalForm.order_number || !modalForm.order_date) {
+          toast({ title: 'تنبيه', description: 'يرجى إدخال رقم وتاريخ الأمر الإداري لاحتساب الخدمة', variant: 'destructive' });
+          setModalSaving(false);
+          return;
+        }
+        const y = parseInt(modalForm.years) || 0;
+        const m = parseInt(modalForm.months) || 0;
+        const d = parseInt(modalForm.days) || 0;
+        if (y === 0 && m === 0 && d === 0) {
+          toast({ title: 'تنبيه', description: 'يرجى إدخال مدة الخدمة المضافة (سنوات أو أشهر أو أيام)', variant: 'destructive' });
+          setModalSaving(false);
+          return;
+        }
+        payload.years = y;
+        payload.months = m;
+        payload.days = d;
+        payload.record_type = modalForm.record_type || 'خدمة عسكرية إلزامية (خدمة العلم)';
+        payload.purpose = modalForm.purpose || 'promotion_allowance_pension';
+        payload.order_number = modalForm.order_number;
+        payload.order_date = modalForm.order_date;
+        payload.reason = modalForm.reason || '';
+        payload.notes = modalForm.notes || '';
+
         try {
           await apiClient.entities.ServiceCredit.create({
             employee_id: parseInt(id),
-            credit_type: modalForm.record_type || 'أخرى',
-            calculated_years: parseInt(modalForm.years) || 0,
-            calculated_months: parseInt(modalForm.months) || 0,
-            calculated_days: parseInt(modalForm.days) || 0,
+            credit_type: modalForm.record_type || 'خدمة محتسبة',
+            calculated_years: y,
+            calculated_months: m,
+            calculated_days: d,
             order_number: modalForm.order_number,
             order_date: modalForm.order_date,
-            purpose: modalForm.purpose || 'علاوة_وترفيع',
+            purpose: modalForm.purpose === 'pension_only' ? 'تقاعد_فقط' : 'علاوة_وترفيع',
             is_counted_for_promotion: modalForm.purpose !== 'pension_only',
             is_counted_for_retirement: true,
             notes: modalForm.notes || modalForm.reason || ''
@@ -1663,6 +1802,14 @@ export default function EmployeeDetail() {
     }
   };
 
+  if (loading) return (
+    <div className="flex items-center justify-center h-64">
+      <div className="w-8 h-8 border-4 border-[#1B3A6B]/20 border-t-[#1B3A6B] rounded-full animate-spin" />
+    </div>
+  );
+
+  if (!employee) return <div className="text-center py-12 text-slate-400">الموظف غير موجود</div>;
+
   return (
     <div className="space-y-5" dir="rtl">
       {/* Header */}
@@ -1743,19 +1890,59 @@ export default function EmployeeDetail() {
               </span>
             </div>
 
-            {/* 2. رقم الشركة / الرقم الوظيفي */}
+            {/* 2. رقم الشركة */}
             <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">رقم الشركة / الرقم الوظيفي:</span>
+              <span className="text-slate-500 font-medium shrink-0">رقم الشركة:</span>
               <span className="font-mono font-bold text-indigo-900 text-right break-words">
-                {employee.company_number || 'بدون'} / {employee.civil_service_number || 'بدون'}
+                {employee.company_number || 'بدون'}
               </span>
             </div>
 
-            {/* 3. الرقم الوطني / بطاقة السكن */}
+            {/* 3. الرقم الوظيفي */}
             <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">الرقم الوطني / بطاقة السكن:</span>
+              <span className="text-slate-500 font-medium shrink-0">الرقم الوظيفي:</span>
+              <span className="font-mono font-bold text-indigo-900 text-right break-words">
+                {employee.civil_service_number || 'بدون'}
+              </span>
+            </div>
+
+            {/* 4. رقم الهوية */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">رقم الهوية:</span>
+              <span className="font-mono font-bold text-indigo-900 text-right break-words">
+                {employee.employee_id_number || 'بدون'}
+              </span>
+            </div>
+
+            {/* 5. الرقم الوطني */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">الرقم الوطني:</span>
               <span className="font-mono font-bold text-slate-800 text-right break-words">
-                {employee.national_id || 'غير متوفر'} {employee.residence_card ? `(سكن: ${employee.residence_card})` : ''}
+                {employee.national_id || 'غير متوفر'}
+              </span>
+            </div>
+
+            {/* 6. رقم الهاتف */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">رقم الهاتف:</span>
+              <span className="font-bold text-slate-700 text-right break-words">
+                {employee.phone || 'بدون هاتف'}
+              </span>
+            </div>
+
+            {/* 7. عنوان السكن */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">عنوان السكن:</span>
+              <span className="font-bold text-slate-700 text-right break-words leading-relaxed">
+                {employee.address || 'غير محدد'}
+              </span>
+            </div>
+
+            {/* 8. بطاقة السكن */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">بطاقة السكن:</span>
+              <span className="font-mono font-bold text-slate-800 text-right break-words">
+                {employee.residence_card || 'غير متوفر'}
               </span>
             </div>
 
@@ -1764,14 +1951,6 @@ export default function EmployeeDetail() {
               <span className="text-slate-500 font-medium shrink-0">المواليد ومحل الولادة:</span>
               <span className="font-bold text-slate-800 text-right break-words">
                 {employee.birth_date || '—'} {employeeAge ? `(${employeeAge} سنة)` : ''} {employee.birth_place ? `• ${employee.birth_place}` : ''}
-              </span>
-            </div>
-
-            {/* 5. الهاتف ومكان السكن */}
-            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">رقم الهاتف وعنوان السكن:</span>
-              <span className="font-bold text-slate-700 text-right break-words leading-relaxed">
-                {employee.phone || 'بدون هاتف'} &bull; {employee.address || 'غير محدد'}
               </span>
             </div>
 
@@ -1859,59 +2038,69 @@ export default function EmployeeDetail() {
               <span className="font-bold text-[#1B3A6B] text-right break-words">{employee.job_title || 'غير محدد'}</span>
             </div>
 
-            {/* 2. الدرجة والمرحلة (أسفل العنوان الوظيفي مباشرة) */}
+            {/* 2. نوع الخدمة */}
             <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg bg-slate-50/80 border border-slate-200/60 gap-1">
-              <span className="text-slate-600 font-semibold shrink-0">الدرجة والمرحلة الوظيفية:</span>
+              <span className="text-slate-600 font-semibold shrink-0">نوع الخدمة:</span>
               <span className="font-bold text-[#1B3A6B] text-right break-words">
-                {employee.grade >= 11 ? getGradeLabel(employee.grade) : `الدرجة ${getGradeLabel(employee.grade)}`} / المرحلة {employee.step}
+                {employee.service_type || 'دائم'}
               </span>
             </div>
 
-            {/* 3. الجهة والموقع */}
+            {/* 3. الدرجة مع تاريخ آخر ترقية */}
             <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">الجهة والموقع:</span>
+              <span className="text-slate-500 font-medium shrink-0">الدرجة (تاريخ آخر ترقية):</span>
+              <span className="font-mono font-semibold text-slate-700 text-right break-words text-[11px]">
+                {employee.grade >= 11 ? getGradeLabel(employee.grade) : `الدرجة ${getGradeLabel(employee.grade)}`} &bull; {employee.grade_date || employee.last_promotion_date || '—'}
+              </span>
+            </div>
+
+            {/* 4. المرحلة مع تاريخ آخر علاوة */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">المرحلة (تاريخ آخر علاوة):</span>
+              <span className="font-mono font-semibold text-slate-700 text-right break-words text-[11px]">
+                المرحلة {employee.step} &bull; {employee.last_increment_date || employee.lastIncrementDate || employee.grade_date || '—'}
+              </span>
+            </div>
+
+            {/* 5. جهة العمل */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">جهة العمل:</span>
               <span className="font-bold text-slate-800 text-right break-words leading-relaxed">
-                {employee.section || employee.department || 'الدائرة العامة'} &bull; {employee.work_location || 'المقر الرئيسي'}
+                {employee.section || employee.department || 'الدائرة العامة'}
               </span>
             </div>
 
-            {/* 4. المسؤولية والتكليف الإداري */}
+            {/* 6. موقع العمل */}
             <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">المسؤولية الإدارية:</span>
+              <span className="text-slate-500 font-medium shrink-0">موقع العمل:</span>
+              <span className="font-bold text-slate-800 text-right break-words leading-relaxed">
+                {employee.work_location || 'المقر الرئيسي'}
+              </span>
+            </div>
+
+            {/* 7. طبيعة العمل */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">طبيعة العمل:</span>
+              <span className="font-bold text-slate-700 text-right break-words">
+                {employee.work_shift_type || 'صباحي'}
+              </span>
+            </div>
+
+            {/* 7.1 نوع المناوبة (في حال مناوب، أسفل طبيعة العمل مباشرة) */}
+            {employee.work_shift_type === 'مناوب' && (
+              <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+                <span className="text-slate-500 font-medium shrink-0">نوع المناوبة:</span>
+                <span className="font-bold text-slate-700 text-right break-words">
+                  {employee.shift_system_name || 'غير محدد'}
+                </span>
+              </div>
+            )}
+
+            {/* 8. المسؤولية */}
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">المسؤولية:</span>
               <span className="font-bold text-amber-800 text-right break-words">
                 {employee.primary_responsibility || 'بلا مسؤولية'} {employee.acting_responsibility && employee.acting_responsibility !== 'بلا وكالة' ? `(${employee.acting_responsibility})` : ''}
-              </span>
-            </div>
-
-            {/* 5. طبيعة الدوام ونوع الخدمة */}
-            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">الدوام ونوع الخدمة:</span>
-              <span className="font-bold text-slate-700 text-right break-words">
-                {employee.work_shift_type || 'صباحي'} &bull; ملاك {employee.service_type || 'دائم'}
-              </span>
-            </div>
-
-            {/* 6. تاريخ المباشرة الأولى (أسفل القائمة) */}
-            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">تاريخ المباشرة الأولى:</span>
-              <span className="font-bold text-slate-700 text-right break-words">
-                {employee.first_appointment_date || employee.appointment_date || '—'} {employee.appointment_order ? `(أمر: ${employee.appointment_order})` : ''}
-              </span>
-            </div>
-
-            {/* 7. تاريخ المباشرة في القطاع النفطي (أسفل تاريخ المباشرة الأولى) */}
-            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">تاريخ المباشرة في القطاع النفطي:</span>
-              <span className="font-bold text-amber-800 text-right break-words">
-                {employee.oil_sector_start_date || 'غير محدد'}
-              </span>
-            </div>
-
-            {/* 8. تاريخ المباشرة في هذه الشركة (أسفل تاريخ القطاع النفطي) */}
-            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">تاريخ المباشرة في هذه الشركة:</span>
-              <span className="font-bold text-[#1B3A6B] text-right break-words">
-                {employee.current_appointment_date || 'غير محدد'}
               </span>
             </div>
           </div>
@@ -1989,6 +2178,12 @@ export default function EmployeeDetail() {
           </div>
 
           <div className="space-y-1.5 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">تاريخ المباشرة الأولى:</span>
+              <span className="font-bold text-slate-700 text-right break-words">
+                {employee.first_appointment_date || employee.appointment_date || '—'} {employee.appointment_order ? `(أمر: ${employee.appointment_order})` : ''}
+              </span>
+            </div>
             <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg bg-emerald-50/70 border border-emerald-100/80 gap-1">
               <span className="font-bold text-emerald-900 flex items-center gap-1.5 shrink-0">
                 <ShieldCheck size={13} className="text-emerald-600 shrink-0" />
@@ -1998,10 +2193,22 @@ export default function EmployeeDetail() {
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">تاريخ المباشرة في القطاع النفطي:</span>
+              <span className="font-bold text-amber-800 text-right break-words">
+                {employee.oil_sector_start_date || 'غير محدد'}
+              </span>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
               <span className="text-slate-500 font-medium shrink-0">الخدمة في القطاع النفطي:</span>
               <span className="font-bold text-amber-800 text-right break-words">{oilSectorServiceDuration}</span>
             </div>
 
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
+              <span className="text-slate-500 font-medium shrink-0">تاريخ المباشرة في هذه الشركة:</span>
+              <span className="font-bold text-[#1B3A6B] text-right break-words">
+                {employee.current_appointment_date || 'غير محدد'}
+              </span>
+            </div>
             <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
               <span className="text-slate-500 font-medium shrink-0">الخدمة في هذه الشركة:</span>
               <span className="font-bold text-[#1B3A6B] text-right break-words">{companyServiceDuration}</span>
@@ -2061,10 +2268,6 @@ export default function EmployeeDetail() {
               <span className="font-bold text-rose-600 text-right break-words">-{formatCurrency(displayedTotalDeductions)}</span>
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between py-1 px-2 rounded-lg hover:bg-slate-50 transition-colors gap-1">
-              <span className="text-slate-500 font-medium shrink-0">التسكين المالي لسلم 2023:</span>
-              <span className="font-bold text-slate-700 text-right break-words">الدرجة {getGradeLabel(employee.grade)} / م{employee.step}</span>
-            </div>
           </div>
         </div>
 
@@ -2120,7 +2323,7 @@ export default function EmployeeDetail() {
           <TabsTrigger value="leaves" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">الإجازات ({leaves.length})</TabsTrigger>
           <TabsTrigger value="penalties" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">التشكرات والعقوبات ({appreciations.length + penalties.length})</TabsTrigger>
           <TabsTrigger value="evaluations" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">تقييم الأداء ({evaluations.length})</TabsTrigger>
-          <TabsTrigger value="training" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">التدريب ({trainingCourses.length})</TabsTrigger>
+          <TabsTrigger value="training" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">التدريب والتطوير ({unifiedEmployeeCourses.length})</TabsTrigger>
           <TabsTrigger value="transfers" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">التنقلات ({transfers.length})</TabsTrigger>
           <TabsTrigger value="retirement" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">ملف التقاعد ({retirements.length})</TabsTrigger>
           <TabsTrigger value="documents" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">المستندات والمرفقات ({documents.length})</TabsTrigger>
@@ -2344,7 +2547,10 @@ export default function EmployeeDetail() {
                 <div className="space-y-1">
                   <InfoRow label="الدرجة الوظيفية" value={employee.grade >= 11 ? getGradeLabel(employee.grade) : `الدرجة ${getGradeLabel(employee.grade)}`} />
                   <InfoRow label="المرحلة" value={`المرحلة ${employee.step}`} />
-                  <InfoRow label="تاريخ الدرجة الحالية" value={employee.grade_date || 'غير محدد'} />
+                  <InfoRow label="تاريخ الدرجة الحالية (آخر ترفيع)" value={employee.grade_date || employee.last_promotion_date || 'غير محدد'} />
+                  <InfoRow label="تاريخ العلاوة الحالية (آخر علاوة سنوية)" value={employee.last_increment_date || employee.lastIncrementDate || employee.grade_date || 'غير محدد'} />
+                  <InfoRow label="تاريخ استحقاق العلاوة القادمة" value={employee.next_increment_due_date || employee.nextIncrementDueDate || 'قيد الاحتساب عند الاستحقاق'} />
+                  <InfoRow label="تاريخ استحقاق الترفيع القادم" value={employee.next_promotion_due_date || employee.nextPromotionDueDate || 'قيد الاحتساب عند الاستحقاق'} />
                 </div>
               </div>
 
@@ -2521,11 +2727,15 @@ export default function EmployeeDetail() {
                           <td className="px-4 py-2.5 font-mono text-xs text-slate-700">{rec.order_number || rec.orderNumber || '—'}</td>
                           <td className="px-4 py-2.5 font-mono text-xs text-slate-600">{rec.order_date || rec.orderDate || '—'}</td>
                           <td className="px-4 py-2.5 font-bold text-xs text-emerald-700">
-                            {rec.years || 0} سنة و {rec.months || 0} شهر و {rec.days || 0} يوم
+                            {formatDurationParts(
+                              rec.years ?? rec.calculated_years ?? rec.calculatedYears ?? 0,
+                              rec.months ?? rec.calculated_months ?? rec.calculatedMonths ?? 0,
+                              rec.days ?? rec.calculated_days ?? rec.calculatedDays ?? 0
+                            )}
                           </td>
                           <td className="px-4 py-2.5 text-xs text-slate-600">
                             <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${rec.purpose === 'pension_only' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
-                              {rec.purpose === 'pension_only' ? 'لاغراض التقاعد فقط' : 'للترقية والعلاوة والتقاعد'}
+                              {rec.purpose === 'pension_only' ? 'لأغراض التقاعد فقط' : 'للترقية والعلاوة والتقاعد'}
                             </span>
                           </td>
                           <td className="px-4 py-2.5 text-xs text-slate-500">{rec.reason || rec.notes || '—'}</td>
@@ -2773,18 +2983,6 @@ export default function EmployeeDetail() {
         {/* 3. Qualifications Tab */}
         <TabsContent value="qualifications" className="mt-5">
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-            
-            {/* Explanatory Banner */}
-            <div className="bg-blue-50/70 border border-blue-200/80 rounded-xl p-4 flex items-start gap-3 text-xs text-blue-900">
-              <ShieldCheck className="text-blue-600 shrink-0 mt-0.5" size={18} />
-              <div>
-                <p className="font-bold text-sm mb-1 text-blue-950">احتساب مخصصات الشهادة الدراسية تلقائياً:</p>
-                <p className="leading-relaxed">
-                  عند إضافة شهادة دراسية جديدة، تُحتسب مخصصات الشهادة بناءً على <strong>أحدث شهادة مفعلة</strong> للموظف. عند تعطيل الشهادة المضافة، يعود النظام تلقائياً للشهادة السابقة المفعلة وتحديث مخصصات الراتب بشكل فوري تلقائياً.
-                </p>
-              </div>
-            </div>
-
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-bold text-[#1B3A6B]">التحصيل الدراسي والشهادات الحاصل عليها الموظف</h3>
@@ -2898,97 +3096,6 @@ export default function EmployeeDetail() {
                   {qualifications.length === 0 && (
                     <tr>
                       <td colSpan={7} className="px-4 py-8 text-center text-slate-400">لا توجد مؤهلات تاريخية مسجلة</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Phase 5: Specialization Courses for Degree Track (دورات الاختصاص لاحتساب الشهادات) */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
-              <div>
-                <h3 className="text-base font-bold text-indigo-950 flex items-center gap-2">
-                  <GraduationCap className="text-indigo-600" size={18} />
-                  دورات الاختصاص المعتمدة لاحتساب الشهادة أثناء الخدمة
-                  {specializationCredits.length > 0 && (
-                    <span className="bg-indigo-100 text-indigo-800 text-xs font-black px-2 py-0.5 rounded-full border border-indigo-200">
-                      {specializationCredits.reduce((sum, c) => sum + (parseInt(c.weeks) || 0), 0)} أسبوع مسجل
-                    </span>
-                  )}
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  تسجيل وتوثيق دورات التدريب التخصصي المطلوبة لاستكمال متطلبات احتساب الشهادة أثناء الخدمة (شرط أسبوعين كحد أدنى لكل ترفيع).
-                </p>
-              </div>
-
-              <Button
-                size="sm"
-                onClick={() => openAddModal('specialization_credit')}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl gap-1"
-              >
-                <Plus size={14} /> إضافة دورة اختصاص
-              </Button>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-indigo-50/50 text-indigo-950 border-b border-indigo-100">
-                    <th className="text-right px-4 py-2.5 font-bold">اسم الدورة التخصصية</th>
-                    <th className="text-center px-4 py-2.5 font-bold">المدة (بالأسابيع)</th>
-                    <th className="text-right px-4 py-2.5 font-bold">رقم الأمر الإداري</th>
-                    <th className="text-right px-4 py-2.5 font-bold">تاريخ الأمر</th>
-                    <th className="text-right px-4 py-2.5 font-bold">الفترة</th>
-                    <th className="text-right px-4 py-2.5 font-bold">ملاحظات</th>
-                    <th className="text-center px-4 py-2.5 font-bold">إجراءات</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {specializationCredits.map((sc) => (
-                    <tr key={sc.id} className="border-b border-slate-50 hover:bg-indigo-50/20">
-                      <td className="px-4 py-2.5 font-bold text-slate-800">{sc.course_name || sc.courseName}</td>
-                      <td className="px-4 py-2.5 text-center font-bold">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                          {sc.weeks} {parseInt(sc.weeks) === 1 ? 'أسبوع' : parseInt(sc.weeks) === 2 ? 'أسبوعان' : 'أسابيع'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-slate-700">{sc.order_number || sc.orderNumber || '—'}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-slate-600">{sc.order_date || sc.orderDate || '—'}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-slate-500">
-                        {sc.start_date || sc.startDate ? `${sc.start_date || sc.startDate} إلى ${sc.end_date || sc.endDate || '...'}` : '—'}
-                      </td>
-                      <td className="px-4 py-2.5 text-slate-500 text-xs truncate max-w-xs">{sc.notes || '—'}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg"
-                            title="تعديل دورة الاختصاص"
-                            onClick={() => openEditModal('specialization_credit', sc)}
-                          >
-                            <Edit size={14} />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg"
-                            title="حذف"
-                            onClick={() => deleteRecord('SpecializationCredit', sc.id)}
-                          >
-                            <Trash2 size={14} />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {specializationCredits.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
-                        لا توجد دورات اختصاص مسجلة للموظف
-                      </td>
                     </tr>
                   )}
                 </tbody>
@@ -3854,55 +3961,563 @@ export default function EmployeeDetail() {
           </div>
         </TabsContent>
 
-        {/* 9. Training Tab */}
-        <TabsContent value="training" className="mt-5">
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-              <h3 className="text-base font-bold text-[#1B3A6B]">الدورات التدريبية المعتمدة</h3>
-              <Button size="sm" onClick={() => openAddModal('training_course')} className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-xl gap-1">
-                <Plus size={14} /> تسجيل دورة تدريبية
+        {/* 9. Training Tab & Governing Courses Cumulative Fulfillment */}
+        <TabsContent value="training" className="mt-5 space-y-6">
+          
+          {/* Card 1: بطاقة استيفاء الحتميات التدريبية للترقية القادمة (Target Promotion Requirements Gate) */}
+          <div className="bg-gradient-to-br from-white via-slate-50/50 to-blue-50/30 rounded-3xl p-6 shadow-xs border border-slate-200/80 space-y-5">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-slate-200/70">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="p-2.5 rounded-2xl bg-[#1B3A6B] text-white shadow-xs">
+                    <Award className="w-5 h-5 text-amber-300" />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-black text-[#1B3A6B]">
+                        الدورات التدريبية الحتمية المقررة لاستحقاق الترفيع (الترقية)
+                      </h3>
+                      <span className="text-xs px-3 py-1 rounded-full font-bold bg-blue-100/90 text-[#1B3A6B] border border-blue-200 shadow-2xs">
+                        {governingFulfillment?.currentGradeLabel || `الدرجة ${employee?.grade || 8}`} ← {governingFulfillment?.targetGradeLabel || `الدرجة ${Math.max(1, (employee?.grade || 8) - 1)}`}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+                      <span>التحصيل الدراسي المعتمد: <strong className="text-slate-800 font-bold">{employee?.education_level || employee?.qualification || 'غير محدد'}</strong></span>
+                      <span className="text-slate-300">•</span>
+                      <span>تحديد ما تم استيفاؤه بدقة وما هو مطلوب لاستكمال الترفيع للدرجة التالية.</span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Status Badge & Overall Progress */}
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <span className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-black border shadow-2xs ${governingFulfillment?.fulfillmentBadgeClass || 'bg-slate-100 text-slate-700'}`}>
+                    <span>{governingFulfillment?.fulfillmentStatusLabel}</span>
+                  </span>
+                  {!governingFulfillment?.exemptionInfo?.isExempt && (
+                    <span className="text-[11px] text-slate-500 font-bold block mt-1 font-mono">
+                      نسبة الاستيفاء: {governingFulfillment?.progressPercent || 0}% ({governingFulfillment?.satisfiedCount || 0} من {governingFulfillment?.totalRequirements || 0} متطلبات)
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Metrics Bar if not exempt */}
+            {!governingFulfillment?.exemptionInfo?.isExempt && (
+              <div className="space-y-2 bg-white/80 p-4 rounded-2xl border border-slate-200/80">
+                <div className="flex justify-between items-center text-xs font-bold">
+                  <span className="text-slate-700 flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-500" />
+                    التقدم التراكمي الإجمالي للحتميات المقررة:
+                  </span>
+                  <span className="text-[#1B3A6B] font-mono font-black text-sm">{governingFulfillment?.progressPercent || 0}%</span>
+                </div>
+                <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden p-0.5 border border-slate-200/60">
+                  <div
+                    className={`h-full transition-all duration-500 rounded-full ${
+                      (governingFulfillment?.progressPercent || 0) === 100
+                        ? 'bg-gradient-to-r from-emerald-500 to-emerald-600'
+                        : (governingFulfillment?.progressPercent || 0) > 0
+                        ? 'bg-gradient-to-r from-amber-500 to-amber-600'
+                        : 'bg-slate-300'
+                    }`}
+                    style={{ width: `${governingFulfillment?.progressPercent || 0}%` }}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-500 pt-1">
+                  <span className="flex items-center gap-1 text-emerald-700 font-bold">
+                    <CheckCircle2 size={13} />
+                    المستوفى بالكامل: {governingFulfillment?.satisfiedRequirements?.length || 0} متطلبات
+                  </span>
+                  <span className="flex items-center gap-1 text-amber-700 font-bold">
+                    <Clock size={13} />
+                    المتبقي للاستكمال: {governingFulfillment?.pendingRequirements?.length || 0} متطلبات
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Exemption Notice Card if exempt based on dynamic exemption rules */}
+            {governingFulfillment?.exemptionInfo?.isExempt && (
+              <div className="bg-purple-50/90 border-2 border-purple-200 rounded-2xl p-5 flex items-start gap-4 shadow-xs">
+                <div className="p-3 rounded-2xl bg-purple-100 text-purple-700 shrink-0 mt-0.5 shadow-2xs">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <div className="space-y-1.5 flex-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="font-black text-sm text-purple-950 flex items-center gap-2">
+                      <span>الموظف معفى رسمياً من شرط الدورات الحتمية</span>
+                      {governingFulfillment.exemptionInfo.sourceLabel && (
+                        <span className="text-[10px] bg-purple-200/80 text-purple-900 px-2 py-0.5 rounded-full font-bold">
+                          {governingFulfillment.exemptionInfo.sourceLabel}
+                        </span>
+                      )}
+                    </h4>
+                    <span className="text-xs font-black text-purple-800 bg-white px-2.5 py-1 rounded-full border border-purple-200">
+                      نسبة الاستيفاء: 100% (معفى حكماً)
+                    </span>
+                  </div>
+                  <p className="text-xs text-purple-900 leading-relaxed font-medium">
+                    {governingFulfillment.exemptionInfo.reason}
+                    {governingFulfillment.exemptionInfo.orderNumber && (
+                      <span className="block font-mono mt-1 font-bold">
+                        الأمر الإداري للإعفاء: {governingFulfillment.exemptionInfo.orderNumber} ({governingFulfillment.exemptionInfo.orderDate || '—'})
+                      </span>
+                    )}
+                  </p>
+                  <div className="pt-1">
+                    <span className="inline-block text-[11px] font-bold bg-white/90 text-purple-950 px-2.5 py-1 rounded-lg border border-purple-200 shadow-2xs">
+                      🛡️ يُعتبر شرط التدريب مستوفى حكماً 100% لأغراض الترقية للدرجة {governingFulfillment?.targetGradeLabel || governingFulfillment?.targetGradeNum} وفق ضوابط وقواعد الإعفاء المعتمدة.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Detailed Requirements Section: Separated Pending vs Satisfied */}
+            {(!governingFulfillment?.exemptionInfo?.isExempt && (governingFulfillment?.reqEvaluations || []).length > 0) && (
+              <div className="space-y-5">
+                
+                {/* 1. Pending & Required Courses (ما هو مطلوب لاستكمال الترفيع) */}
+                {governingFulfillment.pendingRequirements && governingFulfillment.pendingRequirements.length > 0 && (
+                  <div className="space-y-3 bg-amber-50/40 p-4 rounded-2xl border border-amber-200/80">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200/60 pb-2.5">
+                      <h4 className="text-xs font-black text-amber-950 flex items-center gap-2">
+                        <span className="p-1 rounded-lg bg-amber-200 text-amber-900">
+                          <Clock size={14} />
+                        </span>
+                        <span>المتطلبات والدورات الحتمية المطلوبة والمتبقية ({governingFulfillment.pendingRequirements.length}):</span>
+                      </h4>
+                      <span className="text-[11px] text-amber-800 font-bold bg-white/80 px-2.5 py-0.5 rounded-full border border-amber-200">
+                        مطلوب استيفاؤها للانتقال إلى {governingFulfillment.targetGradeLabel}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                      {governingFulfillment.pendingRequirements.map((req, idx) => (
+                        <div
+                          key={req.requirement?.id || idx}
+                          className="p-4 rounded-2xl border bg-white border-amber-200/90 shadow-2xs flex flex-col justify-between"
+                        >
+                          <div>
+                            {/* Card Header */}
+                            <div className="flex justify-between items-start gap-2 mb-2.5">
+                              <div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                                  <span className="font-black text-xs text-slate-900">{req.category}</span>
+                                </div>
+                                <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
+                                  {req.mandatory ? 'شرط حتمي وجوبي للترقية' : 'متطلب اختياري/تطويري'}
+                                </span>
+                              </div>
+
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-black border bg-amber-100 text-amber-850 border-amber-250">
+                                {req.totalDaysAchieved > 0 ? `متبقي ${req.remainingDays} يوم ⏳` : 'مطلوب استيفاؤه ❌'}
+                              </span>
+                            </div>
+
+                            {/* Metrics Box */}
+                            <div className="bg-amber-50/60 p-2.5 rounded-xl border border-amber-100 text-xs space-y-1.5 mb-2.5">
+                              <div className="flex justify-between items-center text-[11px]">
+                                <span className="text-slate-600 font-medium">المدة المقررة:</span>
+                                <span className="font-bold text-slate-800 font-mono">{req.requiredDays} يوم ({req.requiredHours} ساعة)</span>
+                              </div>
+                              <div className="flex justify-between items-center text-[11px]">
+                                <span className="text-slate-600 font-medium">المنجز حتى الآن:</span>
+                                <span className="font-bold font-mono text-amber-800">{req.totalDaysAchieved} يوم ({req.totalHoursAchieved} ساعة)</span>
+                              </div>
+                              <div className="flex justify-between items-center text-[11px] pt-0.5 border-t border-amber-200/50">
+                                <span className="text-amber-900 font-bold">المتبقي المطلوب:</span>
+                                <span className="font-black font-mono text-rose-700">{req.remainingDays} يوم ({req.remainingHours} ساعة)</span>
+                              </div>
+                              {/* Progress bar */}
+                              <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden mt-1">
+                                <div
+                                  className="h-full rounded-full bg-amber-600"
+                                  style={{ width: `${Math.round(req.progressRatio * 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Notes / Alternatives */}
+                          {req.notes && (
+                            <p className="text-[10px] text-slate-600 mt-1 bg-slate-50 p-2 rounded-lg border border-slate-100 leading-relaxed">
+                              💡 <strong className="text-slate-700">الضابط / البدائل:</strong> {req.notes}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Satisfied & Completed Courses (ما تم استيفاؤه واجتيازه) */}
+                {governingFulfillment.satisfiedRequirements && governingFulfillment.satisfiedRequirements.length > 0 && (
+                  <div className="space-y-3 bg-emerald-50/40 p-4 rounded-2xl border border-emerald-200/80">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-200/60 pb-2.5">
+                      <h4 className="text-xs font-black text-emerald-950 flex items-center gap-2">
+                        <span className="p-1 rounded-lg bg-emerald-200 text-emerald-900">
+                          <CheckCircle2 size={14} />
+                        </span>
+                        <span>المتطلبات والدورات الحتمية المستوفاة والمكتملة ({governingFulfillment.satisfiedRequirements.length}):</span>
+                      </h4>
+                      <span className="text-[11px] text-emerald-800 font-bold bg-white/80 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                        مستوفاة 100% ومحتسبة للترقية للدرجة {governingFulfillment.targetGradeLabel}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                      {governingFulfillment.satisfiedRequirements.map((req, idx) => (
+                        <div
+                          key={req.requirement?.id || idx}
+                          className="p-4 rounded-2xl border bg-white border-emerald-200/90 shadow-2xs flex flex-col justify-between"
+                        >
+                          <div>
+                            {/* Card Header */}
+                            <div className="flex justify-between items-start gap-2 mb-2.5">
+                              <div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-600" />
+                                  <span className="font-black text-xs text-slate-900">{req.category}</span>
+                                </div>
+                                <span className="text-[10px] text-slate-500 font-bold block mt-0.5">
+                                  {req.mandatory ? 'شرط حتمي وجوبي' : 'متطلب اختياري/تطويري'}
+                                </span>
+                              </div>
+
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-black border bg-emerald-100 text-emerald-800 border-emerald-200 flex items-center gap-1">
+                                <CheckCircle2 size={11} /> مستوفى بالكامل ✅
+                              </span>
+                            </div>
+
+                            {/* Metrics Box */}
+                            <div className="bg-emerald-50/60 p-2.5 rounded-xl border border-emerald-100 text-xs space-y-1 mb-2.5">
+                              <div className="flex justify-between items-center text-[11px]">
+                                <span className="text-slate-600 font-medium">المدة المطلوبة:</span>
+                                <span className="font-bold text-slate-800 font-mono">{req.requiredDays} يوم ({req.requiredHours} ساعة)</span>
+                              </div>
+                              <div className="flex justify-between items-center text-[11px]">
+                                <span className="text-slate-600 font-medium">المنجز فعلياً:</span>
+                                <span className="font-bold font-mono text-emerald-700">{req.totalDaysAchieved} يوم ({req.totalHoursAchieved} ساعة)</span>
+                              </div>
+                              {/* Progress bar */}
+                              <div className="w-full bg-emerald-100 h-1.5 rounded-full overflow-hidden mt-1">
+                                <div className="h-full rounded-full bg-emerald-600" style={{ width: '100%' }} />
+                              </div>
+                            </div>
+
+                            {/* Contributing courses list */}
+                            {req.matchedCourses && req.matchedCourses.length > 0 && (
+                              <div className="space-y-1 pt-1 border-t border-slate-100">
+                                <span className="text-[10px] font-bold text-slate-600 block">الدورات المجتازة المحتسبة ({req.matchedCourses.length}):</span>
+                                <div className="space-y-1 max-h-24 overflow-y-auto pr-0.5">
+                                  {req.matchedCourses.map((mc, mIdx) => (
+                                    <div key={mIdx} className="bg-emerald-50/40 px-2 py-1 rounded-lg border border-emerald-100 text-[10px] flex justify-between items-center">
+                                      <span className="font-bold text-slate-800 truncate max-w-[140px]" title={mc.courseName}>
+                                        ✨ {mc.courseName}
+                                      </span>
+                                      <span className="font-mono text-emerald-800 shrink-0 font-bold">
+                                        {mc.days} يوم / {mc.hours} س
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {req.notes && (
+                            <p className="text-[10px] text-slate-500 mt-2 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
+                              💡 {req.notes}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            )}
+          </div>
+
+          {/* Card 2: سجل كافة الدورات التدريبية المعتمدة والتطوير الوظيفي (Complete Training History) */}
+          <div className="bg-white rounded-3xl p-6 shadow-xs border border-slate-200/80 space-y-5">
+            {/* Header & Add Button */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="text-base font-bold text-[#1B3A6B] flex items-center gap-2">
+                  <GraduationCap className="w-5 h-5 text-blue-600" />
+                  <span>سجل كافة الدورات التدريبية والبرامج والتطوير الوظيفي</span>
+                  <span className="bg-blue-50 text-blue-800 text-xs font-mono font-black px-2.5 py-0.5 rounded-full border border-blue-200">
+                    {unifiedEmployeeCourses.length} دورة مسجلة
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  عرض وتوثيق كافة البرامج التدريبية المباشرة والمركزية ودورات الاختصاص مع خيارات الفلترة المتقدمة.
+                </p>
+              </div>
+
+              <Button
+                size="sm"
+                onClick={() => openAddModal('training_course')}
+                className="bg-[#1B3A6B] hover:bg-[#152d54] text-white rounded-xl gap-1.5 shadow-xs font-bold text-xs cursor-pointer"
+              >
+                <Plus size={15} /> تسجيل دورة تدريبية جديدة
               </Button>
             </div>
-            
-            <div className="overflow-x-auto">
+
+            {/* Advanced Multi-Filter Strip (شريط الفلاتر المتقدمة) */}
+            <div className="bg-slate-50/80 p-4 rounded-2xl border border-slate-200/70 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Filter className="w-3.5 h-3.5 text-blue-600" />
+                  <span>فلترة وتخصيص استعراض الدورات:</span>
+                </span>
+
+                {(trainingYearFilter !== 'all' || trainingGradeFilter !== 'all' || trainingCategoryFilter !== 'all' || trainingStatusFilter !== 'all' || trainingSearch) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTrainingYearFilter('all');
+                      setTrainingGradeFilter('all');
+                      setTrainingCategoryFilter('all');
+                      setTrainingStatusFilter('all');
+                      setTrainingSearch('');
+                    }}
+                    className="text-[11px] text-rose-600 hover:text-rose-800 font-bold transition-colors cursor-pointer"
+                  >
+                    إعادة تعيين الفلاتر
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5">
+                {/* 1. Filter by Year */}
+                <div>
+                  <Label className="text-[10px] font-bold text-slate-500 mb-1 block">السنة التدريبية</Label>
+                  <Select value={trainingYearFilter} onValueChange={setTrainingYearFilter}>
+                    <SelectTrigger className="h-8 rounded-xl text-xs bg-white border-slate-200">
+                      <SelectValue placeholder="كافة السنوات" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">🌐 كافة السنوات التدريبية</SelectItem>
+                      {distinctTrainingYears.map((yr) => (
+                        <SelectItem key={yr} value={yr}>
+                          سنة {yr}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* 2. Filter by Grade */}
+                <div>
+                  <Label className="text-[10px] font-bold text-slate-500 mb-1 block">الدرجة الوظيفية وقت الدورة</Label>
+                  <Select value={trainingGradeFilter} onValueChange={setTrainingGradeFilter}>
+                    <SelectTrigger className="h-8 rounded-xl text-xs bg-white border-slate-200">
+                      <SelectValue placeholder="كافة الدرجات" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">كافة الدرجات (الحالية والسابقة)</SelectItem>
+                      {distinctTrainingGrades.map((g) => (
+                        <SelectItem key={g} value={String(g)}>
+                          الدرجة {g} {parseInt(employee?.grade) === g ? '(الحالية)' : '(سابقة)'}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* 3. Filter by Category */}
+                <div>
+                  <Label className="text-[10px] font-bold text-slate-500 mb-1 block">تصنيف الدورة</Label>
+                  <Select value={trainingCategoryFilter} onValueChange={setTrainingCategoryFilter}>
+                    <SelectTrigger className="h-8 rounded-xl text-xs bg-white border-slate-200">
+                      <SelectValue placeholder="كافة التصنيفات" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">كافة التصنيفات</SelectItem>
+                      <SelectItem value="اختصاص">اختصاص / فنية</SelectItem>
+                      <SelectItem value="إدار">إدارية / قيادية</SelectItem>
+                      <SelectItem value="سلام">سلامة وبيئة (H.S.E)</SelectItem>
+                      <SelectItem value="حاس">حاسوب وتكنولوجيا</SelectItem>
+                      <SelectItem value="لغ">لغات وتفاوض</SelectItem>
+                      <SelectItem value="مال">مالية ومحاسبية</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* 4. Filter by Status/Result */}
+                <div>
+                  <Label className="text-[10px] font-bold text-slate-500 mb-1 block">حالة الاجتياز والاستيفاء</Label>
+                  <Select value={trainingStatusFilter} onValueChange={setTrainingStatusFilter}>
+                    <SelectTrigger className="h-8 rounded-xl text-xs bg-white border-slate-200">
+                      <SelectValue placeholder="كافة الحالات" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">كافة الحالات</SelectItem>
+                      <SelectItem value="passed">✅ اجتاز / محتسب للترقية</SelectItem>
+                      <SelectItem value="ongoing">⏳ مستمر / قيد التدريب</SelectItem>
+                      <SelectItem value="failed">❌ لم يجتز</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* 5. Search Box */}
+                <div>
+                  <Label className="text-[10px] font-bold text-slate-500 mb-1 block">بحث سريع</Label>
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute right-2.5 top-2.5 text-slate-400" />
+                    <Input
+                      type="text"
+                      placeholder="اسم الدورة، الجهة، الأمر..."
+                      value={trainingSearch}
+                      onChange={(e) => setTrainingSearch(e.target.value)}
+                      className="h-8 pr-8 rounded-xl text-xs bg-white border-slate-200"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Unified Training Courses Table */}
+            <div className="overflow-x-auto border border-slate-100 rounded-2xl">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-slate-50 text-slate-500 border-b border-slate-100">
-                    <th className="text-right px-4 py-2.5 font-bold">اسم الدورة</th>
-                    <th className="text-right px-4 py-2.5 font-bold">الجهة المنظمة للتدريب</th>
-                    <th className="text-right px-4 py-2.5 font-bold">من تاريخ</th>
-                    <th className="text-right px-4 py-2.5 font-bold">إلى تاريخ</th>
-                    <th className="text-right px-4 py-2.5 font-bold">الأمر الإداري بالوفد</th>
-                    <th className="text-right px-4 py-2.5 font-bold">النتيجة</th>
-                    <th className="text-center px-4 py-2.5 font-bold">إجراءات</th>
+                  <tr className="bg-slate-50/90 text-slate-600 border-b border-slate-200/80">
+                    <th className="text-right px-4 py-3 font-bold text-xs">اسم البرنامج والدورة</th>
+                    <th className="text-right px-4 py-3 font-bold text-xs">التصنيف المعتمد</th>
+                    <th className="text-center px-4 py-3 font-bold text-xs">المدة المقررة</th>
+                    <th className="text-center px-4 py-3 font-bold text-xs">السنة والدرجة</th>
+                    <th className="text-right px-4 py-3 font-bold text-xs">الفترة والجهة المنظمة</th>
+                    <th className="text-right px-4 py-3 font-bold text-xs">الأمر الإداري</th>
+                    <th className="text-center px-4 py-3 font-bold text-xs">النتيجة والاستيفاء</th>
+                    <th className="text-center px-4 py-3 font-bold text-xs">إجراءات</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {trainingCourses.map(tc => (
-                    <tr key={tc.id} className="border-b border-slate-50 hover:bg-slate-50/40">
-                      <td className="px-4 py-2.5 font-bold text-[#1B3A6B]">{tc.course_name}</td>
-                      <td className="px-4 py-2.5 text-slate-700">{tc.institution}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{tc.start_date}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{tc.end_date}</td>
-                      <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{tc.order_number || '—'}</td>
-                      <td className="px-4 py-2.5">
-                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${tc.result === 'اجتاز' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-700'}`}>{tc.result}</span>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredTrainingCourses.map((tc) => (
+                    <tr key={tc.id} className="hover:bg-blue-50/20 transition-colors">
+                      {/* 1. Name & Source */}
+                      <td className="px-4 py-3">
+                        <div className="space-y-0.5">
+                          <span className="font-bold text-slate-900 text-xs block">{tc.courseName}</span>
+                          <span className="inline-flex items-center gap-1 text-[10px] text-slate-400 font-medium">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                            <span>{tc.sourceLabel}</span>
+                          </span>
+                        </div>
                       </td>
-                      <td className="px-4 py-2.5 text-center">
+
+                      {/* 2. Category */}
+                      <td className="px-4 py-3">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-blue-50 text-[#1B3A6B] border border-blue-200/70">
+                          {tc.category}
+                        </span>
+                      </td>
+
+                      {/* 3. Duration */}
+                      <td className="px-4 py-3 text-center">
+                        <div className="space-y-0.5">
+                          <span className="font-bold text-slate-800 text-xs font-mono">{tc.days} يوم</span>
+                          <span className="text-[10px] text-slate-400 font-mono block">({tc.hours} ساعة)</span>
+                        </div>
+                      </td>
+
+                      {/* 4. Year & Grade */}
+                      <td className="px-4 py-3 text-center">
+                        <div className="space-y-0.5">
+                          <span className="font-bold text-slate-700 text-xs font-mono">{tc.year || '—'}</span>
+                          <span className="text-[10px] text-slate-500 font-medium block">
+                            الدرجة {tc.gradeAtTime || '—'}
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* 5. Period & Institution */}
+                      <td className="px-4 py-3 text-xs">
+                        <div className="space-y-0.5">
+                          <span className="text-slate-700 font-medium block">{tc.institution || 'مركز التدريب'}</span>
+                          <span className="text-[10px] text-slate-400 font-mono block">
+                            {tc.startDate ? `${tc.startDate} ${tc.endDate ? `← ${tc.endDate}` : ''}` : '—'}
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* 6. Order No */}
+                      <td className="px-4 py-3 text-xs font-mono text-slate-600">
+                        {tc.orderNumber ? (
+                          <div>
+                            <span className="font-bold text-slate-700">{tc.orderNumber}</span>
+                            {tc.orderDate && <span className="text-[10px] text-slate-400 block">{tc.orderDate}</span>}
+                          </div>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+
+                      {/* 7. Result & Fulfillment */}
+                      <td className="px-4 py-3 text-center">
+                        <span
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
+                            tc.isPassed
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : tc.result === 'مستمر'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                              : 'bg-slate-100 text-slate-700 border border-slate-200'
+                          }`}
+                        >
+                          {tc.isPassed && <Check className="w-3 h-3 text-emerald-700" />}
+                          <span>{tc.result || 'اجتاز'}</span>
+                        </span>
+                      </td>
+
+                      {/* 8. Actions */}
+                      <td className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-1">
-                          <Button size="icon" variant="ghost" className="text-blue-600 hover:bg-blue-50 h-8 w-8 rounded-lg" title="تعديل الدورة التدريبية" onClick={() => openEditModal('training_course', tc)}>
-                            <Edit size={14} />
-                          </Button>
-                          <Button size="icon" variant="ghost" className="text-red-500 hover:bg-red-50 h-8 w-8 rounded-lg" onClick={() => deleteRecord('TrainingCourse', tc.id)}>
-                            <Trash2 size={14} />
-                          </Button>
+                          {tc.source === 'training_course' && (
+                            <>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="text-blue-600 hover:bg-blue-50 h-7 w-7 rounded-lg cursor-pointer"
+                                title="تعديل الدورة التدريبية"
+                                onClick={() => openEditModal('training_course', tc)}
+                              >
+                                <Edit size={13} />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="text-red-500 hover:bg-red-50 h-7 w-7 rounded-lg cursor-pointer"
+                                title="حذف الدورة"
+                                onClick={() => deleteRecord('TrainingCourse', tc.id)}
+                              >
+                                <Trash2 size={13} />
+                              </Button>
+                            </>
+                          )}
+                          {tc.source !== 'training_course' && (
+                            <span className="text-[10px] text-slate-400 italic">سجل مركزي</span>
+                          )}
                         </div>
                       </td>
                     </tr>
                   ))}
-                  {trainingCourses.length === 0 && (
+
+                  {filteredTrainingCourses.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400">لا توجد دورات تدريبية معتمدة مسجلة</td>
+                      <td colSpan={8} className="px-4 py-12 text-center text-slate-400 text-xs">
+                        {unifiedEmployeeCourses.length === 0
+                          ? 'لا توجد دورات تدريبية مسجلة لهذا الموظف حتى الآن. انقر على "تسجيل دورة تدريبية جديدة" لإضافة دورة.'
+                          : 'لا توجد دورات مطابقة لمعايير الفلترة المحددة أعلاه.'}
+                      </td>
                     </tr>
                   )}
                 </tbody>
@@ -4246,7 +4861,7 @@ export default function EmployeeDetail() {
 
       {/* Dynamic Pop-up Modal Form */}
       {activeModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
           <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-100 p-6 space-y-4 animate-in fade-in zoom-in duration-200">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-lg font-bold text-[#1B3A6B]">
@@ -4743,32 +5358,170 @@ export default function EmployeeDetail() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
                     <Label>اسم الدورة التدريبية المعتمدة *</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.course_name || ''} onChange={e => setModalForm(prev => ({ ...prev, course_name: e.target.value }))} required />
+                    <Input
+                      className="mt-1 rounded-xl"
+                      value={modalForm.course_name || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, course_name: e.target.value }))}
+                      placeholder="مثال: دورة التحليل المالي / السلامة المهنية / الإدارة الوسطى"
+                      required
+                    />
                   </div>
+
                   <div>
-                    <Label>تاريخ البدء *</Label>
-                    <Input type="date" className="mt-1 rounded-xl" value={modalForm.start_date || ''} onChange={e => setModalForm(prev => ({ ...prev, start_date: e.target.value }))} required />
-                  </div>
-                  <div>
-                    <Label>تاريخ الانتهاء *</Label>
-                    <Input type="date" className="mt-1 rounded-xl" value={modalForm.end_date || ''} onChange={e => setModalForm(prev => ({ ...prev, end_date: e.target.value }))} required />
-                  </div>
-                  <div>
-                    <Label>الجهة المنظمة للتدريب *</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.institution || ''} onChange={e => setModalForm(prev => ({ ...prev, institution: e.target.value }))} required placeholder="مثال: معهد التطوير الإداري" />
-                  </div>
-                  <div>
-                    <Label>أمر إيفاد التدريب (الرقم المرجعي)</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.order_number || ''} onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value }))} />
-                  </div>
-                  <div>
-                    <Label>النتيجة النهائية *</Label>
-                    <Select value={modalForm.result} onValueChange={v => setModalForm(prev => ({ ...prev, result: v }))}>
-                      <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                    <Label>التصنيف المعتمد للحتميات التدريبية *</Label>
+                    <Select
+                      value={modalForm.category || 'اختصاص'}
+                      onValueChange={v => setModalForm(prev => ({ ...prev, category: v }))}
+                    >
+                      <SelectTrigger className="mt-1 rounded-xl font-bold"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {['اجتاز', 'مشارك', 'متميز', 'لم يجتز'].map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                        <SelectItem value="اختصاص">اختصاص / فنية وتخصصية</SelectItem>
+                        <SelectItem value="إدارية">إدارية / قيادية وإشرافية</SelectItem>
+                        <SelectItem value="سلامة وبيئة (H.S.E)">سلامة وبيئة (H.S.E)</SelectItem>
+                        <SelectItem value="حاسوب وتكنولوجيا">حاسوب وتكنولوجيا والتحول الرقمي</SelectItem>
+                        <SelectItem value="لغات وتفاوض">لغات أجنبية وتفاوض</SelectItem>
+                        <SelectItem value="مالية ومحاسبية">مالية ومحاسبية وتدقيق</SelectItem>
+                        <SelectItem value="أخرى">أخرى / عامة</SelectItem>
                       </SelectContent>
                     </Select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label>المدة (أيام) *</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        className="mt-1 rounded-xl font-mono"
+                        value={modalForm.days || ''}
+                        onChange={e => {
+                          const d = parseInt(e.target.value) || 0;
+                          setModalForm(prev => ({ ...prev, days: d, hours: d * 4 }));
+                        }}
+                        placeholder="5"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label>المدة (ساعات)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        className="mt-1 rounded-xl font-mono"
+                        value={modalForm.hours || ''}
+                        onChange={e => setModalForm(prev => ({ ...prev, hours: parseInt(e.target.value) || 0 }))}
+                        placeholder="20"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label>السنة التدريبية *</Label>
+                    <Input
+                      type="number"
+                      className="mt-1 rounded-xl font-mono"
+                      value={modalForm.year || (modalForm.start_date ? modalForm.start_date.substring(0, 4) : new Date().getFullYear())}
+                      onChange={e => setModalForm(prev => ({ ...prev, year: e.target.value }))}
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <Label>الدرجة الوظيفية وقت الدورة</Label>
+                    <Select
+                      value={String(modalForm.grade_at_time || employee?.grade || 8)}
+                      onValueChange={v => setModalForm(prev => ({ ...prev, grade_at_time: parseInt(v) }))}
+                    >
+                      <SelectTrigger className="mt-1 rounded-xl font-bold"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(g => (
+                          <SelectItem key={g} value={String(g)}>الدرجة {g}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label>تاريخ البدء</Label>
+                    <Input
+                      type="date"
+                      className="mt-1 rounded-xl font-mono"
+                      value={modalForm.start_date || ''}
+                      onChange={e => {
+                        const val = e.target.value;
+                        const yr = val ? val.substring(0, 4) : '';
+                        setModalForm(prev => ({ ...prev, start_date: val, year: yr || prev.year }));
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <Label>تاريخ الانتهاء</Label>
+                    <Input
+                      type="date"
+                      className="mt-1 rounded-xl font-mono"
+                      value={modalForm.end_date || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, end_date: e.target.value }))}
+                    />
+                  </div>
+
+                  <div>
+                    <Label>الجهة المنظمة للتدريب *</Label>
+                    <Input
+                      className="mt-1 rounded-xl"
+                      value={modalForm.institution || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, institution: e.target.value }))}
+                      required
+                      placeholder="مثال: مركز التدريب والتطوير / معهد النفط العربي"
+                    />
+                  </div>
+
+                  <div>
+                    <Label>النتيجة النهائية *</Label>
+                    <Select
+                      value={modalForm.result || 'اجتاز'}
+                      onValueChange={v => setModalForm(prev => ({ ...prev, result: v }))}
+                    >
+                      <SelectTrigger className="mt-1 rounded-xl font-bold"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="اجتاز">اجتاز بنجاح (محتسب للترقية)</SelectItem>
+                        <SelectItem value="ناجح">ناجح (محتسب للترقية)</SelectItem>
+                        <SelectItem value="مستمر">مستمر / قيد التدريب</SelectItem>
+                        <SelectItem value="مشارك">مشارك فقط</SelectItem>
+                        <SelectItem value="لم يجتز">لم يجتز</SelectItem>
+                        <SelectItem value="معفى">معفى</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label>رقم الأمر الإداري بالدورة / الإيفاد</Label>
+                    <Input
+                      className="mt-1 rounded-xl"
+                      value={modalForm.order_number || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value }))}
+                      placeholder="مثال: د/١٤٥٢ أو إ/٥٤٢"
+                    />
+                  </div>
+
+                  <div>
+                    <Label>تاريخ الأمر الإداري</Label>
+                    <Input
+                      type="date"
+                      className="mt-1 rounded-xl font-mono"
+                      value={modalForm.order_date || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, order_date: e.target.value }))}
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <Label>ملاحظات إضافية</Label>
+                    <Input
+                      className="mt-1 rounded-xl"
+                      value={modalForm.notes || ''}
+                      onChange={e => setModalForm(prev => ({ ...prev, notes: e.target.value }))}
+                      placeholder="أي معلومات إضافية عن الدورة أو الشهادة"
+                    />
                   </div>
                 </div>
               )}
@@ -4871,54 +5624,80 @@ export default function EmployeeDetail() {
               {/* 10. Service Record Form */}
               {activeModal === 'service_record' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2 bg-emerald-50/80 border border-emerald-200/80 p-3 rounded-xl text-xs text-emerald-950 flex items-start gap-2">
+                    <ShieldCheck size={16} className="text-emerald-700 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold block text-emerald-900">الأثر الإداري والقانوني لاحتساب الخدمة المضافة:</span>
+                      <span className="text-emerald-800 text-[11px] leading-relaxed block mt-0.5">
+                        الخدمة المضافة تُحسب ببطاقة الخدمة وتُجمع مع الخدمة الكلية لأغراض الترقية والعلاوة والتقاعد دون التأثير على موعد التقاعد القانوني (الذي يعتمد حصراً على تاريخ الميلاد وبلوغ السن القانوني ٦٠/٦٣ سنة).
+                      </span>
+                    </div>
+                  </div>
+
                   <div>
-                    <Label>نوع الخدمة المحتسبة *</Label>
+                    <Label>نوع الخدمة المضافة والمحتسبة *</Label>
                     <Select value={modalForm.record_type} onValueChange={v => setModalForm(prev => ({ ...prev, record_type: v }))}>
                       <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {['خدمة محتسبة', 'خدمة عسكرية', 'خدمة عقد', 'خدمة ممارسة', 'خدمة محاماة', 'أخرى'].map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                        <SelectItem value="خدمة عسكرية إلزامية (خدمة العلم)">خدمة عسكرية إلزامية (خدمة العلم)</SelectItem>
+                        <SelectItem value="خدمة عسكرية (حركات فعلية / احتياط)">خدمة عسكرية (حركات فعلية / احتياط)</SelectItem>
+                        <SelectItem value="خدمة عقد وزاري / تشغيلي">خدمة عقد وزاري / تشغيلي</SelectItem>
+                        <SelectItem value="خدمة أجر يومي">خدمة أجر يومي</SelectItem>
+                        <SelectItem value="ممارسة مهنة هندسية">ممارسة مهنة هندسية</SelectItem>
+                        <SelectItem value="ممارسة مهنة قانونية (محاماة)">ممارسة مهنة قانونية (محاماة)</SelectItem>
+                        <SelectItem value="ممارسة مهنة صحية وطبية">ممارسة مهنة صحية وطبية</SelectItem>
+                        <SelectItem value="خدمة صحفية / نقابية معتمدة">خدمة صحفية / نقابية معتمدة</SelectItem>
+                        <SelectItem value="خدمة سابقة في دوائر الدولة">خدمة سابقة في دوائر الدولة</SelectItem>
+                        <SelectItem value="خدمة مفصولة سياسياً معتمدة">خدمة مفصولة سياسياً معتمدة</SelectItem>
+                        <SelectItem value="أخرى (خدمة محتسبة)">أخرى (خدمة محتسبة)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
+
                   <div>
                     <Label>الغرض القانوني من الاحتساب *</Label>
                     <Select value={modalForm.purpose} onValueChange={v => setModalForm(prev => ({ ...prev, purpose: v }))}>
                       <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="promotion_allowance_pension">لاغراض الترقية والعلاوة والتقاعد</SelectItem>
-                        <SelectItem value="pension_only">لاغراض التقاعد فقط</SelectItem>
+                        <SelectItem value="promotion_allowance_pension">للترقية والعلاوة والتقاعد (شامل)</SelectItem>
+                        <SelectItem value="pension_only">لأغراض التقاعد فقط</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
+
                   <div>
-                    <Label>رقم الأمر الإداري *</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.order_number || ''} onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value }))} required placeholder="مثال: 1234/4/5" />
+                    <Label>رقم الأمر الوزاري / الإداري *</Label>
+                    <Input className="mt-1 rounded-xl font-mono" value={modalForm.order_number || ''} onChange={e => setModalForm(prev => ({ ...prev, order_number: e.target.value }))} required placeholder="مثال: 1042/ش/م أو 5514" />
                   </div>
+
                   <div>
-                    <Label>تاريخ الأمر الإداري *</Label>
-                    <Input type="date" className="mt-1 rounded-xl" value={modalForm.order_date || ''} onChange={e => setModalForm(prev => ({ ...prev, order_date: e.target.value }))} required />
+                    <Label>تاريخ صدور الأمر *</Label>
+                    <Input type="date" className="mt-1 rounded-xl font-mono" value={modalForm.order_date || ''} onChange={e => setModalForm(prev => ({ ...prev, order_date: e.target.value }))} required />
                   </div>
-                  <div className="md:col-span-2 grid grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100">
+
+                  <div className="md:col-span-2 grid grid-cols-3 gap-3 bg-slate-50/80 p-3.5 rounded-xl border border-slate-200/80">
                     <div>
-                      <Label className="text-xs">المدة (سنوات) *</Label>
-                      <Input type="number" min="0" className="mt-1 rounded-xl bg-white" value={modalForm.years ?? 0} onChange={e => setModalForm(prev => ({ ...prev, years: parseInt(e.target.value) || 0 }))} required />
+                      <Label className="text-xs font-bold text-slate-700">المدة المحتسبة (سنوات) *</Label>
+                      <Input type="number" min="0" max="30" className="mt-1 rounded-xl bg-white font-mono" value={modalForm.years ?? 0} onChange={e => setModalForm(prev => ({ ...prev, years: parseInt(e.target.value) || 0 }))} required />
                     </div>
                     <div>
-                      <Label className="text-xs">المدة (أشهر) *</Label>
-                      <Input type="number" min="0" max="11" className="mt-1 rounded-xl bg-white" value={modalForm.months ?? 0} onChange={e => setModalForm(prev => ({ ...prev, months: parseInt(e.target.value) || 0 }))} required />
+                      <Label className="text-xs font-bold text-slate-700">المدة المحتسبة (أشهر) *</Label>
+                      <Input type="number" min="0" max="11" className="mt-1 rounded-xl bg-white font-mono" value={modalForm.months ?? 0} onChange={e => setModalForm(prev => ({ ...prev, months: parseInt(e.target.value) || 0 }))} required />
                     </div>
                     <div>
-                      <Label className="text-xs">المدة (أيام)</Label>
-                      <Input type="number" min="0" max="29" className="mt-1 rounded-xl bg-white" value={modalForm.days ?? 0} onChange={e => setModalForm(prev => ({ ...prev, days: parseInt(e.target.value) || 0 }))} />
+                      <Label className="text-xs font-bold text-slate-700">المدة المحتسبة (أيام)</Label>
+                      <Input type="number" min="0" max="29" className="mt-1 rounded-xl bg-white font-mono" value={modalForm.days ?? 0} onChange={e => setModalForm(prev => ({ ...prev, days: parseInt(e.target.value) || 0 }))} />
                     </div>
                   </div>
+
                   <div className="md:col-span-2">
-                    <Label>السبب والمبررات / التفاصيل *</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.reason || ''} onChange={e => setModalForm(prev => ({ ...prev, reason: e.target.value }))} required placeholder="مثال: احتساب خدمة العلم الإلزامية بموجب كتاب وزارة الدفاع" />
+                    <Label>الجهة السابقة والمبررات / تفاصيل الأمر *</Label>
+                    <Input className="mt-1 rounded-xl" value={modalForm.reason || ''} onChange={e => setModalForm(prev => ({ ...prev, reason: e.target.value }))} required placeholder="مثال: احتساب خدمة العلم الإلزامية بموجب كتاب مديرية التجنيد العامة المرقم..." />
                   </div>
+
                   <div className="md:col-span-2">
                     <Label>ملاحظات إضافية</Label>
-                    <Input className="mt-1 rounded-xl" value={modalForm.notes || ''} onChange={e => setModalForm(prev => ({ ...prev, notes: e.target.value }))} />
+                    <Input className="mt-1 rounded-xl" value={modalForm.notes || ''} onChange={e => setModalForm(prev => ({ ...prev, notes: e.target.value }))} placeholder="أي إشارات أو قيود إضافية مسجلة بالأمر" />
                   </div>
                 </div>
               )}
@@ -5451,7 +6230,7 @@ export default function EmployeeDetail() {
                 <div className="space-y-3">
                   <div>
                     <Label className="text-xs font-bold text-slate-700">
-                      العنوان الوظيفي المقترن بالشهادة (محدد الدرجة والمرحلة الأساس) *
+                      العنوان الوظيفي المقترن بالشهادة (محدد الدرجة الأساس) *
                     </Label>
                     <Select
                       value={String(degreeRecogModal.jobTitleId)}
@@ -5463,7 +6242,7 @@ export default function EmployeeDetail() {
                       <SelectContent className="z-[9999] max-h-60">
                         {availableJobTitles.map(t => (
                           <SelectItem key={t.id} value={String(t.id)}>
-                            {t.name} ({t.category || 'عام'}) — الدرجة {t.min_grade || t.minGrade || 7} / المرحلة {t.min_step || t.minStep || 1}
+                            {t.name} ({t.category || 'عام'}) — الدرجة {t.min_grade || t.minGrade || 7}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -5472,17 +6251,13 @@ export default function EmployeeDetail() {
 
                   {/* Preview Card */}
                   {selectedTitle && (
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 grid grid-cols-2 gap-3 text-xs">
-                      <div className="bg-white p-2.5 rounded-lg border border-slate-100 shadow-2xs">
-                        <span className="text-slate-500 block text-[11px]">الدرجة الأساس المقررة:</span>
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 grid grid-cols-1 gap-2 text-xs">
+                      <div className="bg-white p-2.5 rounded-lg border border-slate-100 shadow-2xs flex items-center justify-between">
+                        <span className="text-slate-500 text-[11px]">الدرجة الأساس المقررة للعنوان:</span>
                         <span className="text-[#1B3A6B] font-bold text-sm">الدرجة {baselineGrade}</span>
                       </div>
-                      <div className="bg-white p-2.5 rounded-lg border border-slate-100 shadow-2xs">
-                        <span className="text-slate-500 block text-[11px]">المرحلة الأساس المقررة:</span>
-                        <span className="text-[#1B3A6B] font-bold text-sm">المرحلة {baselineStep}</span>
-                      </div>
-                      <div className="col-span-2 text-[11px] text-slate-500 bg-amber-50/70 border border-amber-200/80 rounded-lg p-2 leading-relaxed text-amber-900">
-                        💡 <strong>ملاحظة قانونية:</strong> تبدأ محاكاة الترفيعات من نقطة الأساس (الدرجة {baselineGrade} والمرحلة {baselineStep}) وتتدرج افتراضياً كل سنتين مع استهلاك أسابيع دورات الاختصاص التراكمية، مع الحفاظ التام على الدرجة الفعلية الحالية للموظف (الدرجة {employee?.grade || 3}) وعدم تنزيلها نهائياً.
+                      <div className="text-[11px] text-slate-500 bg-amber-50/70 border border-amber-200/80 rounded-lg p-2 leading-relaxed text-amber-900">
+                        💡 <strong>ملاحظة قانونية:</strong> تبدأ محاكاة الترفيعات من نقطة الأساس (الدرجة {baselineGrade}) وتتدرج افتراضياً كل سنتين مع استهلاك أسابيع دورات الاختصاص التراكمية، مع الحفاظ التام على الدرجة الفعلية الحالية للموظف (الدرجة {employee?.grade || 3}) وعدم تنزيلها نهائياً.
                       </div>
                     </div>
                   )}

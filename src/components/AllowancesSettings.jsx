@@ -102,7 +102,14 @@ export default function AllowancesSettings() {
     setLoading(true);
     try {
       const data = await apiClient.entities.AllowanceDeduction.list();
-      let sortedData = data || [];
+      const filteredData = (data || []).filter(item => {
+        if (!item) return false;
+        const name = String(item.name || '');
+        const isDegree = (name.includes('شهادة') || name.includes('الشهادة') || name.includes('دكتوراه') || name.includes('ماجستير') || name.includes('دبلوم') || name.includes('بكالوريوس') || name.includes('إعدادية') || name.includes('متوسطة') || name.includes('ابتدائية'));
+        const isResp = (name.includes('منصب') || name.includes('مسؤولية') || name.includes('إشرافية'));
+        return !isDegree && !isResp;
+      });
+      let sortedData = filteredData;
       const savedOrder = localStorage.getItem('ALLOWANCES_DEDUCTIONS_ORDER');
       if (savedOrder) {
         try {
@@ -123,7 +130,6 @@ export default function AllowancesSettings() {
       
       // Update local storage for immediate consumption in salary calculations
       localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(sortedData));
-      notifySettingsChanged('allowances_deductions', sortedData);
     } catch (error) {
       toast({
         title: 'خطأ في جلب البيانات',
@@ -211,6 +217,7 @@ export default function AllowancesSettings() {
       setNewStatus('فعال');
       setAdding(false);
       fetchRecords();
+      notifySettingsChanged('allowances_deductions');
 
       // Log action
       await apiClient.logs.create({
@@ -252,6 +259,7 @@ export default function AllowancesSettings() {
       });
       setEditingId(null);
       fetchRecords();
+      notifySettingsChanged('allowances_deductions');
 
       // Log action
       await apiClient.logs.create({
@@ -279,6 +287,7 @@ export default function AllowancesSettings() {
         variant: 'success',
       });
       fetchRecords();
+      notifySettingsChanged('allowances_deductions');
 
       // Log action
       await apiClient.logs.create({
@@ -308,6 +317,7 @@ export default function AllowancesSettings() {
         description: `تم حذف البند "${name}" بنجاح`,
       });
       fetchRecords();
+      notifySettingsChanged('allowances_deductions');
 
       // Log action
       await apiClient.logs.create({
@@ -351,6 +361,7 @@ export default function AllowancesSettings() {
         variant: 'success',
       });
       fetchRecords();
+      notifySettingsChanged('allowances_deductions');
 
       // Log action
       await apiClient.logs.create({
@@ -787,7 +798,7 @@ export default function AllowancesSettings() {
       )}
 
       {deleteConfirm.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-xl overflow-hidden animate-scale-up">
             <div className="p-6 text-center space-y-4">
               <div className="mx-auto w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center">

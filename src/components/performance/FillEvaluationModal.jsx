@@ -272,7 +272,7 @@ export default function FillEvaluationModal({ isOpen, onClose, employee, evaluat
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+    <div className="fixed inset-0 pointer-events-auto z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-5xl overflow-hidden my-6 flex flex-col max-h-[92vh] border border-slate-200">
         {/* Top Header Toolbar */}
         <div className="p-4 bg-[#1B3A6B] text-white flex items-center justify-between shadow-md">

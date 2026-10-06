@@ -47,9 +47,8 @@ export default function PenaltyTypesSettings() {
       let sortedData = applySavedOrder(data || [], 'PENALTY_TYPES_ORDER');
       setRecords(sortedData);
       
-      // Cache in localStorage & notify application listeners
+      // Cache in localStorage
       localStorage.setItem('PENALTY_TYPES_PRESETS', JSON.stringify(sortedData));
-      notifySettingsChanged('penalty_types', sortedData);
     } catch (error) {
       toast({
         title: 'خطأ في جلب البيانات',
@@ -167,6 +166,7 @@ export default function PenaltyTypesSettings() {
       setNewStatus('فعال');
       setAdding(false);
       fetchRecords();
+      notifySettingsChanged('penalty_types');
 
       await apiClient.logs.create({
         action: 'تعديل أنواع العقوبات',
@@ -220,6 +220,7 @@ export default function PenaltyTypesSettings() {
       });
       setEditingId(null);
       fetchRecords();
+      notifySettingsChanged('penalty_types');
 
       await apiClient.logs.create({
         action: 'تعديل أنواع العقوبات',
@@ -245,6 +246,7 @@ export default function PenaltyTypesSettings() {
       });
       setDeleteConfirm({ isOpen: false, id: null, name: '' });
       fetchRecords();
+      notifySettingsChanged('penalty_types');
 
       await apiClient.logs.create({
         action: 'حذف نوع عقوبة',
@@ -265,18 +267,18 @@ export default function PenaltyTypesSettings() {
       <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col gap-4">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-700 shrink-0">
-              <ShieldAlert size={24} />
+            <div className="p-2 rounded-xl bg-rose-50 text-rose-700 shrink-0">
+              <ShieldAlert size={22} />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-slate-800">إدارة أنواع العقوبات الإدارية</h2>
+                <h2 className="text-xl font-bold text-[#1B3A6B]">أنواع العقوبات الإدارية</h2>
                 <span className="bg-rose-100 text-rose-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-rose-200">
                   <Scale size={12} />
                   المادة 8 - قانون 14 لسنة 1991
                 </span>
               </div>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-slate-500 font-medium leading-relaxed mt-0.5">
                 تحديد وحفظ كافة العقوبات المعتمدة بالمنظومة وفقاً لقانون انضباط موظفي الدولة والقطاع العام رقم (14) لسنة 1991 المعدل.
               </p>
             </div>
@@ -705,7 +707,7 @@ export default function PenaltyTypesSettings() {
 
       {/* Delete Modal Dialog */}
       {deleteConfirm.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-xl border border-slate-100 text-right" dir="rtl">
             <div className="flex items-center gap-3 text-rose-600">
               <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center shrink-0">

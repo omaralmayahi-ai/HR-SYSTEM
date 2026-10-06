@@ -251,7 +251,7 @@ export default function OrgTreePickerModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 animate-in fade-in duration-200" dir="rtl">
+    <div className="fixed inset-0 pointer-events-auto z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 animate-in fade-in duration-200" dir="rtl">
       <div className="bg-slate-50 rounded-3xl border border-slate-200 shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="bg-[#1B3A6B] text-white p-5 flex items-center justify-between shadow-md">

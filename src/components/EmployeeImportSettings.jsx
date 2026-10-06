@@ -1257,7 +1257,7 @@ export default function EmployeeImportSettings() {
 
       {/* Confirmation Approval Modal */}
       {showConfirmModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" dir="rtl">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4">
             
             <div className="flex items-center gap-3 text-emerald-700 border-b border-slate-100 pb-3">

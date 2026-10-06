@@ -5,9 +5,10 @@ import { useToast } from '@/components/ui/use-toast';
 import {
   Palette, Clock, FileText, Database, KeyRound,
   Save, RefreshCw, Plus, Trash2, Upload, Image,
-  CheckCircle, AlertTriangle
+  CheckCircle, AlertTriangle, Archive, RotateCcw, Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ConfirmDeleteDialog from '@/components/performance/ConfirmDeleteDialog';
 
 const PRESET_THEMES = [
   { name: 'أزرق ملكي', primary: '#1B3A6B', secondary: '#C8960C' },
@@ -74,6 +75,13 @@ export default function Settings() {
     { id: 3, employeeName: 'عبد الرحمن سعد', department: 'القسم المالي', date: '2026-07-14 14:02', status: 'approved' },
   ]);
 
+  // أرشيف المحذوفات (Soft Delete Archive): السجلات المنقولة إلى هنا بدلاً من حذفها نهائياً،
+  // مع إمكانية استعادتها أو تأكيد حذفها بشكل نهائي ولا رجعة فيه.
+  const [archivedItems, setArchivedItems] = useState([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [restoringArchiveId, setRestoringArchiveId] = useState(null);
+  const [confirmPermanentDelete, setConfirmPermanentDelete] = useState(null);
+
   useEffect(() => {
     if (appPublicSettings) {
       setPlatformName(appPublicSettings.platformName || 'نظام إدارة شؤون الموظفين');
@@ -91,6 +99,7 @@ export default function Settings() {
       }
     }
     loadLogs();
+    loadArchive();
   }, [appPublicSettings]);
 
   const loadLogs = async () => {
@@ -110,6 +119,48 @@ export default function Settings() {
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const loadArchive = async () => {
+    setArchiveLoading(true);
+    try {
+      const items = await apiClient.archive.list();
+      setArchivedItems(Array.isArray(items) ? items : []);
+    } catch (e) {
+      console.error(e);
+      toast({ title: 'تعذّر تحميل أرشيف المحذوفات', description: e.message, variant: 'destructive' });
+    } finally {
+      setArchiveLoading(false);
+    }
+  };
+
+  const handleRestoreArchiveItem = async (item) => {
+    setRestoringArchiveId(item.id);
+    try {
+      await apiClient.archive.restore(item.id);
+      toast({ title: 'تمت الاستعادة', description: 'تمت استعادة السجل من الأرشيف بنجاح', variant: 'success' });
+      await loadArchive();
+    } catch (e) {
+      toast({ title: 'تعذّرت الاستعادة', description: e.message, variant: 'destructive' });
+    } finally {
+      setRestoringArchiveId(null);
+    }
+  };
+
+  const confirmPermanentDeleteAction = async () => {
+    const item = confirmPermanentDelete;
+    if (!item) return;
+    try {
+      await apiClient.archive.permanentDelete(item.id);
+      toast({ title: 'تم الحذف النهائي', description: 'تم حذف السجل نهائياً من الأرشيف ولا يمكن التراجع عن ذلك', variant: 'success' });
+      await loadArchive();
+    } catch (e) {
+      toast({ title: 'تعذّر الحذف النهائي', description: e.message, variant: 'destructive' });
+    }
+  };
+
+  const ARCHIVE_ENTITY_LABELS = {
+    employee: 'موظف',
   };
 
   const handleSaveIdentity = async (e) => {
@@ -557,6 +608,27 @@ export default function Settings() {
                   <KeyRound size={16} />
                 </div>
                 <span>طلبات تغيير كلمات المرور</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('archive')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-right text-sm font-medium transition-all ${
+                  activeTab === 'archive'
+                    ? 'bg-slate-100 text-slate-800 shadow-sm'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
+              >
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                  activeTab === 'archive' ? 'bg-slate-200 text-slate-800' : 'bg-slate-100 text-slate-500'
+                }`}>
+                  <Archive size={16} />
+                </div>
+                <span>أرشيف المحذوفات</span>
+                {archivedItems.length > 0 && (
+                  <span className="mr-auto bg-rose-100 text-rose-700 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                    {archivedItems.length}
+                  </span>
+                )}
               </button>
             </div>
           </div>
@@ -1241,9 +1313,106 @@ export default function Settings() {
                 </div>
               </motion.div>
             )}
+
+            {/* TAB 6: ARCHIVE (Soft Delete Archive) */}
+            {activeTab === 'archive' && (
+              <motion.div
+                key="archive"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.2 }}
+                className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-800">أرشيف المحذوفات</h2>
+                    <p className="text-sm text-slate-500">
+                      كل سجل يُحذف من النظام (الموظفون حالياً، وسيُضاف إليها لاحقاً أنواع أخرى) يُنقل هنا أولاً بدلاً من حذفه نهائياً،
+                      ليتمكن مدير النظام من استعادته أو تأكيد حذفه بشكل نهائي ولا رجعة فيه.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadArchive}
+                    disabled={archiveLoading}
+                    className="shrink-0 flex items-center gap-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-xl transition-colors disabled:opacity-50"
+                  >
+                    {archiveLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                    تحديث
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200">
+                      <tr>
+                        <th className="px-4 py-3">نوع السجل</th>
+                        <th className="px-4 py-3">الوصف</th>
+                        <th className="px-4 py-3">تاريخ الحذف</th>
+                        <th className="px-4 py-3">من قام بالحذف</th>
+                        <th className="px-4 py-3 text-left">الإجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {archivedItems.map((item) => (
+                        <tr key={item.id} className="hover:bg-slate-50/50">
+                          <td className="px-4 py-3">
+                            <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700">
+                              {ARCHIVE_ENTITY_LABELS[item.entity_type] || item.entity_type}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-slate-800">{item.entity_label || `#${item.entity_id}`}</td>
+                          <td className="px-4 py-3 text-slate-500 font-mono">{item.created_at ? new Date(item.created_at).toLocaleString('ar-IQ') : '—'}</td>
+                          <td className="px-4 py-3 text-slate-600">{item.deleted_by_name || item.deleted_by || '—'}</td>
+                          <td className="px-4 py-3 text-left">
+                            <div className="flex gap-2 justify-end">
+                              <button
+                                type="button"
+                                disabled={restoringArchiveId === item.id}
+                                onClick={() => handleRestoreArchiveItem(item)}
+                                className="text-[10px] bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
+                              >
+                                {restoringArchiveId === item.id ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                                استعادة
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmPermanentDelete(item)}
+                                className="text-[10px] bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
+                              >
+                                <Trash2 size={12} />
+                                حذف نهائي
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {archivedItems.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-8 text-center text-slate-400 text-[11px]">
+                            {archiveLoading ? 'جاري التحميل...' : 'لا توجد عناصر محذوفة في الأرشيف حالياً'}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
         </div>
       </div>
+
+      <ConfirmDeleteDialog
+        isOpen={!!confirmPermanentDelete}
+        onClose={() => setConfirmPermanentDelete(null)}
+        onConfirm={confirmPermanentDeleteAction}
+        title="تأكيد الحذف النهائي"
+        description={confirmPermanentDelete ? `سيتم حذف "${confirmPermanentDelete.entity_label || ''}" نهائياً من الأرشيف ومن قاعدة البيانات، ولا يمكن التراجع عن هذا الإجراء أو استعادة البيانات بعده مطلقاً.` : ''}
+        confirmText="نعم، احذف نهائياً"
+        cancelText="تراجع"
+      />
     </div>
   );
 }

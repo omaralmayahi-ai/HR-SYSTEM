@@ -1,6 +1,6 @@
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import { Bell, LogOut, User } from 'lucide-react';
+import { Bell, LogOut, User, Maximize, Minimize } from 'lucide-react';
 import { apiClient } from '@/api/apiClient';
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/AuthContext';
@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/AuthContext';
 export default function AppLayout() {
   const [user, setUser] = useState(null);
   const [employeeRole, setEmployeeRole] = useState('employee');
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const { appPublicSettings, logout } = useAuth();
   const [isCollapsed, setIsCollapsed] = useState(() => {
     return localStorage.getItem('sidebar-collapsed') === 'true';
@@ -25,6 +26,66 @@ export default function AppLayout() {
       }
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isCurrentlyFullscreen = !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+      setIsFullscreen(isCurrentlyFullscreen);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      const isCurrentlyFullscreen = !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+
+      if (!isCurrentlyFullscreen) {
+        const docEl = document.documentElement;
+        if (docEl.requestFullscreen) {
+          await docEl.requestFullscreen();
+        } else if (docEl.webkitRequestFullscreen) {
+          await docEl.webkitRequestFullscreen();
+        } else if (docEl.mozRequestFullScreen) {
+          await docEl.mozRequestFullScreen();
+        } else if (docEl.msRequestFullscreen) {
+          await docEl.msRequestFullscreen();
+        }
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          await document.webkitExitFullscreen();
+        } else if (document.mozCancelFullScreen) {
+          await document.mozCancelFullScreen();
+        } else if (document.msExitFullscreen) {
+          await document.msExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.error('Error toggling fullscreen:', err);
+    }
+  };
 
   return (
     <div className="flex min-h-screen bg-[#F5F7FA]" dir="rtl">
@@ -51,7 +112,28 @@ export default function AppLayout() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-colors relative">
+            {/* زر وضع ملء الشاشة بجوار جرس الإشعارات */}
+            <button
+              onClick={toggleFullscreen}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 ${
+                isFullscreen 
+                  ? 'bg-[#1B3A6B] text-white shadow-md hover:bg-[#152e55]' 
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-[#1B3A6B]'
+              }`}
+              title={isFullscreen ? 'الخروج من وضع ملء الشاشة' : 'وضع ملء الشاشة'}
+              aria-label={isFullscreen ? 'الخروج من وضع ملء الشاشة' : 'وضع ملء الشاشة'}
+            >
+              {isFullscreen ? (
+                <Minimize size={16} className="transition-transform duration-200 hover:scale-110" />
+              ) : (
+                <Maximize size={16} className="transition-transform duration-200 hover:scale-110" />
+              )}
+            </button>
+            <button 
+              className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-colors relative"
+              title="الإشعارات"
+              aria-label="الإشعارات"
+            >
               <Bell size={16} className="text-slate-600" />
               <span className="absolute -top-1 -left-1 w-4 h-4 bg-red-500 rounded-full text-white text-[9px] flex items-center justify-center">3</span>
             </button>

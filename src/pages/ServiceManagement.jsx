@@ -1136,18 +1136,18 @@ export default function ServiceManagement() {
             {/* Record Type Select */}
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">نوع الإجراء / الأمر <span className="text-rose-500">*</span></label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3 mb-3">
                 <button
                   type="button"
                   disabled={lockRecordType}
-                  onClick={() => setFormData({ ...formData, record_type: 'خدمة محتسبة' })}
+                  onClick={() => setFormData({ ...formData, record_type: 'خدمة عسكرية إلزامية (خدمة العلم)' })}
                   className={`p-3 rounded-xl border text-xs font-bold text-center transition-all ${
-                    formData.record_type === 'خدمة محتسبة'
+                    formData.record_type !== 'تمديد خدمة'
                       ? 'border-blue-600 bg-blue-50 text-blue-900 shadow-sm'
                       : 'border-slate-200 hover:bg-slate-50 text-slate-600'
                   } ${lockRecordType ? 'opacity-60 cursor-not-allowed' : ''}`}
                 >
-                  خدمة محتسبة (إضافة مدة)
+                  خدمة مضافة / محتسبة (إضافة مدة)
                 </button>
 
                 <button
@@ -1163,6 +1163,40 @@ export default function ServiceManagement() {
                   تمديد خدمة تقاعدية
                 </button>
               </div>
+
+              {formData.record_type !== 'تمديد خدمة' && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-slate-700">تصنيف الخدمة المضافة والمحتسبة <span className="text-rose-500">*</span></label>
+                  <Select
+                    value={formData.record_type}
+                    onValueChange={(val) => setFormData({ ...formData, record_type: val })}
+                  >
+                    <SelectTrigger className="rounded-xl border-slate-200 text-xs bg-white font-medium">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="خدمة عسكرية إلزامية (خدمة العلم)">خدمة عسكرية إلزامية (خدمة العلم)</SelectItem>
+                      <SelectItem value="خدمة عسكرية (حركات فعلية / احتياط)">خدمة عسكرية (حركات فعلية / احتياط)</SelectItem>
+                      <SelectItem value="خدمة عقد وزاري / تشغيلي">خدمة عقد وزاري / تشغيلي</SelectItem>
+                      <SelectItem value="خدمة أجر يومي">خدمة أجر يومي</SelectItem>
+                      <SelectItem value="ممارسة مهنة هندسية">ممارسة مهنة هندسية</SelectItem>
+                      <SelectItem value="ممارسة مهنة قانونية (محاماة)">ممارسة مهنة قانونية (محاماة)</SelectItem>
+                      <SelectItem value="ممارسة مهنة صحية وطبية">ممارسة مهنة صحية وطبية</SelectItem>
+                      <SelectItem value="خدمة صحفية / نقابية معتمدة">خدمة صحفية / نقابية معتمدة</SelectItem>
+                      <SelectItem value="خدمة سابقة في دوائر الدولة">خدمة سابقة في دوائر الدولة</SelectItem>
+                      <SelectItem value="خدمة مفصولة سياسياً معتمدة">خدمة مفصولة سياسياً معتمدة</SelectItem>
+                      <SelectItem value="أخرى (خدمة محتسبة)">أخرى (خدمة محتسبة)</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <div className="bg-emerald-50/80 border border-emerald-200/80 p-3 rounded-xl text-xs text-emerald-950 flex items-start gap-2 mt-2">
+                    <Sparkles size={15} className="text-emerald-700 shrink-0 mt-0.5" />
+                    <p className="text-[11px] text-emerald-800 leading-relaxed">
+                      الخدمة المضافة تُحسب ببطاقة الخدمة وتُجمع مع الخدمة الكلية لأغراض الترقية والعلاوة والتقاعد دون التأثير على موعد التقاعد القانوني (الذي يعتمد حصراً على تاريخ الميلاد وسن التقاعد).
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Order Number & Order Date */}
@@ -1185,7 +1219,7 @@ export default function ServiceManagement() {
                   required
                   value={formData.order_date}
                   onChange={(e) => setFormData({ ...formData, order_date: e.target.value })}
-                  className="rounded-xl text-xs"
+                  className="rounded-xl text-xs font-mono"
                 />
               </div>
             </div>
@@ -1220,7 +1254,7 @@ export default function ServiceManagement() {
                   />
                 </div>
 
-                {formData.record_type === 'خدمة محتسبة' && (
+                {formData.record_type !== 'تمديد خدمة' && (
                   <div>
                     <span className="text-[10px] text-slate-500 font-bold block mb-1">أيام</span>
                     <Input
@@ -1237,7 +1271,7 @@ export default function ServiceManagement() {
             </div>
 
             {/* Options Specific to Service Type */}
-            {formData.record_type === 'خدمة محتسبة' ? (
+            {formData.record_type !== 'تمديد خدمة' ? (
               <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 space-y-2">
                 <label className="block text-xs font-bold text-slate-800">الغرض من الاحتساب:</label>
                 <div className="space-y-2">
@@ -1250,7 +1284,7 @@ export default function ServiceManagement() {
                       onChange={() => setFormData({ ...formData, purpose: 'pension_only' })}
                       className="text-[#1B3A6B]"
                     />
-                    <span>لاغراض التقاعد فقط</span>
+                    <span>لأغراض التقاعد فقط</span>
                   </label>
 
                   <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
@@ -1262,7 +1296,7 @@ export default function ServiceManagement() {
                       onChange={() => setFormData({ ...formData, purpose: 'promotion_allowance_pension' })}
                       className="text-[#1B3A6B]"
                     />
-                    <span>لاغراض الترقية و العلاوة و التقاعد</span>
+                    <span>للترقية والعلاوة والتقاعد (شامل)</span>
                   </label>
                 </div>
               </div>

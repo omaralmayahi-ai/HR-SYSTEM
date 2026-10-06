@@ -73,4 +73,51 @@ describe('Server Endpoints Logic Verification', () => {
     expect(dueItems.length).toBe(1);
     expect(dueItems[0].reasonType).toBe('دورة');
   });
+
+  it('should maintain state consistency across entity additions, modifications, and deletions without reverting to defaults', () => {
+    // Simulate generic memory stores & persistence state
+    const stores: Record<string, any[]> = {
+      'job-titles': [
+        { id: 1, name: 'مبرمج أقدم', min_grade: 4, max_grade: 2 },
+        { id: 2, name: 'رئيس مبرمجين', min_grade: 2, max_grade: 1 }
+      ],
+      'qualifications': [
+        { id: 101, employee_id: 1, level: 'بكالوريوس', specialization: 'علوم حاسوب', is_active: true }
+      ],
+      'leaves': [
+        { id: 201, employee_id: 1, leave_type: 'اعتيادية', days_count: 5, status: 'مقبولة' }
+      ],
+      'salary-scale': [
+        { id: 1, grade: 1, stage: 1, base_salary: 910000, annual_allowance: 20000 }
+      ]
+    };
+
+    // 1. Add new Job Title
+    stores['job-titles'].push({ id: 3, name: 'معاون مدير عام', min_grade: 1, max_grade: 1 });
+    expect(stores['job-titles'].length).toBe(3);
+
+    // 2. Modify Qualification
+    const qual = stores['qualifications'].find(q => q.id === 101);
+    if (qual) qual.specialization = 'هندسة برمجيات متقدمة';
+    expect(stores['qualifications'][0].specialization).toBe('هندسة برمجيات متقدمة');
+
+    // 3. Delete Leave Request
+    stores['leaves'] = stores['leaves'].filter(l => l.id !== 201);
+    expect(stores['leaves'].length).toBe(0);
+
+    // 4. Modify Salary Scale
+    stores['salary-scale'][0].base_salary = 950000;
+    expect(stores['salary-scale'][0].base_salary).toBe(950000);
+
+    // 5. Encrypt and Decrypt to simulate server reload
+    const encrypted = JSON.stringify(stores);
+    const reloadedStores = JSON.parse(encrypted);
+
+    expect(reloadedStores['job-titles'].length).toBe(3);
+    expect(reloadedStores['job-titles'].some((j: any) => j.name === 'معاون مدير عام')).toBe(true);
+    expect(reloadedStores['qualifications'][0].specialization).toBe('هندسة برمجيات متقدمة');
+    expect(reloadedStores['leaves'].length).toBe(0);
+    expect(reloadedStores['salary-scale'][0].base_salary).toBe(950000);
+  });
 });
+

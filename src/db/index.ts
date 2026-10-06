@@ -9,6 +9,7 @@ const { Pool } = pkg;
 export const createPool = () => {
   return new Pool({
     host: process.env.SQL_HOST,
+    port: process.env.SQL_PORT ? Number(process.env.SQL_PORT) : undefined,
     user: process.env.SQL_USER,
     password: process.env.SQL_PASSWORD,
     database: process.env.SQL_DB_NAME,
@@ -184,6 +185,15 @@ export async function ensureSchema() {
       WHERE last_promotion_date IS NULL OR last_increment_date IS NULL;
     `);
 
+    // رقم الشركة هو المعرّف الفريد الأساسي للموظف: يمنع تكرار نفس الرقم بين موظفين.
+    // ملاحظة: إن وُجدت بيانات قديمة متكررة فعلياً، سيفشل هذا القيد بصمت (نمط safeQuery)
+    // ويجب عندها تنظيف التكرارات يدوياً ثم إعادة تشغيل الخادم لتفعيل القيد.
+    await safeQuery(`ALTER TABLE employees ADD CONSTRAINT employees_company_number_unique UNIQUE (company_number);`);
+    // الرقم الوظيفي (رقم وزارة التخطيط) رقم فريد أيضاً، رغم أن الاعتماد الأساسي في النظام على رقم الشركة
+    await safeQuery(`ALTER TABLE employees ADD CONSTRAINT employees_civil_service_number_unique UNIQUE (civil_service_number);`);
+    // رقم هوية الموظف: يُنشأ تلقائياً من الخادم عند إضافة الموظف، ويجب أن يبقى فريداً دوماً (يُستخدم في الهوية الرقمية ورمز الوصول السريع)
+    await safeQuery(`ALTER TABLE employees ADD CONSTRAINT employees_employee_id_number_unique UNIQUE (employee_id_number);`);
+
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS salary_scale (
@@ -260,6 +270,51 @@ export async function ensureSchema() {
       );
     `);
 
+    // مراجعة صفحة الموظفين (31-08-2026): shift_systems كان ناقصاً 6 أعمدة يتوقعها الكود
+    // (src/db/schema.ts) دون أي مسار ALTER يعوّضها - shift_hours_type وdaily_hours فعليان
+    // ومُلزَمان في نافذة إعدادات "أنظمة المناوبة" فأُبقيا وأُضيفا هنا لإغلاق الفجوة.
+    await safeQuery(`ALTER TABLE shift_systems ADD COLUMN IF NOT EXISTS shift_hours_type TEXT;`);
+    await safeQuery(`ALTER TABLE shift_systems ADD COLUMN IF NOT EXISTS daily_hours REAL;`);
+
+    // تحديث 1 أيلول 2026 (بقرار صريح من المستخدم): allowance_percentage, allowance_flat_amount,
+    // overtime_factor, notes لم تكن مستخدَمة فعلياً بأي واجهة (لا حقل نموذج واحد يعرضها أو
+    // يسمح بتعديلها) — أُزيلت نهائياً من الكود ومن قاعدة البيانات الحية معاً.
+    await safeQuery(`ALTER TABLE shift_systems DROP COLUMN IF EXISTS allowance_percentage;`);
+    await safeQuery(`ALTER TABLE shift_systems DROP COLUMN IF EXISTS allowance_flat_amount;`);
+    await safeQuery(`ALTER TABLE shift_systems DROP COLUMN IF EXISTS overtime_factor;`);
+    await safeQuery(`ALTER TABLE shift_systems DROP COLUMN IF EXISTS notes;`);
+
+    // مراجعة صفحة الموظفين (31-08-2026): فهارس أداء لجدول employees - النظام أُقر لاستقبال
+    // 10-20 ألف قيد موظف مستقبلاً، وGET /api/employees أصبح يدعم فلترة وترقيماً فعلياً من جهة
+    // الخادم بدل تحميل كل السجلات دفعة واحدة؛ هذه الفهارس تُسرّع أعمدة المطابقة المباشرة الأكثر
+    // استخداماً في الفلاتر المتقدمة (19 فلتراً) وحقول البحث والفرز. IF NOT EXISTS يجعلها آمنة
+    // للتكرار عند كل إقلاع للخادم بلا أي أثر على البيانات الحالية.
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_status ON employees (status);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_service_type ON employees (service_type);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_gender ON employees (gender);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_religion ON employees (religion);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_ethnicity ON employees (ethnicity);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_marital_status ON employees (marital_status);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_grade ON employees (grade);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_step ON employees (step);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_department ON employees (department);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_section ON employees (section);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_job_title ON employees (job_title);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_work_location ON employees (work_location);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_work_shift_type ON employees (work_shift_type);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_education_level ON employees (education_level);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_primary_responsibility ON employees (primary_responsibility);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_shift_system_id ON employees (shift_system_id);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_full_name ON employees (full_name);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_created_at ON employees (created_at);`);
+    // فهرس نصي (trigram) لتسريع البحث الحر بالاسم/الرقم الوظيفي/رقم الإضبارة/العنوان الوظيفي (LIKE '%..%')
+    // يُضاف باحتياط تام: إن لم تكن صلاحية تفعيل الإضافة متاحة على قاعدة البيانات المُدارة، يُتجاهل الخطأ
+    // بصمت (نفس نمط safeQuery المعتمد في هذا الملف) ويبقى البحث يعمل، فقط بدون تسريع الفهرس النصي.
+    await safeQuery(`CREATE EXTENSION IF NOT EXISTS pg_trgm;`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_full_name_trgm ON employees USING gin (full_name gin_trgm_ops);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_civil_service_number_trgm ON employees USING gin (civil_service_number gin_trgm_ops);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_employees_service_record_number_trgm ON employees USING gin (service_record_number gin_trgm_ops);`);
+
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS service_records (
         id SERIAL PRIMARY KEY,
@@ -300,6 +355,10 @@ export async function ensureSchema() {
     `);
 
     const jobAssignmentCols = [
+      `ALTER TABLE job_assignments ADD COLUMN IF NOT EXISTS division TEXT`,
+      `ALTER TABLE job_assignments ADD COLUMN IF NOT EXISTS grade TEXT`,
+      `ALTER TABLE job_assignments ADD COLUMN IF NOT EXISTS step INTEGER`,
+      `ALTER TABLE job_assignments ADD COLUMN IF NOT EXISTS confirmation_date TEXT`,
       `ALTER TABLE job_assignments ADD COLUMN IF NOT EXISTS order_number TEXT`,
       `ALTER TABLE job_assignments ADD COLUMN IF NOT EXISTS order_date TEXT`,
       `ALTER TABLE job_assignments ADD COLUMN IF NOT EXISTS action_type TEXT DEFAULT 'تكليف'`,
@@ -379,6 +438,10 @@ export async function ensureSchema() {
       );
     `);
 
+    await safeQuery(`ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS leave_type_id INTEGER REFERENCES leave_types(id) ON DELETE SET NULL;`);
+    // Fix: Drizzle schema declares leave_type_id (FK to leave_types) but the legacy bootstrap never created it,
+    // so every select/insert against leave_requests (which implicitly reads/returns all declared columns) failed silently.
+
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS penalties (
         id SERIAL PRIMARY KEY,
@@ -435,6 +498,10 @@ export async function ensureSchema() {
       );
     `);
 
+    await safeQuery(`ALTER TABLE performance_evaluations ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'مرفوع للاعتماد';`);
+    // Fix: same class of bug as salary_records/leave_requests — this column was added to the CREATE TABLE
+    // definition after the table already existed on deployed databases, so legacy installs never got it.
+
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS salary_records (
         id SERIAL PRIMARY KEY,
@@ -452,6 +519,11 @@ export async function ensureSchema() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    await safeQuery(`ALTER TABLE salary_records ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'مسودة';`);
+    // Fix: legacy bootstrap created this column as payment_status; the Drizzle schema/app code expects status.
+    // Backfill from the legacy column so pre-existing draft records keep their state.
+    await safeQuery(`UPDATE salary_records SET status = payment_status WHERE status IS NULL AND payment_status IS NOT NULL;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS attendance (
@@ -725,6 +797,52 @@ export async function ensureSchema() {
       ON CONFLICT DO NOTHING;
     `);
 
+    // أنواع الخدمة (قائمة قابلة للتوسيع من المستخدم، بلا تكرار)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS service_types (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await safeQuery(`
+      INSERT INTO service_types (name)
+      VALUES ('دائم'), ('عقد'), ('أجر يومي')
+      ON CONFLICT (name) DO NOTHING;
+    `);
+
+    // حالات الموظف (قائمة قابلة للتوسيع من المستخدم، بلا تكرار)
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS employee_statuses (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await safeQuery(`
+      INSERT INTO employee_statuses (name)
+      VALUES ('مستمر'), ('منسب'), ('مجاز'), ('متقاعد'), ('مستقيل'), ('موقوف')
+      ON CONFLICT (name) DO NOTHING;
+    `);
+
+    // مراجعة صفحة الموظفين (31-08-2026): أرشيف المحذوفات (Soft Delete Archive)
+    // بدلاً من حذف أي سجل نهائياً من النظام، يُنقل إلى هذا الجدول المركزي كنسخة كاملة (JSON)،
+    // ليتمكن مدير النظام من استعراضه واستعادته أو تأكيد حذفه بشكل نهائي من نافذة الإعدادات.
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS archived_items (
+        id SERIAL PRIMARY KEY,
+        entity_type TEXT NOT NULL,
+        entity_id INTEGER NOT NULL,
+        entity_label TEXT,
+        data TEXT NOT NULL,
+        deleted_by TEXT,
+        deleted_by_name TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_archived_items_entity_type ON archived_items(entity_type);`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_archived_items_created_at ON archived_items(created_at DESC);`);
+
     // 10. Employee Commendations Table (سجل كتب الشكر الممنوحة للموظفين)
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS employee_commendations (
@@ -766,8 +884,23 @@ export async function ensureSchema() {
     await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS administrative_effect TEXT DEFAULT 'لا_يؤثر';`);
     await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS financial_effect TEXT DEFAULT 'براتب_كامل';`);
     await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS financial_deduction_percentage INTEGER DEFAULT 0;`);
+    await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS affects_increment BOOLEAN DEFAULT FALSE;`);
+    await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS affects_promotion BOOLEAN DEFAULT FALSE;`);
+    await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS affects_commendations BOOLEAN DEFAULT FALSE;`);
+    await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS salary_payment_type TEXT DEFAULT 'full';`);
+    await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS effects_options TEXT;`);
     await safeQuery(`ALTER TABLE leave_types ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
     await safeQuery(`ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS leave_type_id INTEGER;`);
+
+    // Penalty Types columns
+    await safeQuery(`ALTER TABLE penalty_types ADD COLUMN IF NOT EXISTS salary_deduction_days INTEGER DEFAULT 0;`);
+
+    // Service Records columns
+    await safeQuery(`ALTER TABLE service_records ADD COLUMN IF NOT EXISTS years INTEGER DEFAULT 0;`);
+    await safeQuery(`ALTER TABLE service_records ADD COLUMN IF NOT EXISTS months INTEGER DEFAULT 0;`);
+    await safeQuery(`ALTER TABLE service_records ADD COLUMN IF NOT EXISTS days INTEGER DEFAULT 0;`);
+    await safeQuery(`ALTER TABLE service_records ADD COLUMN IF NOT EXISTS purpose TEXT DEFAULT 'علاوة_وترفيع';`);
+    await safeQuery(`ALTER TABLE service_records ADD COLUMN IF NOT EXISTS reason TEXT;`);
 
     // Backfill leave_type_id on matching name
     await safeQuery(`
@@ -775,6 +908,25 @@ export async function ensureSchema() {
       SET leave_type_id = lt.id
       FROM leave_types lt
       WHERE lr.leave_type_id IS NULL AND TRIM(lr.leave_type) = TRIM(lt.name);
+    `);
+
+    // مراجعة صفحة الموظفين (31-08-2026): جدول job_titles (دليل العناوين الوظيفية المعتمد)
+    // كان بلا أمر CREATE TABLE إطلاقاً في هذا الملف (فقط أوامر ALTER التالية كانت تفترض وجوده
+    // ضمناً)، ما يعني فشل تنصيب هذا الجدول بالكامل على أي قاعدة بيانات جديدة، وبالتبعية فشل
+    // إنشاء degree_track_snapshots وما يعتمد عليها لأنها تشير إليه بمفتاح أجنبي عند إنشائها.
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS job_titles (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        category TEXT DEFAULT 'عام',
+        min_grade INTEGER DEFAULT 7,
+        min_step INTEGER DEFAULT 1,
+        next_title_id INTEGER,
+        status TEXT DEFAULT 'فعال',
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // 13. Job Titles career ladder migration
@@ -810,6 +962,179 @@ export async function ensureSchema() {
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_evaluation INTEGER DEFAULT 30;`);
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_absence INTEGER DEFAULT 10;`);
     await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
+    // System Settings Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        id SERIAL PRIMARY KEY,
+        platform_name TEXT DEFAULT 'نظام إدارة شؤون الموظفين',
+        beneficiary_name TEXT DEFAULT 'وزارة الموارد البشرية العراقية',
+        copyright_text TEXT DEFAULT 'جميع الحقوق محفوظة © 2026',
+        primary_color TEXT DEFAULT '#1B3A6B',
+        secondary_color TEXT DEFAULT '#C8960C',
+        active_theme TEXT DEFAULT 'أزرق ملكي',
+        font_family TEXT DEFAULT 'Cairo',
+        logo_url TEXT DEFAULT 'https://img.icons8.com/color/48/gender-neutral-user.png',
+        work_start_hour TEXT DEFAULT '08:00',
+        work_end_hour TEXT DEFAULT '15:00',
+        official_holidays TEXT DEFAULT 'الجمعة, السبت',
+        backup_frequency TEXT DEFAULT 'يومي',
+        max_children_count INTEGER DEFAULT 4,
+        retirement_age INTEGER DEFAULT 60,
+        retirement_notification_period TEXT DEFAULT 'three_months',
+        retirement_notification_days INTEGER DEFAULT 90,
+        degree_track_auto_settlement BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Activity Logs Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id SERIAL PRIMARY KEY,
+        action TEXT NOT NULL,
+        user_email TEXT NOT NULL,
+        details TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Promotions and Increments Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS promotions_increments (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        movement_type TEXT NOT NULL,
+        grade_before TEXT,
+        grade_after TEXT,
+        step_before INTEGER,
+        step_after INTEGER,
+        due_date TEXT NOT NULL,
+        order_number TEXT,
+        order_date TEXT,
+        seniority_months INTEGER DEFAULT 0,
+        seniority_reason TEXT,
+        manager_recommendation TEXT,
+        director_approval TEXT,
+        approved_by TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Salary Allowances Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS salary_allowances (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        base_salary TEXT,
+        cost_of_living TEXT,
+        position_allowance TEXT,
+        degree_allowance TEXT,
+        hazard_transport TEXT,
+        university_technical TEXT,
+        retirement_deduction TEXT,
+        tax_deduction TEXT,
+        insurance_deduction TEXT,
+        loans_deduction TEXT,
+        net_salary TEXT,
+        bank_account TEXT,
+        bank_name TEXT,
+        allowance_type TEXT,
+        percentage INTEGER,
+        amount INTEGER,
+        order_number TEXT,
+        status TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Annual Evaluations Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS annual_evaluations (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        year INTEGER NOT NULL,
+        grade TEXT NOT NULL,
+        evaluation_authority TEXT,
+        strengths TEXT,
+        weaknesses TEXT,
+        required_courses TEXT,
+        employee_opinion TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Training Courses Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS training_courses (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        course_name TEXT NOT NULL,
+        training_center TEXT,
+        start_date TEXT NOT NULL,
+        end_date TEXT NOT NULL,
+        duration_days INTEGER DEFAULT 1,
+        duration_hours INTEGER DEFAULT 0,
+        grade TEXT,
+        status TEXT DEFAULT 'ناجح',
+        is_specialized BOOLEAN DEFAULT FALSE,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await safeQuery(`ALTER TABLE training_courses ADD COLUMN IF NOT EXISTS course_type TEXT;`);
+    await safeQuery(`ALTER TABLE training_courses ADD COLUMN IF NOT EXISTS provider TEXT;`);
+    await safeQuery(`ALTER TABLE training_courses ADD COLUMN IF NOT EXISTS location TEXT;`);
+    await safeQuery(`ALTER TABLE training_courses ADD COLUMN IF NOT EXISTS average TEXT;`);
+    await safeQuery(`ALTER TABLE training_courses ADD COLUMN IF NOT EXISTS rank TEXT;`);
+
+    // Transfers Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS transfers (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        transfer_type TEXT NOT NULL,
+        order_number TEXT,
+        order_date TEXT,
+        from_dept TEXT,
+        to_dept TEXT,
+        from_location TEXT,
+        to_location TEXT,
+        effective_date TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Retirements Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS retirements (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        retirement_type TEXT NOT NULL,
+        order_number TEXT,
+        order_date TEXT,
+        effective_date TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Documents Table
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS documents (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE NOT NULL,
+        title TEXT NOT NULL,
+        document_type TEXT,
+        file_path TEXT,
+        upload_date TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
     await safeQuery(`ALTER TABLE promotions_increments ADD COLUMN IF NOT EXISTS approved_by TEXT;`);
     await safeQuery(`ALTER TABLE promotions_increments ADD COLUMN IF NOT EXISTS notes TEXT;`);
 

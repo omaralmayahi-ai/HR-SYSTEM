@@ -1,6 +1,22 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings as SettingsIcon, CalendarDays, GraduationCap, ShieldAlert, Briefcase, Wallet, TrendingDown, TrendingUp, Clock, FileSpreadsheet, GripVertical, RotateCcw, ClipboardCheck, ChevronLeft } from 'lucide-react';
+import { 
+  Settings as SettingsIcon, 
+  CalendarDays, 
+  GraduationCap, 
+  ShieldAlert, 
+  Briefcase, 
+  Wallet, 
+  TrendingDown, 
+  TrendingUp, 
+  Clock, 
+  FileSpreadsheet, 
+  GripVertical, 
+  ClipboardCheck,
+  Coins,
+  SlidersHorizontal,
+  FolderKanban
+} from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
 
 // Sub-settings components
@@ -22,108 +38,79 @@ import PromotionRulesSettings from '@/components/PromotionRulesSettings';
 const DEFAULT_TABS = [
   {
     id: 'salaryScale',
-    label: 'سُلّم الرواتب الموحد',
-    icon: SettingsIcon,
-    color: 'bg-violet-100 text-violet-700',
-    activeColor: 'bg-violet-50 text-violet-700 shadow-sm border-violet-150',
+    label: 'سلم الرواتب الحالي',
+    icon: Coins,
   },
   {
     id: 'jobTitles',
     label: 'دليل العناوين الوظيفية والمهنية',
     icon: Briefcase,
-    color: 'bg-blue-100 text-blue-800',
-    activeColor: 'bg-blue-50 text-blue-800 shadow-sm border-blue-200 font-bold',
   },
   {
     id: 'governingCourses',
-    label: 'الدورات التدريبية الحاكمة للموظفين',
+    label: 'الدورات التدريبية الحاكمة',
     icon: GraduationCap,
-    color: 'bg-amber-100 text-amber-800',
-    activeColor: 'bg-amber-50 text-amber-800 shadow-sm border-amber-200',
   },
   {
     id: 'shifts',
-    label: 'إدارة أنظمة عمل المناوبة',
+    label: 'أنظمة عمل المناوبة',
     icon: Clock,
-    color: 'bg-blue-100 text-blue-700',
-    activeColor: 'bg-blue-50 text-blue-700 shadow-sm border-blue-150',
   },
   {
     id: 'fixedCustomAllowances',
-    label: 'المخصصات الثابته و المخصصة',
+    label: 'المخصصات الثابتة والمخصصة',
     icon: Wallet,
-    color: 'bg-cyan-100 text-cyan-700',
-    activeColor: 'bg-cyan-50 text-cyan-700 shadow-sm border-cyan-150',
   },
   {
     id: 'fixedCustomDeductions',
-    label: 'الاستقطاعات الثابته و المخصصة',
+    label: 'الاستقطاعات الثابتة والمخصصة',
     icon: TrendingDown,
-    color: 'bg-amber-100 text-amber-700',
-    activeColor: 'bg-amber-50 text-amber-700 shadow-sm border-amber-150',
   },
   {
     id: 'education',
     label: 'الشهادات والمخصصات العلمية',
     icon: GraduationCap,
-    color: 'bg-indigo-100 text-indigo-700',
-    activeColor: 'bg-indigo-50 text-indigo-700 shadow-sm border-indigo-150',
   },
   {
     id: 'responsibility',
     label: 'مخصصات المسؤولية والمنصب',
-    icon: Briefcase,
-    color: 'bg-blue-100 text-blue-700',
-    activeColor: 'bg-blue-50 text-blue-700 shadow-sm border-blue-150',
+    icon: ShieldAlert,
   },
   {
     id: 'rules',
     label: 'ضوابط الاحتساب والتقاعد',
-    icon: ShieldAlert,
-    color: 'bg-emerald-100 text-emerald-700',
-    activeColor: 'bg-emerald-50 text-emerald-700 shadow-sm border-emerald-150',
+    icon: SlidersHorizontal,
   },
   {
     id: 'penaltyTypes',
     label: 'أنواع العقوبات الإدارية',
     icon: ShieldAlert,
-    color: 'bg-rose-100 text-rose-700',
-    activeColor: 'bg-rose-50 text-rose-700 shadow-sm border-rose-150',
   },
   {
     id: 'evaluationForms',
-    label: 'استمارات تقييم الأداء والتخصيص',
+    label: 'استمارات تقييم الأداء',
     icon: ClipboardCheck,
-    color: 'bg-indigo-100 text-indigo-700',
-    activeColor: 'bg-indigo-50 text-indigo-700 shadow-sm border-indigo-150',
   },
   {
     id: 'leaves',
-    label: 'أنواع الإجازات السنوية',
+    label: 'دليل أنواع الإجازات',
     icon: CalendarDays,
-    color: 'bg-teal-100 text-teal-700',
-    activeColor: 'bg-teal-50 text-teal-700 shadow-sm border-teal-150',
   },
   {
     id: 'promotionRules',
-    label: 'ضوابط الترقية والعلاوة وكتب الشكر',
+    label: 'ضوابط الترقية والعلاوة',
     icon: TrendingUp,
-    color: 'bg-emerald-100 text-emerald-800',
-    activeColor: 'bg-emerald-50 text-emerald-800 shadow-sm border-emerald-200 font-bold',
   },
   {
     id: 'employeeImport',
-    label: 'إدارة واستيراد بيانات الموظفين (Excel)',
+    label: 'استيراد الموظفين (Excel)',
     icon: FileSpreadsheet,
-    color: 'bg-emerald-100 text-emerald-700',
-    activeColor: 'bg-emerald-50 text-emerald-800 shadow-sm border-emerald-200 font-black',
   },
 ];
 
 export default function SystemSettings() {
   const { appPublicSettings } = useAuth();
   const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
-  const secondaryColor = appPublicSettings?.secondaryColor || '#C8960C';
   const [activeTab, setActiveTab] = useState('salaryScale');
   const [tabs, setTabs] = useState(DEFAULT_TABS);
   const [draggedIndex, setDraggedIndex] = useState(null);
@@ -186,267 +173,232 @@ export default function SystemSettings() {
     }
   };
 
-  const resetOrder = () => {
-    setTabs(DEFAULT_TABS);
-    try {
-      localStorage.removeItem('SYSTEM_SETTINGS_TABS_ORDER');
-    } catch (e) {}
-  };
-
   return (
-    <div className="space-y-6 settings-content" dir="rtl">
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm">
-        <div>
-          <h1 className="text-xl font-black text-[#1B3A6B]">اعدادات النظام الادارية و المالية</h1>
-          <p className="text-xs text-slate-500 mt-1">تخصيص وإدارة سلم الرواتب، قواعد المخصصات والاستقطاعات، وضوابط الإجازات السنوية المعتمدة.</p>
+    <div className="space-y-5 settings-content" dir="rtl">
+      {/* Unified Settings Header & Tabs Card (البطاقة الموحدة لإعدادات النظام والتنقل) */}
+      <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-3.5">
+        <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
+          <div className="w-8 h-8 rounded-xl bg-[#1B3A6B]/10 text-[#1B3A6B] flex items-center justify-center shrink-0">
+            <SettingsIcon size={18} />
+          </div>
+          <h1 className="text-base font-black text-[#1B3A6B]">اعدادات النظام الادارية و المالية</h1>
+        </div>
+
+        {/* Organized Navigation Buttons */}
+        <div className="flex flex-wrap gap-2 pt-0.5">
+          {tabs.map((tab, index) => {
+            const TabIcon = tab.icon;
+            const isActive = activeTab === tab.id;
+            const isDragged = draggedIndex === index;
+            const isDragOver = dragOverIndex === index;
+
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                draggable
+                onDragStart={(e) => handleDragStart(e, index)}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onDrop={(e) => handleDrop(e, index)}
+                onClick={() => setActiveTab(tab.id)}
+                style={isActive ? {
+                  backgroundColor: primaryColor,
+                  color: '#ffffff',
+                  borderColor: primaryColor,
+                  boxShadow: `0 3px 12px ${primaryColor}28`
+                } : {}}
+                className={`group relative flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border cursor-pointer select-none whitespace-nowrap ${
+                  isActive
+                    ? 'shadow-xs scale-[1.01]'
+                    : 'bg-slate-50 border-slate-200/90 text-slate-700 hover:bg-slate-100 hover:text-slate-900 hover:border-slate-300'
+                } ${isDragged ? 'opacity-40 bg-slate-200' : ''} ${
+                  isDragOver ? 'border-r-4 border-r-indigo-600 bg-indigo-50/60' : ''
+                }`}
+              >
+                <GripVertical
+                  size={13}
+                  className={isActive ? "text-white/60 shrink-0 cursor-grab active:cursor-grabbing" : "text-slate-300 group-hover:text-slate-500 shrink-0 cursor-grab active:cursor-grabbing"}
+                  title="اسحب لإعادة الترتيب"
+                />
+                <TabIcon size={14} className={isActive ? "text-white shrink-0" : "text-slate-500 group-hover:text-[#1B3A6B] shrink-0"} />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Tabs Menu (3 cols) */}
-        <div className="lg:col-span-3 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-3">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-            <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-wider px-1">أقسام الإعدادات</h2>
-            <button
-              onClick={resetOrder}
-              className="text-[10px] font-bold text-slate-400 hover:text-slate-700 flex items-center gap-1 transition-colors"
-              title="إعادة الترتيب الافتراضي"
+      {/* Full-width Active Settings Window (المساحة الكاملة لعرض النوافذ) */}
+      <div className="w-full">
+        <AnimatePresence mode="wait">
+          {activeTab === 'salaryScale' && (
+            <motion.div
+              key="salaryScale"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
             >
-              <RotateCcw size={12} />
-              <span>إعادة للترتيب</span>
-            </button>
-          </div>
+              <SalaryScaleSettings />
+            </motion.div>
+          )}
 
-          <div className="space-y-1.5">
-            {tabs.map((tab, index) => {
-              const TabIcon = tab.icon;
-              const isActive = activeTab === tab.id;
-              const isDragged = draggedIndex === index;
-              const isDragOver = dragOverIndex === index;
+          {activeTab === 'jobTitles' && (
+            <motion.div
+              key="jobTitles"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <JobTitlesSettings />
+            </motion.div>
+          )}
 
-              return (
-                <div
-                  key={tab.id}
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, index)}
-                  onDragOver={(e) => handleDragOver(e, index)}
-                  onDrop={(e) => handleDrop(e, index)}
-                  onClick={() => setActiveTab(tab.id)}
-                  style={isActive ? {
-                    backgroundColor: primaryColor,
-                    color: '#ffffff',
-                    borderColor: primaryColor,
-                    boxShadow: `0 4px 14px ${primaryColor}35`
-                  } : {}}
-                  className={`group relative flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-right text-xs font-bold transition-all border cursor-pointer select-none ${
-                    isActive
-                      ? 'shadow-md'
-                      : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                  } ${isDragged ? 'opacity-40 bg-slate-100' : ''} ${
-                    isDragOver ? 'border-t-2 border-t-indigo-600 bg-indigo-50/40' : ''
-                  }`}
-                >
-                  <GripVertical
-                    size={14}
-                    className={isActive ? "text-white/60 shrink-0 cursor-grab active:cursor-grabbing" : "text-slate-300 group-hover:text-slate-500 shrink-0 cursor-grab active:cursor-grabbing"}
-                    title="اسحب لترتيب القسم"
-                  />
-                  <div 
-                    className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors shrink-0"
-                    style={isActive ? {
-                      backgroundColor: 'rgba(255, 255, 255, 0.22)',
-                      color: '#ffffff'
-                    } : {
-                      backgroundColor: `${primaryColor}12`,
-                      color: primaryColor
-                    }}
-                  >
-                    <TabIcon size={15} />
-                  </div>
-                  <span className="truncate flex-1">{tab.label}</span>
-                  {isActive && <ChevronLeft size={14} className="mr-auto text-white/80 shrink-0" />}
-                </div>
-              );
-            })}
-          </div>
-          <p className="text-[10px] text-slate-400 text-center pt-1 border-t border-slate-100">
-            💡 يمكنك إعادة ترتيب الأقسام بسحب الخيار وإفلاته في المكان المطلوب.
-          </p>
-        </div>
+          {activeTab === 'employeeImport' && (
+            <motion.div
+              key="employeeImport"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <EmployeeImportSettings />
+            </motion.div>
+          )}
 
-        {/* Right Active Content (9 cols) */}
-        <div className="lg:col-span-9">
-          <AnimatePresence mode="wait">
-            {activeTab === 'salaryScale' && (
-              <motion.div
-                key="salaryScale"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <SalaryScaleSettings />
-              </motion.div>
-            )}
+          {activeTab === 'shifts' && (
+            <motion.div
+              key="shifts"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <ShiftSystemsSettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'jobTitles' && (
-              <motion.div
-                key="jobTitles"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <JobTitlesSettings />
-              </motion.div>
-            )}
+          {activeTab === 'fixedCustomAllowances' && (
+            <motion.div
+              key="fixedCustomAllowances"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <FixedCustomAllowancesSettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'employeeImport' && (
-              <motion.div
-                key="employeeImport"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <EmployeeImportSettings />
-              </motion.div>
-            )}
+          {activeTab === 'fixedCustomDeductions' && (
+            <motion.div
+              key="fixedCustomDeductions"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <FixedCustomDeductionsSettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'shifts' && (
-              <motion.div
-                key="shifts"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <ShiftSystemsSettings />
-              </motion.div>
-            )}
+          {activeTab === 'education' && (
+            <motion.div
+              key="education"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <EducationDegreesSettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'fixedCustomAllowances' && (
-              <motion.div
-                key="fixedCustomAllowances"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <FixedCustomAllowancesSettings />
-              </motion.div>
-            )}
+          {activeTab === 'responsibility' && (
+            <motion.div
+              key="responsibility"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <ResponsibilitySettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'fixedCustomDeductions' && (
-              <motion.div
-                key="fixedCustomDeductions"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <FixedCustomDeductionsSettings />
-              </motion.div>
-            )}
+          {activeTab === 'rules' && (
+            <motion.div
+              key="rules"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <FinancialRulesSettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'education' && (
-              <motion.div
-                key="education"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <EducationDegreesSettings />
-              </motion.div>
-            )}
+          {activeTab === 'penaltyTypes' && (
+            <motion.div
+              key="penaltyTypes"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <PenaltyTypesSettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'responsibility' && (
-              <motion.div
-                key="responsibility"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <ResponsibilitySettings />
-              </motion.div>
-            )}
+          {activeTab === 'evaluationForms' && (
+            <motion.div
+              key="evaluationForms"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <EvaluationFormsSettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'rules' && (
-              <motion.div
-                key="rules"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <FinancialRulesSettings />
-              </motion.div>
-            )}
+          {activeTab === 'governingCourses' && (
+            <motion.div
+              key="governingCourses"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <GoverningCoursesSettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'penaltyTypes' && (
-              <motion.div
-                key="penaltyTypes"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <PenaltyTypesSettings />
-              </motion.div>
-            )}
+          {activeTab === 'leaves' && (
+            <motion.div
+              key="leaves"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <LeaveTypesSettings />
+            </motion.div>
+          )}
 
-            {activeTab === 'evaluationForms' && (
-              <motion.div
-                key="evaluationForms"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <EvaluationFormsSettings />
-              </motion.div>
-            )}
-
-            {activeTab === 'governingCourses' && (
-              <motion.div
-                key="governingCourses"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <GoverningCoursesSettings />
-              </motion.div>
-            )}
-
-            {activeTab === 'leaves' && (
-              <motion.div
-                key="leaves"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <LeaveTypesSettings />
-              </motion.div>
-            )}
-
-            {activeTab === 'promotionRules' && (
-              <motion.div
-                key="promotionRules"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                transition={{ duration: 0.2 }}
-              >
-                <PromotionRulesSettings />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+          {activeTab === 'promotionRules' && (
+            <motion.div
+              key="promotionRules"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.18 }}
+            >
+              <PromotionRulesSettings />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

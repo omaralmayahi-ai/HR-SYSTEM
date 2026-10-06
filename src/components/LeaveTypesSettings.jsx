@@ -4,7 +4,8 @@ import { useToast } from '@/components/ui/use-toast';
 import { 
   Plus, Trash2, Edit2, Check, X, RefreshCw, Play, Pause, 
   CalendarDays, ShieldCheck, Sparkles, AlertCircle, Clock,
-  Save, CheckCircle2, History, ArrowUpRight
+  Save, CheckCircle2, History, ArrowUpRight, Award, TrendingUp,
+  Banknote, AlertTriangle, CheckSquare, Square
 } from 'lucide-react';
 
 export default function LeaveTypesSettings() {
@@ -18,8 +19,14 @@ export default function LeaveTypesSettings() {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState('');
   const [newMaxDays, setNewMaxDays] = useState('');
-  const [newAdministrativeEffect, setNewAdministrativeEffect] = useState('لا_يؤثر');
-  const [newFinancialEffect, setNewFinancialEffect] = useState('براتب_كامل');
+  
+  // Checkable Administrative Effects
+  const [newAffectsIncrement, setNewAffectsIncrement] = useState(false); // العلاوة السنوية
+  const [newAffectsPromotion, setNewAffectsPromotion] = useState(false); // الترفيع
+  const [newAffectsCommendations, setNewAffectsCommendations] = useState(false); // كتب الشكر
+  
+  // Financial Payment Type
+  const [newSalaryPaymentType, setNewSalaryPaymentType] = useState('منح_الراتب_كامل'); // منح_الراتب_كامل, منح_الراتب_والمخصصات_الثابتة_فقط, بدون_راتب, استقطاع_جزئي
   const [newFinancialDeductionPercentage, setNewFinancialDeductionPercentage] = useState(0);
   const [newDescription, setNewDescription] = useState('');
   const [newStatus, setNewStatus] = useState('فعال');
@@ -28,8 +35,10 @@ export default function LeaveTypesSettings() {
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editMaxDays, setEditMaxDays] = useState('');
-  const [editAdministrativeEffect, setEditAdministrativeEffect] = useState('لا_يؤثر');
-  const [editFinancialEffect, setEditFinancialEffect] = useState('براتب_كامل');
+  const [editAffectsIncrement, setEditAffectsIncrement] = useState(false);
+  const [editAffectsPromotion, setEditAffectsPromotion] = useState(false);
+  const [editAffectsCommendations, setEditAffectsCommendations] = useState(false);
+  const [editSalaryPaymentType, setEditSalaryPaymentType] = useState('منح_الراتب_كامل');
   const [editFinancialDeductionPercentage, setEditFinancialDeductionPercentage] = useState(0);
   const [editDescription, setEditDescription] = useState('');
   const [editStatus, setEditStatus] = useState('فعال');
@@ -149,11 +158,26 @@ export default function LeaveTypesSettings() {
     }
   };
 
+  const getAdminEffectSummary = (affPromo, affInc, affComm) => {
+    const parts = [];
+    if (affPromo) parts.push('يوقف الترفيع');
+    if (affInc) parts.push('يؤخر العلاوة');
+    if (affComm) parts.push('يوقف كتب الشكر');
+    return parts.length > 0 ? parts.join(' و ') : 'لا_يؤثر';
+  };
+
+  const getFinancialEffectCode = (salType) => {
+    if (salType === 'بدون_راتب') return 'بدون_راتب';
+    if (salType === 'منح_الراتب_والمخصصات_الثابتة_فقط') return 'براتب_ومخصصات_ثابتة';
+    if (salType === 'استقطاع_جزئي') return 'استقطاع_جزئي';
+    return 'براتب_كامل';
+  };
+
   const handleAdd = async (e) => {
     e.preventDefault();
-    if (!newName) {
+    if (!newName.trim()) {
       toast({
-        title: 'تنبيه',
+        title: 'خطأ في الإدخال',
         description: 'يرجى إدخال اسم نوع الإجازة',
         variant: 'destructive',
       });
@@ -161,28 +185,52 @@ export default function LeaveTypesSettings() {
     }
 
     try {
+      const adminEff = getAdminEffectSummary(newAffectsPromotion, newAffectsIncrement, newAffectsCommendations);
+      const finEff = getFinancialEffectCode(newSalaryPaymentType);
+      const finDedPct = newSalaryPaymentType === 'بدون_راتب' ? 100 : (newSalaryPaymentType === 'استقطاع_جزئي' ? parseInt(newFinancialDeductionPercentage) || 50 : 0);
+
+      const effectsList = [];
+      if (newAffectsPromotion) effectsList.push('الترفيع');
+      if (newAffectsIncrement) effectsList.push('العلاوة_السنوية');
+      if (newAffectsCommendations) effectsList.push('كتب_الشكر');
+      effectsList.push(newSalaryPaymentType);
+
       const payload = {
         name: newName,
         maxDays: newMaxDays ? parseInt(newMaxDays) : null,
-        administrativeEffect: newAdministrativeEffect,
-        administrative_effect: newAdministrativeEffect,
-        financialEffect: newFinancialEffect,
-        financial_effect: newFinancialEffect,
-        financialDeductionPercentage: parseInt(newFinancialDeductionPercentage) || 0,
-        financial_deduction_percentage: parseInt(newFinancialDeductionPercentage) || 0,
+        affectsIncrement: newAffectsIncrement,
+        affects_increment: newAffectsIncrement,
+        affectsPromotion: newAffectsPromotion,
+        affects_promotion: newAffectsPromotion,
+        affectsCommendations: newAffectsCommendations,
+        affects_commendations: newAffectsCommendations,
+        salaryPaymentType: newSalaryPaymentType,
+        salary_payment_type: newSalaryPaymentType,
+        administrativeEffect: adminEff,
+        administrative_effect: adminEff,
+        financialEffect: finEff,
+        financial_effect: finEff,
+        financialDeductionPercentage: finDedPct,
+        financial_deduction_percentage: finDedPct,
+        effectsOptions: JSON.stringify(effectsList),
+        effects_options: JSON.stringify(effectsList),
         description: newDescription,
         status: newStatus,
       };
+
       await apiClient.entities.LeaveType.create(payload);
       toast({
         title: 'تمت الإضافة',
         description: `تمت إضافة إجازة "${newName}" بنجاح`,
         variant: 'success',
       });
+
       setNewName('');
       setNewMaxDays('');
-      setNewAdministrativeEffect('لا_يؤثر');
-      setNewFinancialEffect('براتب_كامل');
+      setNewAffectsIncrement(false);
+      setNewAffectsPromotion(false);
+      setNewAffectsCommendations(false);
+      setNewSalaryPaymentType('منح_الراتب_كامل');
       setNewFinancialDeductionPercentage(0);
       setNewDescription('');
       setNewStatus('فعال');
@@ -191,7 +239,7 @@ export default function LeaveTypesSettings() {
 
       await apiClient.logs.create({
         action: 'تعديل أنواع الإجازات',
-        details: `إضافة نوع إجازة جديد (${newName} - الأثر الإداري: ${newAdministrativeEffect}، الأثر المالي: ${newFinancialEffect}، الحالة: ${newStatus})`
+        details: `إضافة نوع إجازة جديد (${newName} - الترفيع: ${newAffectsPromotion ? 'نعم' : 'لا'}، العلاوة: ${newAffectsIncrement ? 'نعم' : 'لا'}، كتب الشكر: ${newAffectsCommendations ? 'نعم' : 'لا'}، صرف الراتب: ${newSalaryPaymentType})`
       }).catch(() => {});
     } catch (error) {
       toast({
@@ -206,8 +254,35 @@ export default function LeaveTypesSettings() {
     setEditingId(record.id);
     setEditName(record.name);
     setEditMaxDays(record.maxDays || record.max_days || '');
-    setEditAdministrativeEffect(record.administrativeEffect || record.administrative_effect || 'لا_يؤثر');
-    setEditFinancialEffect(record.financialEffect || record.financial_effect || 'براتب_كامل');
+
+    const isInc = Boolean(record.affectsIncrement ?? record.affects_increment ?? (
+      record.administrativeEffect === 'يؤخر_العلاوة' || 
+      record.administrative_effect === 'يؤخر_العلاوة' || 
+      (record.administrative_effect && record.administrative_effect.includes('العلاوة'))
+    ));
+    const isPromo = Boolean(record.affectsPromotion ?? record.affects_promotion ?? (
+      record.administrativeEffect === 'يوقف_الترفيع' || 
+      record.administrative_effect === 'يوقف_الترفيع' || 
+      (record.administrative_effect && record.administrative_effect.includes('الترفيع'))
+    ));
+    const isComm = Boolean(record.affectsCommendations ?? record.affects_commendations ?? (
+      (record.administrative_effect && record.administrative_effect.includes('الشكر')) ||
+      (record.effects_options && record.effects_options.includes('كتب_الشكر'))
+    ));
+
+    let salType = record.salaryPaymentType || record.salary_payment_type;
+    if (!salType) {
+      const fin = record.financialEffect || record.financial_effect;
+      if (fin === 'بدون_راتب') salType = 'بدون_راتب';
+      else if (fin === 'براتب_ومخصصات_ثابتة') salType = 'منح_الراتب_والمخصصات_الثابتة_فقط';
+      else if (fin === 'استقطاع_جزئي') salType = 'استقطاع_جزئي';
+      else salType = 'منح_الراتب_كامل';
+    }
+
+    setEditAffectsIncrement(isInc);
+    setEditAffectsPromotion(isPromo);
+    setEditAffectsCommendations(isComm);
+    setEditSalaryPaymentType(salType);
     setEditFinancialDeductionPercentage(record.financialDeductionPercentage ?? record.financial_deduction_percentage ?? 0);
     setEditDescription(record.description || '');
     setEditStatus(record.status || 'فعال');
@@ -215,22 +290,43 @@ export default function LeaveTypesSettings() {
 
   const handleSaveEdit = async (id) => {
     try {
+      const adminEff = getAdminEffectSummary(editAffectsPromotion, editAffectsIncrement, editAffectsCommendations);
+      const finEff = getFinancialEffectCode(editSalaryPaymentType);
+      const finDedPct = editSalaryPaymentType === 'بدون_راتب' ? 100 : (editSalaryPaymentType === 'استقطاع_جزئي' ? parseInt(editFinancialDeductionPercentage) || 50 : 0);
+
+      const effectsList = [];
+      if (editAffectsPromotion) effectsList.push('الترفيع');
+      if (editAffectsIncrement) effectsList.push('العلاوة_السنوية');
+      if (editAffectsCommendations) effectsList.push('كتب_الشكر');
+      effectsList.push(editSalaryPaymentType);
+
       const payload = {
         name: editName,
         maxDays: editMaxDays ? parseInt(editMaxDays) : null,
-        administrativeEffect: editAdministrativeEffect,
-        administrative_effect: editAdministrativeEffect,
-        financialEffect: editFinancialEffect,
-        financial_effect: editFinancialEffect,
-        financialDeductionPercentage: parseInt(editFinancialDeductionPercentage) || 0,
-        financial_deduction_percentage: parseInt(editFinancialDeductionPercentage) || 0,
+        affectsIncrement: editAffectsIncrement,
+        affects_increment: editAffectsIncrement,
+        affectsPromotion: editAffectsPromotion,
+        affects_promotion: editAffectsPromotion,
+        affectsCommendations: editAffectsCommendations,
+        affects_commendations: editAffectsCommendations,
+        salaryPaymentType: editSalaryPaymentType,
+        salary_payment_type: editSalaryPaymentType,
+        administrativeEffect: adminEff,
+        administrative_effect: adminEff,
+        financialEffect: finEff,
+        financial_effect: finEff,
+        financialDeductionPercentage: finDedPct,
+        financial_deduction_percentage: finDedPct,
+        effectsOptions: JSON.stringify(effectsList),
+        effects_options: JSON.stringify(effectsList),
         description: editDescription,
         status: editStatus,
       };
+
       await apiClient.entities.LeaveType.update(id, payload);
       toast({
         title: 'تم التحديث',
-        description: 'تم تحديث نوع الإجازة بنجاح',
+        description: 'تم تحديث نوع الإجازة وضوابط التأشير بنجاح',
         variant: 'success',
       });
       setEditingId(null);
@@ -238,7 +334,7 @@ export default function LeaveTypesSettings() {
 
       await apiClient.logs.create({
         action: 'تعديل أنواع الإجازات',
-        details: `تحديث نوع إجازة (${editName} - الأثر الإداري: ${editAdministrativeEffect}، الأثر المالي: ${editFinancialEffect}، الحالة: ${editStatus})`
+        details: `تحديث نوع إجازة (${editName} - الترفيع: ${editAffectsPromotion ? 'نعم' : 'لا'}، العلاوة: ${editAffectsIncrement ? 'نعم' : 'لا'}، كتب الشكر: ${editAffectsCommendations ? 'نعم' : 'لا'}، صرف الراتب: ${editSalaryPaymentType})`
       }).catch(() => {});
     } catch (error) {
       toast({
@@ -304,16 +400,76 @@ export default function LeaveTypesSettings() {
   };
 
   const handleLoadStandardPresets = async () => {
-    if (!window.confirm('هل تريد استيراد الإجازات الرسمية المعتمدة وفق قانون الخدمة المدنية العراقي؟')) return;
+    if (!window.confirm('هل تريد استيراد الإجازات الرسمية المعتمدة وفق قانون الخدمة المدنية العراقي مع خيارات التأثير الإداري والمالي الدقيقة؟')) return;
     setLoading(true);
     try {
       const presets = [
-        { name: 'إجازة اعتيادية براتب تام', maxDays: 30, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تُمنح للموظف براتب تام بمعدل يومين ونصف عن كل شهر خدمة فعلي متراكم.', status: 'فعال' },
-        { name: 'إجازة مرضية براتب تام', maxDays: 120, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تُمنح للموظف بناءً على قرار من اللجان الطبية الرسمية بحد أقصى 120 يوماً.', status: 'فعال' },
-        { name: 'إجازة حج وعمرة براتب تام', maxDays: 30, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تُمنح لتأدية فريضة الحج براتب تام لمرة واحدة طوال مدة الخدمة.', status: 'فعال' },
-        { name: 'إجازة أمومة وولادة براتب تام', maxDays: 72, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تمنح للموظفات الحوامل لغرض الولادة والعناية بالطفل لمدة 72 يوماً.', status: 'فعال' },
-        { name: 'إجازة دراسية لتطوير الكفاءات', maxDays: null, administrativeEffect: 'لا_يؤثر', financialEffect: 'براتب_كامل', financialDeductionPercentage: 0, description: 'تُمنح للموظفين المقبولين في الدراسات العليا للحصول على الماجستير أو الدكتوراه.', status: 'فعال' },
-        { name: 'إجازة بدون راتب (طارئة)', maxDays: 60, administrativeEffect: 'يوقف_الترفيع', financialEffect: 'بدون_راتب', financialDeductionPercentage: 100, description: 'إجازة استثنائية اضطرارية تُمنح للموظف ولا تُحتسب خدمتها لأغراض الترقية أو التقاعد.', status: 'فعال' },
+        { 
+          name: 'إجازة اعتيادية براتب تام', 
+          maxDays: 30, 
+          affectsIncrement: false,
+          affectsPromotion: false,
+          affectsCommendations: false,
+          salaryPaymentType: 'منح_الراتب_كامل',
+          financialDeductionPercentage: 0,
+          description: 'تُمنح للموظف براتب تام بمعدل يومين ونصف عن كل شهر خدمة فعلي متراكم.', 
+          status: 'فعال' 
+        },
+        { 
+          name: 'إجازة مرضية براتب تام', 
+          maxDays: 120, 
+          affectsIncrement: false,
+          affectsPromotion: false,
+          affectsCommendations: false,
+          salaryPaymentType: 'منح_الراتب_كامل',
+          financialDeductionPercentage: 0,
+          description: 'تُمنح للموظف بناءً على قرار من اللجان الطبية الرسمية بحد أقصى 120 يوماً.', 
+          status: 'فعال' 
+        },
+        { 
+          name: 'إجازة حج وعمرة براتب تام', 
+          maxDays: 30, 
+          affectsIncrement: false,
+          affectsPromotion: false,
+          affectsCommendations: false,
+          salaryPaymentType: 'منح_الراتب_كامل',
+          financialDeductionPercentage: 0,
+          description: 'تُمنح لتأدية فريضة الحج براتب تام لمرة واحدة طوال مدة الخدمة.', 
+          status: 'فعال' 
+        },
+        { 
+          name: 'إجازة أمومة ورعاية طفل', 
+          maxDays: 365, 
+          affectsIncrement: false,
+          affectsPromotion: false,
+          affectsCommendations: false,
+          salaryPaymentType: 'منح_الراتب_والمخصصات_الثابتة_فقط',
+          financialDeductionPercentage: 0,
+          description: 'تمنح للموظفات لرعاية الطفل مع صرف الراتب الاسمي والمخصصات الثابتة فقط.', 
+          status: 'فعال' 
+        },
+        { 
+          name: 'إجازة دراسية لتطوير الكفاءات', 
+          maxDays: 730, 
+          affectsIncrement: false,
+          affectsPromotion: false,
+          affectsCommendations: true,
+          salaryPaymentType: 'منح_الراتب_والمخصصات_الثابتة_فقط',
+          financialDeductionPercentage: 0,
+          description: 'تُمنح للمقبولين في الدراسات العليا وتوقف منح كتب الشكر والتقدير أثناء مدة الإجازة.', 
+          status: 'فعال' 
+        },
+        { 
+          name: 'إجازة بدون راتب (طارئة / مصاحبة)', 
+          maxDays: 365, 
+          affectsIncrement: true,
+          affectsPromotion: true,
+          affectsCommendations: true,
+          salaryPaymentType: 'بدون_راتب',
+          financialDeductionPercentage: 100,
+          description: 'إجازة استثنائية بدون راتب توقف الترفيع وتؤخر العلاوة وتوقف منح كتب الشكر والتقدير.', 
+          status: 'فعال' 
+        },
       ];
 
       for (const item of presets) {
@@ -322,7 +478,7 @@ export default function LeaveTypesSettings() {
 
       toast({
         title: 'تم استيراد الإجازات الرسمية',
-        description: 'تمت تعبئة إجازات الخدمة المدنية العراقية بنجاح.',
+        description: 'تمت تعبئة إجازات الخدمة المدنية العراقية المحدثة بنجاح.',
         variant: 'success',
       });
       fetchRecords();
@@ -341,7 +497,21 @@ export default function LeaveTypesSettings() {
   const isAccruedForCurrentMonth = accrualStatus?.lastLeaveAccrualMonth === currentMonthStr;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl">
+      {/* Header Banner */}
+      <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <div className="flex items-center gap-2.5 mb-1">
+            <div className="p-2 rounded-xl bg-[#1B3A6B]/10 text-[#1B3A6B]">
+              <CalendarDays size={22} />
+            </div>
+            <h2 className="text-xl font-bold text-[#1B3A6B]">دليل أنواع الإجازات</h2>
+          </div>
+          <p className="text-xs text-slate-500 font-medium leading-relaxed">
+            إدارة أنواع الإجازات والآثار الإدارية والمالية، وضوابط الإضافة الشهرية التلقائية وتراكم الأرصدة السنوية.
+          </p>
+        </div>
+      </div>
       
       {/* 1. قسم قواعد وضوابط الزيادة الشهرية التلقائية لأرصدة الإجازات */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-5">
@@ -395,7 +565,7 @@ export default function LeaveTypesSettings() {
                 />
                 <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم / شهر</span>
               </div>
-              <p className="text-[10px] text-slate-400">القانون العراقي: يومين ونصف (2.5) أو يوم واحد شهرياً</p>
+              <p className="text-[10px] text-slate-400">القانون العراقي: يومين ونصف (2.5) شهرياً</p>
             </div>
 
             {/* الحقل 2: الإجازة المرضية المضافة شهرياً */}
@@ -436,7 +606,7 @@ export default function LeaveTypesSettings() {
                 />
                 <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم كحد أقصى</span>
               </div>
-              <p className="text-[10px] text-slate-400">إدخال يدوي (الافتراضي 10,000 يوم - حتى 10,000)</p>
+              <p className="text-[10px] text-slate-400">إدخال يدوي (الافتراضي 10,000 يوم)</p>
             </div>
 
             {/* الحقل 4: الحد الأقصى لتراكم الإجازة المرضية */}
@@ -456,43 +626,39 @@ export default function LeaveTypesSettings() {
                 />
                 <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم كحد أقصى</span>
               </div>
-              <p className="text-[10px] text-slate-400">إدخال يدوي (الافتراضي 10,000 يوم - حتى 10,000)</p>
+              <p className="text-[10px] text-slate-400">الحد الأقصى التراكمي للرصيد المرضي</p>
             </div>
           </div>
 
-          {/* شريط التحكم وحالة الزيادة الآلية */}
-          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pt-2">
+            <label className="flex items-center gap-2 cursor-pointer bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-xl text-xs font-bold text-slate-700">
               <input
                 type="checkbox"
                 checked={autoAccrualEnabled}
                 onChange={(e) => setAutoAccrualEnabled(e.target.checked)}
-                className="w-4 h-4 rounded text-[#1B3A6B] focus:ring-[#1B3A6B]"
+                className="rounded text-[#1B3A6B] focus:ring-[#1B3A6B] w-4 h-4"
               />
-              <span className="text-xs font-bold text-slate-700">
-                تفعيل الترحيل والزيادة التلقائية لأرصدة الموظفين المستمرين بداية كل شهر ميلادي
-              </span>
+              <span>تفعيل الزيادة والترحيل الشهري التلقائي في بداية كل شهر تقويمي</span>
             </label>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-              <button
-                type="submit"
-                disabled={savingRules}
-                className="bg-[#1B3A6B] hover:bg-[#152d54] text-white px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs disabled:opacity-50"
-              >
-                <Save size={14} />
-                {savingRules ? 'جاري الحفظ...' : 'حفظ القواعد والضوابط'}
-              </button>
-
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleExecuteAccrualNow}
                 disabled={executingAccrual}
-                className="bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs disabled:opacity-50"
-                title="تطبيق الزيادة الشهرية الآن على كافة الموظفين المستمرين"
+                className="bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
               >
-                <Play size={13} />
-                {executingAccrual ? 'جاري تطبيق الزيادة...' : 'تنفيذ الزيادة الشهرية للأرصدة الآن'}
+                {executingAccrual ? <RefreshCw className="animate-spin" size={14} /> : <Play size={14} />}
+                تنفيذ الزيادة الشهرية للأرصدة يدوياً الآن
+              </button>
+
+              <button
+                type="submit"
+                disabled={savingRules}
+                className="bg-[#1B3A6B] hover:bg-[#152d54] disabled:opacity-50 text-white rounded-xl px-5 py-2 text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
+              >
+                {savingRules ? <RefreshCw className="animate-spin" size={14} /> : <Save size={14} />}
+                حفظ ضوابط الأرصدة
               </button>
             </div>
           </div>
@@ -552,7 +718,7 @@ export default function LeaveTypesSettings() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h3 className="text-base font-bold text-slate-800">دليل أنواع الإجازات السنوية المعتمدة</h3>
-            <p className="text-xs text-slate-500 mt-0.5">إضافة، تعديل وحذف مسميات الإجازات المتاحة للموظفين وتحديد رصيد الأيام الأقصى.</p>
+            <p className="text-xs text-slate-500 mt-0.5">تحديد مسميات الإجازات وضوابط التأشير الإداري (العلاوة، الترفيع، كتب الشكر) والأثر المالي على الراتب.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -577,8 +743,20 @@ export default function LeaveTypesSettings() {
 
         {/* إضافة نوع إجازة جديد */}
         {adding && (
-          <form onSubmit={handleAdd} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-4 animate-fadeIn">
-            <h4 className="text-xs font-bold text-slate-700">نوع إجازة جديد</h4>
+          <form onSubmit={handleAdd} className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-5 animate-fadeIn">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <h4 className="text-sm font-bold text-[#1B3A6B] flex items-center gap-2">
+                <Plus size={16} /> إضافة نوع إجازة جديد وتحديد ضوابط التأشير
+              </h4>
+              <button
+                type="button"
+                onClick={() => setAdding(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
               <div className="space-y-1.5 md:col-span-2">
                 <label className="text-xs font-bold text-slate-700 block">اسم الإجازة *</label>
@@ -586,12 +764,12 @@ export default function LeaveTypesSettings() {
                   type="text"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  placeholder="مثال: إجازة اعتيادية، إجازة مصاحبة زوجية"
+                  placeholder="مثال: إجازة اعتيادية، إجازة دراسية، إجازة مصاحبة"
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-medium"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 block">الحد الأقصى للأيام السنوية (اختياري)</label>
+                <label className="text-xs font-bold text-slate-700 block">الحد الأقصى للأيام السنوية</label>
                 <input
                   type="number"
                   value={newMaxDays}
@@ -613,71 +791,196 @@ export default function LeaveTypesSettings() {
               </div>
             </div>
 
-            {/* الأثر الإداري والمالي */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 block">الأثر الإداري على احتساب الخدمة والترقية *</label>
-                <select
-                  value={newAdministrativeEffect}
-                  onChange={(e) => setNewAdministrativeEffect(e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-bold"
-                >
-                  <option value="لا_يؤثر">لا يؤثر (تُحتسب الخدمة كاملة للترقية والعلاوة)</option>
-                  <option value="يوقف_الترفيع">يوقف الترفيع واحتساب القدم خلال مدتها</option>
-                  <option value="يؤخر_العلاوة">يؤخر استحقاق العلاوة السنوية</option>
-                </select>
+            {/* الأثر الإداري (خيارات التأشير المطلوبة) */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck size={16} className="text-[#1B3A6B]" />
+                <span className="text-xs font-bold text-slate-800">الأثر الإداري (اختر التأثيرات المترتبة على هذه الإجازة):</span>
               </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 block">الأثر المالي على الراتب والبدلات *</label>
-                <select
-                  value={newFinancialEffect}
-                  onChange={(e) => setNewFinancialEffect(e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-bold"
-                >
-                  <option value="براتب_كامل">براتب كامل (تام)</option>
-                  <option value="بدون_راتب">بدون راتب (استقطاع تام 100%)</option>
-                  <option value="استقطاع_جزئي">استقطاع جزئي (نصف راتب أو نسبة محددة)</option>
-                </select>
-              </div>
-
-              {newFinancialEffect === 'استقطاع_جزئي' && (
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 block">نسبة الاستقطاع من الراتب (%)</label>
+              <p className="text-[11px] text-slate-500">قم بتأشير الخيارات التي تتوقف أو تتأثر للموظف خلال فترة تمتعه بهذه الإجازة:</p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                {/* 1. العلاوة السنوية */}
+                <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                  newAffectsIncrement 
+                    ? 'bg-amber-50/70 border-amber-300 text-amber-900' 
+                    : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100/60 text-slate-700'
+                }`}>
                   <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    value={newFinancialDeductionPercentage}
-                    onChange={(e) => setNewFinancialDeductionPercentage(e.target.value)}
-                    placeholder="مثال: 50%"
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-bold"
+                    type="checkbox"
+                    checked={newAffectsIncrement}
+                    onChange={(e) => setNewAffectsIncrement(e.target.checked)}
+                    className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 w-4 h-4"
                   />
-                </div>
-              )}
+                  <div>
+                    <span className="text-xs font-bold block">تؤخر / توقف العلاوة السنوية</span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">تأخير استحقاق العلاوة بمقدار مدة الإجازة</span>
+                  </div>
+                </label>
+
+                {/* 2. الترفيع */}
+                <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                  newAffectsPromotion 
+                    ? 'bg-rose-50/70 border-rose-300 text-rose-900' 
+                    : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100/60 text-slate-700'
+                }`}>
+                  <input
+                    type="checkbox"
+                    checked={newAffectsPromotion}
+                    onChange={(e) => setNewAffectsPromotion(e.target.checked)}
+                    className="mt-0.5 rounded text-rose-600 focus:ring-rose-500 w-4 h-4"
+                  />
+                  <div>
+                    <span className="text-xs font-bold block">توقف الترفيع واحتساب القدم</span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">لا تحتسب المدة خدمة لأغراض الترقية</span>
+                  </div>
+                </label>
+
+                {/* 3. كتب الشكر والتقدير */}
+                <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                  newAffectsCommendations 
+                    ? 'bg-purple-50/70 border-purple-300 text-purple-900' 
+                    : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100/60 text-slate-700'
+                }`}>
+                  <input
+                    type="checkbox"
+                    checked={newAffectsCommendations}
+                    onChange={(e) => setNewAffectsCommendations(e.target.checked)}
+                    className="mt-0.5 rounded text-purple-600 focus:ring-purple-500 w-4 h-4"
+                  />
+                  <div>
+                    <span className="text-xs font-bold block">توقف منح كتب الشكر والتقدير</span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">عدم جواز منح أو احتساب كتب الشكر أثنائها</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* الأثر المالي وصرف الراتب (خيارات الراتب المطلوبة) */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
+              <div className="flex items-center gap-2">
+                <Banknote size={16} className="text-emerald-700" />
+                <span className="text-xs font-bold text-slate-800">الأثر المالي وضوابط صرف الراتب:</span>
+              </div>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-1">
+                {/* 1. منح الراتب كامل */}
+                <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                  newSalaryPaymentType === 'منح_الراتب_كامل'
+                    ? 'bg-emerald-50 border-emerald-400 text-emerald-950 font-bold'
+                    : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100/60 text-slate-700'
+                }`}>
+                  <input
+                    type="radio"
+                    name="newSalaryPaymentType"
+                    value="منح_الراتب_كامل"
+                    checked={newSalaryPaymentType === 'منح_الراتب_كامل'}
+                    onChange={(e) => setNewSalaryPaymentType(e.target.value)}
+                    className="mt-0.5 text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                  />
+                  <div>
+                    <span className="text-xs font-bold block">منح الراتب كامل</span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">الراتب الاسمي + كافة المخصصات</span>
+                  </div>
+                </label>
+
+                {/* 2. منح الراتب والمخصصات الثابتة فقط */}
+                <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                  newSalaryPaymentType === 'منح_الراتب_والمخصصات_الثابتة_فقط'
+                    ? 'bg-blue-50 border-blue-400 text-blue-950 font-bold'
+                    : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100/60 text-slate-700'
+                }`}>
+                  <input
+                    type="radio"
+                    name="newSalaryPaymentType"
+                    value="منح_الراتب_والمخصصات_الثابتة_فقط"
+                    checked={newSalaryPaymentType === 'منح_الراتب_والمخصصات_الثابتة_فقط'}
+                    onChange={(e) => setNewSalaryPaymentType(e.target.value)}
+                    className="mt-0.5 text-blue-600 focus:ring-blue-500 w-4 h-4"
+                  />
+                  <div>
+                    <span className="text-xs font-bold block">منح الراتب والمخصصات الثابتة فقط</span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">الراتب الاسمي + الثابتة (دون المتغيرة)</span>
+                  </div>
+                </label>
+
+                {/* 3. بدون راتب */}
+                <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                  newSalaryPaymentType === 'بدون_راتب'
+                    ? 'bg-rose-50 border-rose-400 text-rose-950 font-bold'
+                    : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100/60 text-slate-700'
+                }`}>
+                  <input
+                    type="radio"
+                    name="newSalaryPaymentType"
+                    value="بدون_راتب"
+                    checked={newSalaryPaymentType === 'بدون_راتب'}
+                    onChange={(e) => setNewSalaryPaymentType(e.target.value)}
+                    className="mt-0.5 text-rose-600 focus:ring-rose-500 w-4 h-4"
+                  />
+                  <div>
+                    <span className="text-xs font-bold block">بدون راتب (100%)</span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">استقطاع تام خلال فترة الإجازة</span>
+                  </div>
+                </label>
+
+                {/* 4. استقطاع جزئي */}
+                <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                  newSalaryPaymentType === 'استقطاع_جزئي'
+                    ? 'bg-amber-50 border-amber-400 text-amber-950 font-bold'
+                    : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100/60 text-slate-700'
+                }`}>
+                  <input
+                    type="radio"
+                    name="newSalaryPaymentType"
+                    value="استقطاع_جزئي"
+                    checked={newSalaryPaymentType === 'استقطاع_جزئي'}
+                    onChange={(e) => setNewSalaryPaymentType(e.target.value)}
+                    className="mt-0.5 text-amber-600 focus:ring-amber-500 w-4 h-4"
+                  />
+                  <div className="w-full">
+                    <span className="text-xs font-bold block">استقطاع جزئي (%)</span>
+                    {newSalaryPaymentType === 'استقطاع_جزئي' && (
+                      <div className="mt-1 flex items-center gap-1">
+                        <input
+                          type="number"
+                          min="1"
+                          max="99"
+                          value={newFinancialDeductionPercentage}
+                          onChange={(e) => setNewFinancialDeductionPercentage(e.target.value)}
+                          placeholder="50"
+                          className="w-14 bg-white border border-amber-300 rounded px-1 py-0.5 text-xs text-center font-bold"
+                        />
+                        <span className="text-[10px] text-amber-800 font-bold">% خصم</span>
+                      </div>
+                    )}
+                  </div>
+                </label>
+              </div>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700 block">الوصف والشروط المرفقة بالتقديم</label>
+              <label className="text-xs font-bold text-slate-700 block">الوصف والشروط المعتمدة</label>
               <textarea
                 value={newDescription}
                 onChange={(e) => setNewDescription(e.target.value)}
                 rows={2}
-                placeholder="اكتب تفاصيل إضافية حول شروط التقديم أو الخصم المالي المترتب عليها إن وجد..."
+                placeholder="اكتب تفاصيل إضافية حول شروط منح الإجازة وسندها القانوني..."
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-medium"
               />
             </div>
+
             <div className="flex gap-2 justify-end pt-1">
               <button
                 type="button"
                 onClick={() => setAdding(false)}
-                className="bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 font-bold rounded-lg px-4 py-2 text-xs transition-colors"
+                className="bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 font-bold rounded-xl px-4 py-2 text-xs transition-colors"
               >
                 إلغاء
               </button>
               <button
                 type="submit"
-                className="bg-[#1B3A6B] hover:bg-[#152d54] text-white font-bold rounded-lg px-5 py-2 text-xs transition-colors shadow-xs"
+                className="bg-[#1B3A6B] hover:bg-[#152d54] text-white font-bold rounded-xl px-5 py-2 text-xs transition-colors shadow-xs"
               >
                 إضافة الإجازة
               </button>
@@ -703,9 +1006,9 @@ export default function LeaveTypesSettings() {
                 <tr>
                   <th className="px-4 py-3">اسم نوع الإجازة</th>
                   <th className="px-4 py-3">الحد الأقصى</th>
-                  <th className="px-4 py-3 text-center">الأثر الإداري</th>
-                  <th className="px-4 py-3 text-center">الأثر المالي</th>
-                  <th className="px-4 py-3">الوصف والشروط المعتمدة</th>
+                  <th className="px-4 py-3">الأثر الإداري (خيارات التأشير)</th>
+                  <th className="px-4 py-3">الأثر المالي وضوابط الراتب</th>
+                  <th className="px-4 py-3">الوصف والشروط</th>
                   <th className="px-4 py-3 text-center">الحالة</th>
                   <th className="px-4 py-3 text-left">التحكم</th>
                 </tr>
@@ -714,13 +1017,37 @@ export default function LeaveTypesSettings() {
                 {records.map((r) => {
                   const isEditing = editingId === r.id;
                   const isPaused = r.status === 'متوقف مؤقتاً';
-                  const adminEff = r.administrativeEffect || r.administrative_effect || 'لا_يؤثر';
-                  const finEff = r.financialEffect || r.financial_effect || 'براتب_كامل';
+                  
+                  const isInc = Boolean(r.affectsIncrement ?? r.affects_increment ?? (
+                    r.administrativeEffect === 'يؤخر_العلاوة' || 
+                    r.administrative_effect === 'يؤخر_العلاوة' || 
+                    (r.administrative_effect && r.administrative_effect.includes('العلاوة'))
+                  ));
+                  const isPromo = Boolean(r.affectsPromotion ?? r.affects_promotion ?? (
+                    r.administrativeEffect === 'يوقف_الترفيع' || 
+                    r.administrative_effect === 'يوقف_الترفيع' || 
+                    (r.administrative_effect && r.administrative_effect.includes('الترفيع'))
+                  ));
+                  const isComm = Boolean(r.affectsCommendations ?? r.affects_commendations ?? (
+                    (r.administrative_effect && r.administrative_effect.includes('الشكر')) ||
+                    (r.effects_options && r.effects_options.includes('كتب_الشكر'))
+                  ));
+
+                  let salType = r.salaryPaymentType || r.salary_payment_type;
+                  if (!salType) {
+                    const fin = r.financialEffect || r.financial_effect;
+                    if (fin === 'بدون_راتب') salType = 'بدون_راتب';
+                    else if (fin === 'براتب_ومخصصات_ثابتة') salType = 'منح_الراتب_والمخصصات_الثابتة_فقط';
+                    else if (fin === 'استقطاع_جزئي') salType = 'استقطاع_جزئي';
+                    else salType = 'منح_الراتب_كامل';
+                  }
+
                   const finDed = r.financialDeductionPercentage ?? r.financial_deduction_percentage ?? 0;
 
                   return (
                     <tr key={r.id} className={`hover:bg-slate-50/50 transition-colors ${isPaused ? 'bg-slate-50/40 text-slate-400' : ''}`}>
-                      <td className="px-4 py-3 font-semibold text-slate-800">
+                      {/* 1. اسم الإجازة */}
+                      <td className="px-4 py-3 font-semibold text-slate-800 min-w-[170px]">
                         {isEditing ? (
                           <input
                             type="text"
@@ -732,7 +1059,9 @@ export default function LeaveTypesSettings() {
                           <span className={isPaused ? 'line-through text-slate-400 font-normal' : ''}>{r.name}</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-slate-600 font-mono font-bold">
+
+                      {/* 2. الحد الأقصى للأيام */}
+                      <td className="px-4 py-3 text-slate-600 font-mono font-bold whitespace-nowrap">
                         {isEditing ? (
                           <input
                             type="number"
@@ -745,66 +1074,131 @@ export default function LeaveTypesSettings() {
                           r.maxDays || r.max_days ? `${r.maxDays || r.max_days} يوم` : 'مفتوح'
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center">
+
+                      {/* 3. الأثر الإداري (خيارات التأشير) */}
+                      <td className="px-4 py-3">
                         {isEditing ? (
-                          <select
-                            value={editAdministrativeEffect}
-                            onChange={(e) => setEditAdministrativeEffect(e.target.value)}
-                            className="bg-white border border-slate-200 rounded p-1 text-xs font-semibold"
-                          >
-                            <option value="لا_يؤثر">لا يؤثر</option>
-                            <option value="يوقف_الترفيع">يوقف الترفيع</option>
-                            <option value="يؤخر_العلاوة">يؤخر العلاوة</option>
-                          </select>
+                          <div className="flex flex-col gap-1.5 p-2 bg-slate-50 rounded-lg border border-slate-200">
+                            <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={editAffectsPromotion}
+                                onChange={(e) => setEditAffectsPromotion(e.target.checked)}
+                                className="rounded text-rose-600 focus:ring-rose-500 w-3.5 h-3.5"
+                              />
+                              <span>يوقف الترفيع</span>
+                            </label>
+                            <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={editAffectsIncrement}
+                                onChange={(e) => setEditAffectsIncrement(e.target.checked)}
+                                className="rounded text-amber-600 focus:ring-amber-500 w-3.5 h-3.5"
+                              />
+                              <span>يؤخر العلاوة</span>
+                            </label>
+                            <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={editAffectsCommendations}
+                                onChange={(e) => setEditAffectsCommendations(e.target.checked)}
+                                className="rounded text-purple-600 focus:ring-purple-500 w-3.5 h-3.5"
+                              />
+                              <span>يوقف كتب الشكر</span>
+                            </label>
+                          </div>
                         ) : (
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                            adminEff === 'يوقف_الترفيع'
-                              ? 'bg-rose-50 text-rose-700 border-rose-200'
-                              : adminEff === 'يؤخر_العلاوة'
-                              ? 'bg-amber-50 text-amber-700 border-amber-200'
-                              : 'bg-slate-50 text-slate-600 border-slate-200'
-                          }`}>
-                            {adminEff === 'يوقف_الترفيع' ? 'يوقف الترفيع' : adminEff === 'يؤخر_العلاوة' ? 'يؤخر العلاوة' : 'لا يؤثر'}
-                          </span>
+                          <div className="flex flex-wrap gap-1 items-center">
+                            {isPromo && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                <TrendingUp size={10} className="rotate-180" />
+                                توقف الترفيع
+                              </span>
+                            )}
+                            {isInc && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                <Clock size={10} />
+                                تؤخر العلاوة
+                              </span>
+                            )}
+                            {isComm && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                                <Award size={10} />
+                                توقف كتب الشكر
+                              </span>
+                            )}
+                            {!isPromo && !isInc && !isComm && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <Check size={10} />
+                                لا يؤثر إدارياً
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center">
+
+                      {/* 4. الأثر المالي وضوابط الراتب */}
+                      <td className="px-4 py-3">
                         {isEditing ? (
-                          <div className="flex flex-col gap-1 items-center">
+                          <div className="space-y-1.5 p-2 bg-slate-50 rounded-lg border border-slate-200">
                             <select
-                              value={editFinancialEffect}
-                              onChange={(e) => setEditFinancialEffect(e.target.value)}
-                              className="bg-white border border-slate-200 rounded p-1 text-xs font-semibold"
+                              value={editSalaryPaymentType}
+                              onChange={(e) => setEditSalaryPaymentType(e.target.value)}
+                              className="bg-white border border-slate-200 rounded p-1 text-xs font-bold w-full"
                             >
-                              <option value="براتب_كامل">براتب كامل</option>
-                              <option value="بدون_راتب">بدون راتب</option>
-                              <option value="استقطاع_جزئي">استقطاع جزئي</option>
+                              <option value="منح_الراتب_كامل">منح الراتب كامل</option>
+                              <option value="منح_الراتب_والمخصصات_الثابتة_فقط">منح الراتب والمخصصات الثابتة فقط</option>
+                              <option value="بدون_راتب">بدون راتب (استقطاع 100%)</option>
+                              <option value="استقطاع_جزئي">استقطاع جزئي (%)</option>
                             </select>
-                            {editFinancialEffect === 'استقطاع_جزئي' && (
-                              <input
-                                type="number"
-                                min="1"
-                                max="100"
-                                value={editFinancialDeductionPercentage}
-                                onChange={(e) => setEditFinancialDeductionPercentage(e.target.value)}
-                                placeholder="%"
-                                className="bg-white border border-slate-200 rounded p-0.5 text-xs w-14 text-center font-bold"
-                              />
+                            {editSalaryPaymentType === 'استقطاع_جزئي' && (
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-slate-500 font-bold">النسبة:</span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="99"
+                                  value={editFinancialDeductionPercentage}
+                                  onChange={(e) => setEditFinancialDeductionPercentage(e.target.value)}
+                                  className="bg-white border border-slate-200 rounded p-0.5 text-xs w-14 text-center font-bold"
+                                  placeholder="50%"
+                                />
+                                <span className="text-[10px] text-slate-500 font-bold">%</span>
+                              </div>
                             )}
                           </div>
                         ) : (
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                            finEff === 'بدون_راتب'
-                              ? 'bg-rose-50 text-rose-700 border-rose-200'
-                              : finEff === 'استقطاع_جزئي'
-                              ? 'bg-amber-50 text-amber-700 border-amber-200'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          }`}>
-                            {finEff === 'بدون_راتب' ? 'بدون راتب' : finEff === 'استقطاع_جزئي' ? `استقطاع ${finDed}%` : 'براتب كامل'}
-                          </span>
+                          <div>
+                            {salType === 'منح_الراتب_كامل' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                <Banknote size={11} />
+                                منح الراتب كامل
+                              </span>
+                            )}
+                            {salType === 'منح_الراتب_والمخصصات_الثابتة_فقط' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                                <Banknote size={11} />
+                                الراتب والمخصصات الثابتة فقط
+                              </span>
+                            )}
+                            {salType === 'بدون_راتب' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                <AlertTriangle size={11} />
+                                بدون راتب (100%)
+                              </span>
+                            )}
+                            {salType === 'استقطاع_جزئي' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                <Banknote size={11} />
+                                استقطاع جزئي ({finDed}%)
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-slate-500 max-w-sm truncate" title={r.description}>
+
+                      {/* 5. الوصف */}
+                      <td className="px-4 py-3 text-slate-500 max-w-xs truncate" title={r.description}>
                         {isEditing ? (
                           <textarea
                             value={editDescription}
@@ -816,7 +1210,9 @@ export default function LeaveTypesSettings() {
                           r.description || 'لا يوجد وصف مضاف'
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center">
+
+                      {/* 6. الحالة */}
+                      <td className="px-4 py-3 text-center whitespace-nowrap">
                         {isEditing ? (
                           <select
                             value={editStatus}
@@ -835,13 +1231,15 @@ export default function LeaveTypesSettings() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-left">
+
+                      {/* 7. أزرار التحكم */}
+                      <td className="px-4 py-3 text-left whitespace-nowrap">
                         {isEditing ? (
                           <div className="flex gap-1.5 justify-end">
                             <button
                               type="button"
                               onClick={() => handleSaveEdit(r.id)}
-                              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 p-1.5 rounded-lg transition-colors"
+                              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 p-1.5 rounded-lg transition-colors border border-emerald-200"
                               title="حفظ"
                             >
                               <Check size={14} />
@@ -849,7 +1247,7 @@ export default function LeaveTypesSettings() {
                             <button
                               type="button"
                               onClick={() => setEditingId(null)}
-                              className="bg-slate-100 hover:bg-slate-200 text-slate-600 p-1.5 rounded-lg transition-colors"
+                              className="bg-slate-100 hover:bg-slate-200 text-slate-600 p-1.5 rounded-lg transition-colors border border-slate-200"
                               title="إلغاء"
                             >
                               <X size={14} />
@@ -899,7 +1297,7 @@ export default function LeaveTypesSettings() {
 
       {/* مودال تأكيد الحذف */}
       {deleteConfirm.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-xl overflow-hidden animate-scale-up">
             <div className="p-6 text-center space-y-4">
               <div className="mx-auto w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center">

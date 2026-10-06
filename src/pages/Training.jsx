@@ -4351,7 +4351,7 @@ export default function Training() {
 
       {/* 2. Modal: Trainers Directory (دليل وتعيين المدربين) */}
       {showTrainerModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
           <div className="bg-white rounded-3xl max-w-4xl w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-200 text-right" dir="rtl">
             <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
@@ -4538,7 +4538,7 @@ export default function Training() {
 
       {/* 3. Modal: Annual Plan Configuration (إعداد أهداف الخطة السنوية) */}
       {showPlanModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" dir="rtl">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 text-right" dir="rtl">
             <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
               <div className="flex items-center gap-2">
@@ -4626,7 +4626,7 @@ export default function Training() {
 
       {/* 4. Modal: Trainees Enrollment & Results Management (تسجيل المتدربين والنتائج) */}
       {showEnrollModal && selectedCourseForEnroll && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
           <div className="bg-white rounded-3xl max-w-4xl w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-200 text-right" dir="rtl">
             <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-100">
               <div className="text-right">
@@ -4990,7 +4990,7 @@ export default function Training() {
 
       {/* Modal: Certificate Type Selection (تحديد نوع الشهادة: مشاركة أم إجتياز) */}
       {showCertTypeModal && certSelectTarget && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-50 flex items-center justify-center p-4" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/70 backdrop-blur-md z-50 flex items-center justify-center p-4" dir="rtl">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 text-right">
             <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
               <div className="flex items-center gap-3">
@@ -5084,7 +5084,7 @@ export default function Training() {
 
       {/* 5. Printable Certificate Modal (Single Participant) */}
       {showCertModal && certData && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-start justify-center p-3 sm:p-6 overflow-y-auto" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/80 backdrop-blur-md z-50 flex items-start justify-center p-3 sm:p-6 overflow-y-auto" dir="rtl">
           <div className="bg-white rounded-3xl max-w-5xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-amber-500/30 my-4 sm:my-8 animate-in fade-in zoom-in-95">
             {/* Top Toolbar (Sticky & Always Visible, Hidden on Print) */}
             <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 pt-4 border-b border-slate-200 print:hidden -mx-6 -mt-6 sm:-mx-8 sm:-mt-8 px-6 sm:px-8 mb-6 shadow-xs rounded-t-3xl">
@@ -5257,7 +5257,7 @@ export default function Training() {
 
       {/* Modal: Single Grade Entry (إدخال نتيجة وتقدير متدرب فردي) */}
       {singleGradeTarget && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" dir="rtl">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 text-right animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
               <div className="flex items-center gap-2">
@@ -5339,7 +5339,7 @@ export default function Training() {
 
       {/* Modal: Batch Grade Entry (نافذة إدخال درجات المشاركين الجماعية) */}
       {showBatchGradeModal && selectedCourseForEnroll && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
           <div className="bg-white rounded-3xl max-w-3xl w-full p-6 shadow-2xl border border-slate-100 text-right animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
               <div className="flex items-center gap-2">
@@ -5459,7 +5459,7 @@ export default function Training() {
 
       {/* Modal: Batch Certificates Printable Modal (طباعة شهادات كافة المشاركين) */}
       {showBatchCertModal && batchCertificatesList.length > 0 && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-start justify-center p-3 sm:p-6 overflow-y-auto" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/80 backdrop-blur-md z-50 flex items-start justify-center p-3 sm:p-6 overflow-y-auto" dir="rtl">
           <div className="bg-white rounded-3xl max-w-5xl w-full p-6 sm:p-8 shadow-2xl relative border-2 border-amber-500/30 my-4 sm:my-8 animate-in fade-in zoom-in-95">
             {/* Top Toolbar (Sticky & Always Visible, Hidden on Print) */}
             <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md flex flex-col md:flex-row items-start md:items-center justify-between gap-3 pb-4 pt-4 border-b border-slate-200 print:hidden -mx-6 -mt-6 sm:-mx-8 sm:-mt-8 px-6 sm:px-8 mb-6 shadow-xs rounded-t-3xl">
@@ -5679,7 +5679,7 @@ export default function Training() {
 
       {/* View Trainer Profile & History Modal */}
       {selectedTrainerForView && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-200 text-right" dir="rtl">
             <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-100">
               <div className="flex items-center gap-3">
@@ -5901,7 +5901,7 @@ export default function Training() {
       )}
       {/* 8. Modal: Excel Trainees Import & Categorization Preview (نافذة فرز وتأكيد ترحيل ملف الإكسل) */}
       {showExcelImportModal && selectedCourseForEnroll && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/70 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto" dir="rtl">
           <div className="bg-white rounded-3xl max-w-4xl w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-200 text-right flex flex-col max-h-[90vh]" dir="rtl">
             
             {/* Modal Header */}

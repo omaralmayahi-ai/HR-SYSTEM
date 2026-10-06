@@ -17,8 +17,8 @@ export const users = pgTable('users', {
 export const employees = pgTable('employees', {
   id: serial('id').primaryKey(),
   employeeNumber: text('employee_number'),
-  companyNumber: text('company_number'), // رقم الشركة
-  civilServiceNumber: text('civil_service_number'), // الرقم الوظيفي
+  companyNumber: text('company_number').unique(), // رقم الشركة - معرّف فريد إلزامي (6 أرقام، أو حروف لعقد/أجر يومي)
+  civilServiceNumber: text('civil_service_number').unique(), // الرقم الوظيفي - رقم فريد أيضاً (رقم وزارة التخطيط)، لكن الاعتماد الأساسي في النظام على رقم الشركة
   fullName: text('full_name').notNull(),
   firstName: text('first_name'), // الاسم الأول (مثل: عمر)
   fatherName: text('father_name'), // اسم الأب (مثل: محمود)
@@ -64,7 +64,7 @@ export const employees = pgTable('employees', {
   actingResponsibility: text('acting_responsibility'), // المسؤولية بالوكالة
   deputyLevel: text('deputy_level'), // درجة الوكيل (وكيل أول - وكيل ثاني)
   serviceRecordNumber: text('service_record_number'),
-  employeeIdNumber: text('employee_id_number'),
+  employeeIdNumber: text('employee_id_number').unique(), // رقم هوية الموظف - يُنشأ تلقائياً من الخادم، رقم فريد، يُدرج ضمن الهوية الرقمية للموظف
   retirementNumber: text('retirement_number'),
   educationLevel: text('education_level'),
   specialization: text('specialization'),
@@ -723,8 +723,13 @@ export const leaveTypes = pgTable('leave_types', {
   name: text('name').notNull(), // اسم الإجازة (مثلاً: اعتيادية، مرضية، دراسية)
   maxDays: integer('max_days'), // الحد الأقصى للأيام المسموح بها في السنة (اختياري)
   administrativeEffect: text('administrative_effect').default('لا_يؤثر'), // 'لا_يؤثر', 'يوقف_الترفيع', 'يؤخر_العلاوة'
-  financialEffect: text('financial_effect').default('براتب_كامل'), // 'براتب_كامل', 'بدون_راتب', 'استقطاع_جزئي'
+  financialEffect: text('financial_effect').default('براتب_كامل'), // 'براتب_كامل', 'بدون_راتب', 'استقطاع_جزئي', 'براتب_ومخصصات_ثابتة'
   financialDeductionPercentage: integer('financial_deduction_percentage').default(0), // نسبة الاستقطاع في حال استقطاع جزئي (0 - 100)
+  affectsIncrement: boolean('affects_increment').default(false), // إيقاف / تأخير العلاوة السنوية
+  affectsPromotion: boolean('affects_promotion').default(false), // إيقاف الترفيع واحتساب القدم
+  affectsCommendations: boolean('affects_commendations').default(false), // توقف منح كتب الشكر والتقدير
+  salaryPaymentType: text('salary_payment_type').default('منح_الراتب_كامل'), // 'منح_الراتب_كامل', 'منح_الراتب_والمخصصات_الثابتة_فقط', 'بدون_راتب', 'استقطاع_جزئي'
+  effectsOptions: text('effects_options'), // خيارات التأشير بصيغة JSON أو نصية
   description: text('description'), // وصف الإجازة أو الشروط
   status: text('status').default('فعال'), // فعال أو متوقف مؤقتاً
   createdAt: timestamp('created_at').defaultNow(),
@@ -770,10 +775,6 @@ export const shiftSystems = pgTable('shift_systems', {
   shiftHoursType: text('shift_hours_type').default('24h'),
   dailyHours: integer('daily_hours').default(24),
   description: text('description'),
-  allowancePercentage: real('allowance_percentage').default(0),
-  allowanceFlatAmount: integer('allowance_flat_amount').default(0),
-  overtimeFactor: real('overtime_factor').default(1.0),
-  notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -811,6 +812,35 @@ export const penaltyTypes = pgTable('penalty_types', {
   delayMonths: integer('delay_months').default(0), // مدة تأخير الترفيع والزيادة بالشهور (للأغراض الحسابية)
   status: text('status').default('فعال'), // فعال أو غير فعال
   createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 30-ب. أنواع الخدمة (نوع تعيين الموظف: دائم، عقد، أجر يومي، ...) - قائمة قابلة للتوسيع من قبل المستخدم بدون تكرار
+export const serviceTypes = pgTable('service_types', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(), // اسم نوع الخدمة، يجب أن يكون فريداً
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 30-ج. حالات الموظف (مستمر، منسب، مجاز، متقاعد، مستقيل، موقوف، ...) - قائمة قابلة للتوسيع من قبل المستخدم بدون تكرار
+export const employeeStatuses = pgTable('employee_statuses', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(), // اسم حالة الموظف، يجب أن يكون فريداً
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 30-د. أرشيف المحذوفات (Soft Delete Archive) - سجل مركزي لكل عنصر يُحذف من النظام بدلاً من حذفه نهائياً.
+// عند "حذف" أي سجل (موظف حالياً، ويمكن توسيعه لاحقاً لأنواع أخرى) يُنقل هنا كنسخة كاملة (JSON) بدلاً من إزالته
+// نهائياً من قاعدة البيانات، ليتمكن مدير النظام (أو من يُمنح الصلاحية لاحقاً بحسب الأدوار) من استعراضه من نافذة
+// الإعدادات واستعادته، أو تأكيد حذفه بشكل نهائي ولا رجعة فيه من هناك.
+export const archivedItems = pgTable('archived_items', {
+  id: serial('id').primaryKey(),
+  entityType: text('entity_type').notNull(), // نوع الكيان المؤرشف، مثل: 'employee'
+  entityId: integer('entity_id').notNull(), // المعرّف الأصلي للسجل قبل الحذف (يُستخدم لاستعادته بنفس الرقم)
+  entityLabel: text('entity_label'), // وصف مختصر يسهّل عرض السجل في قائمة الأرشيف دون الحاجة لفك ترميز data في كل مرة
+  data: text('data').notNull(), // نسخة كاملة (JSON) من بيانات السجل وقت حذفه، تُستخدم لاستعادته لاحقاً
+  deletedBy: text('deleted_by'), // اسم مستخدم/بريد من نفّذ عملية الحذف
+  deletedByName: text('deleted_by_name'), // الاسم الظاهري لمن نفّذ عملية الحذف
+  createdAt: timestamp('created_at').defaultNow(), // تاريخ ووقت نقل السجل إلى الأرشيف
 });
 
 // 31. Evaluation Forms table (استمارات تقييم الأداء والتخصيص حسب الفئات)

@@ -73,7 +73,6 @@ export default function ShiftSystemsSettings() {
     try {
       const data = await apiClient.entities.ShiftSystem.list();
       setRecords(data || []);
-      notifySettingsChanged('shift_systems', data || []);
     } catch (error) {
       toast({
         title: 'خطأ في جلب البيانات',
@@ -145,6 +144,7 @@ export default function ShiftSystemsSettings() {
       }
       resetForm();
       fetchRecords();
+      notifySettingsChanged('shift_systems');
     } catch (error) {
       toast({
         title: 'خطأ في الحفظ',
@@ -164,6 +164,7 @@ export default function ShiftSystemsSettings() {
       });
       setDeleteConfirm({ isOpen: false, id: null, name: '' });
       fetchRecords();
+      notifySettingsChanged('shift_systems');
     } catch (error) {
       toast({
         title: 'خطأ في الحذف',
@@ -185,6 +186,7 @@ export default function ShiftSystemsSettings() {
         variant: 'success',
       });
       fetchRecords();
+      notifySettingsChanged('shift_systems');
     } catch (error) {
       toast({
         title: 'خطأ أثناء إضافة القوالب',
@@ -492,7 +494,7 @@ export default function ShiftSystemsSettings() {
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex justify-center items-center z-50 p-4">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/40 backdrop-blur-xs flex justify-center items-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl space-y-4 border border-slate-100">
             <div className="flex items-center gap-3 text-red-600">
               <div className="p-3 bg-red-50 rounded-xl">

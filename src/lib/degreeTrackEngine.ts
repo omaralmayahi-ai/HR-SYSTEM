@@ -385,7 +385,10 @@ export function calculateDegreeTrackSimulation(
 
   leaves.forEach(lv => {
     const adminEffect = lv.administrativeEffect || lv.administrative_effect || '';
-    const isPausing = adminEffect === 'يوقف_الترفيع' || adminEffect === 'pause_promotion';
+    const isPausing = Boolean(lv.affectsPromotion ?? lv.affects_promotion) ||
+                      adminEffect === 'يوقف_الترفيع' || 
+                      adminEffect === 'pause_promotion' || 
+                      adminEffect.includes('الترفيع');
     if (!isPausing) return;
     const sDate = lv.startDate || lv.start_date || '';
     const eDate = lv.endDate || lv.end_date || '';

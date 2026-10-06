@@ -6,6 +6,7 @@ export interface ReferentialCheckResult {
   count: number;
   message?: string;
   affectedSummary?: string;
+  affectedEmployees?: any[];
 }
 
 export interface ReferentialContext {
@@ -73,7 +74,17 @@ export function checkReferentialUsage(
           canProceed: false,
           count: totalCount,
           message: `لا يمكن ${actionVerb} هذا العنوان الوظيفي، مستخدم حالياً من قبل ${totalCount} موظف/سجل وظيفي نشط.`,
-          affectedSummary: `مرتبط بـ ${matchedEmployees.length} موظف و ${matchedAssignments.length} سجل تكليف وظيفي.`
+          affectedSummary: `مرتبط بـ ${matchedEmployees.length} موظف و ${matchedAssignments.length} سجل تكليف وظيفي.`,
+          affectedEmployees: matchedEmployees.map(e => ({
+            id: e.id,
+            name: e.fullName || e.full_name || e.name || `موظف #${e.id}`,
+            companyNumber: e.companyNumber || e.company_number || e.companyCode || e.company_code || e.civilServiceNumber || e.civil_service_number || '—',
+            civilServiceNumber: e.civilServiceNumber || e.civil_service_number || '—',
+            workLocation: e.workLocation || e.work_location || e.department || '—',
+            department: e.department || e.workLocation || e.work_location || '—',
+            grade: e.grade || e.currentGrade || '—',
+            step: e.step || e.currentStep || '—'
+          }))
         };
       }
       return { canProceed: true, count: 0 };
@@ -108,6 +119,7 @@ export function checkReferentialUsage(
       const target = items.find((i: any) => String(i.id) === idStr);
       const isDeduction = target?.type === 'deduction';
       const entityLabel = isDeduction ? 'الاستقطاع' : 'المخصص';
+      const targetName = String(target?.name || '');
 
       // Check if temporary
       const meta = context.temporaryMeta?.[idStr] || (typeof localStorage !== 'undefined' ? (() => {
@@ -124,6 +136,20 @@ export function checkReferentialUsage(
         return { canProceed: true, count: 0 };
       }
 
+      const isSpouse = (targetName.includes('زوجية') || targetName.includes('الزوجية'));
+      const isChild = (targetName.includes('أطفال') || targetName.includes('الاطفال') || targetName.includes('أولاد') || targetName.includes('الاولاد'));
+      const isRetirement = (targetName.includes('تقاعد') || targetName.includes('التقاعد'));
+
+      // If it's a fundamental statutory item (spouse/child/retirement), protect it from deletion
+      if (!isDeactivation && (isSpouse || isChild || isRetirement)) {
+        return {
+          canProceed: false,
+          count: activeEmployees.length,
+          message: `لا يمكن حذف هذا ${entityLabel} الأساسي القانوني (${targetName}). يمكنك تعديل قيمته أو إيقافه من قسم الإعدادات الثابتة.`,
+          affectedSummary: `بند قانوني أساسي مرتبط بالنظام.`
+        };
+      }
+
       // Read rules for this allowance/deduction
       const rule = context.allowanceRules?.[idStr] || (typeof localStorage !== 'undefined' ? (() => {
         try {
@@ -136,7 +162,6 @@ export function checkReferentialUsage(
       let eligibleEmployeesCount = 0;
 
       if (!rule) {
-        // No custom criteria rule means granted/applied to all active employees by default!
         eligibleEmployeesCount = activeEmployees.length;
       } else {
         // Evaluate eligibility based on criteria
@@ -163,10 +188,11 @@ export function checkReferentialUsage(
         return {
           canProceed: false,
           count: eligibleEmployeesCount,
-          message: `لا يمكن ${actionVerb} هذا ${entityLabel} (${target?.name || ''})، مستحق/مطبق حالياً على ${eligibleEmployeesCount} موظف.`,
+          message: `لا يمكن ${actionVerb} هذا ${entityLabel} (${targetName || target?.name || ''})، مستحق/مطبق حالياً على ${eligibleEmployeesCount} موظف.`,
           affectedSummary: `يستفيد منه أو يطبق على ${eligibleEmployeesCount} موظف نشط.`
         };
       }
+
       return { canProceed: true, count: 0 };
     }
 

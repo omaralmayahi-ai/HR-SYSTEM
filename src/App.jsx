@@ -35,7 +35,7 @@ const AuthenticatedApp = () => {
 
   if (isLoadingPublicSettings || isLoadingAuth) {
     return (
-      <div className="fixed inset-0 flex items-center justify-center bg-[#F5F7FA]" dir="rtl">
+      <div className="fixed inset-0 pointer-events-auto flex items-center justify-center bg-[#F5F7FA]" dir="rtl">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-[#1B3A6B]/20 border-t-[#1B3A6B] rounded-full animate-spin mx-auto mb-4" />
           <p className="text-[#1B3A6B] font-medium">جاري تحميل النظام...</p>

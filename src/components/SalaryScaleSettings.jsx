@@ -3,7 +3,7 @@ import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { 
   Plus, Trash2, Edit2, Check, X, RefreshCw, Sparkles, 
-  SlidersHorizontal, ChevronRight, TrendingUp
+  SlidersHorizontal, ChevronRight, TrendingUp, Coins
 } from 'lucide-react';
 import { 
   SALARY_TABLE, 
@@ -492,8 +492,15 @@ export default function SalaryScaleSettings() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-4">
         <div>
-          <h2 className="text-lg font-bold text-slate-800">سلم الرواتب الحالي</h2>
-          <p className="text-xs text-slate-500 mt-1">عرض السلم المالي الرسمي، فتح تفاصيل الدرجات الوظيفية ومراحلها السنوية، وتعديل قيم الرواتب الاسمية.</p>
+          <div className="flex items-center gap-2.5 mb-1">
+            <div className="p-2 rounded-xl bg-[#1B3A6B]/10 text-[#1B3A6B]">
+              <Coins size={22} />
+            </div>
+            <h2 className="text-xl font-bold text-[#1B3A6B]">سلم الرواتب الحالي</h2>
+          </div>
+          <p className="text-xs text-slate-500 font-medium leading-relaxed">
+            عرض السلم المالي الرسمي الموحد 2023، تفاصيل الدرجات الوظيفية ومراحلها السنوية، وتعديل قيم الرواتب الاسمية والمدد القانونية.
+          </p>
         </div>
         <div className="flex flex-wrap gap-2 items-center">
           {/* Add Step Button */}
@@ -631,36 +638,37 @@ export default function SalaryScaleSettings() {
             </div>
           )}
 
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-            <table className="w-full text-right text-xs border-collapse">
+          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-xs">
+            <table className="w-full text-right text-xs border-collapse table-fixed">
               <thead>
-                <tr className="bg-[#1B3A6B]/5 border-b border-slate-200">
-                  <th className="px-3 py-3 font-semibold text-right border-b border-slate-200 min-w-[150px] text-[#1B3A6B]">الدرجة الوظيفية</th>
-                  <th className="px-3 py-3 font-semibold text-center border-b border-slate-200 min-w-[90px]">نوع الدرجة</th>
-                  <th className="px-3 py-3 font-semibold text-center border-b border-slate-200 min-w-[80px]">سنوات الترفيع</th>
-                  <th className="px-3 py-3 font-semibold text-center border-b border-slate-200 min-w-[110px]">العلاوة السنوية</th>
+                <tr className="bg-[#1B3A6B]/5 border-b border-slate-200 text-slate-700">
+                  <th className="px-2 py-2.5 font-bold text-right border-b border-slate-200 w-[13%] text-[#1B3A6B] whitespace-nowrap text-[11px]">الدرجة الوظيفية</th>
+                  <th className="px-1 py-2.5 font-bold text-center border-b border-slate-200 w-[6%] whitespace-nowrap text-[11px]">النوع</th>
+                  <th className="px-1 py-2.5 font-bold text-center border-b border-slate-200 w-[6%] whitespace-nowrap text-[11px]" title="سنوات الترفيع">الترفيع</th>
+                  <th className="px-1 py-2.5 font-bold text-center border-b border-slate-200 w-[7%] whitespace-nowrap text-[11px]" title="العلاوة السنوية">العلاوة</th>
                   {[1,2,3,4,5,6,7,8,9,10,11].map(s => (
-                    <th key={s} className="px-3 py-3 font-semibold border-b border-slate-200 text-center min-w-[95px]">م{s}</th>
+                    <th key={s} className="px-0.5 py-2.5 font-bold border-b border-slate-200 text-center w-[6.1%] text-slate-700 text-[11px]">م{s}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {GRADES.map(g => (
                   <tr key={g} className="hover:bg-slate-50/75 transition-colors">
-                    <td className="px-3 py-3 font-bold text-[#1B3A6B] bg-slate-50/40 max-w-[200px] truncate" title={g >= 11 ? getGradeLabel(g) : `الدرجة ${getGradeLabel(g)}`}>
+                    <td className="px-2 py-2 font-bold text-[#1B3A6B] bg-slate-50/40 truncate text-[11px]" title={g >= 11 ? getGradeLabel(g) : `الدرجة ${getGradeLabel(g)}`}>
                       {g >= 11 ? getGradeLabel(g) : `الدرجة ${getGradeLabel(g)}`}
                     </td>
-                    <td className="px-3 py-3 text-center bg-slate-50/40">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        g >= 11 ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-slate-100 text-slate-600 border border-slate-200'
+                    <td className="px-1 py-2 text-center bg-slate-50/40">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${
+                        g >= 11 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
                       }`}>
                         {getGradeType(g)}
                       </span>
                     </td>
+
                     {/* سنوات الترفيع */}
                     {editingPromotionGrade === g ? (
-                      <td className="px-2 py-1.5 text-center bg-slate-50/60 border border-slate-200">
-                        <div className="flex items-center gap-1 justify-center">
+                      <td className="px-1 py-1 text-center bg-slate-50/60 border border-slate-200">
+                        <div className="flex items-center gap-0.5 justify-center">
                           <input
                             type="number"
                             value={editPromotionValue}
@@ -673,13 +681,13 @@ export default function SalaryScaleSettings() {
                                 setEditingPromotionGrade(null);
                               }
                             }}
-                            className="w-14 bg-white border border-slate-300 rounded px-1.5 py-1 text-center font-bold text-xs focus:outline-none focus:ring-2 focus:ring-slate-500 text-[#1B3A6B]"
+                            className="w-10 bg-white border border-slate-300 rounded px-1 py-0.5 text-center font-bold text-xs focus:outline-none focus:ring-1 focus:ring-slate-500 text-[#1B3A6B]"
                             autoFocus
                           />
                           <button
                             type="button"
                             onClick={() => handleSavePromotion(g, editPromotionValue)}
-                            className="bg-emerald-500 hover:bg-emerald-600 text-white p-1 rounded transition-colors shadow-sm"
+                            className="bg-emerald-500 hover:bg-emerald-600 text-white p-0.5 rounded transition-colors shadow-xs"
                             title="حفظ"
                           >
                             <Check size={10} />
@@ -687,7 +695,7 @@ export default function SalaryScaleSettings() {
                           <button
                             type="button"
                             onClick={() => handleDeletePromotion(g)}
-                            className="bg-red-500 hover:bg-red-600 text-white p-1 rounded transition-colors shadow-sm"
+                            className="bg-red-500 hover:bg-red-600 text-white p-0.5 rounded transition-colors shadow-xs"
                             title="حذف القيمة (تركها فارغة)"
                           >
                             <Trash2 size={10} />
@@ -695,7 +703,7 @@ export default function SalaryScaleSettings() {
                           <button
                             type="button"
                             onClick={() => setEditingPromotionGrade(null)}
-                            className="bg-slate-300 hover:bg-slate-400 text-slate-700 p-1 rounded transition-colors shadow-sm"
+                            className="bg-slate-300 hover:bg-slate-400 text-slate-700 p-0.5 rounded transition-colors shadow-xs"
                             title="إلغاء"
                           >
                             <X size={10} />
@@ -704,7 +712,7 @@ export default function SalaryScaleSettings() {
                       </td>
                     ) : (
                       <td 
-                        className="px-3 py-3 text-center font-bold text-slate-500 bg-slate-50/40 cursor-pointer hover:bg-amber-50/40 relative group/promo transition-colors"
+                        className="px-1 py-2 text-center font-bold text-slate-700 bg-slate-50/40 cursor-pointer hover:bg-amber-50/40 relative group/promo transition-colors"
                         onClick={() => {
                           setEditingPromotionGrade(g);
                           setEditPromotionValue(promotionYears[g] !== null && promotionYears[g] !== undefined ? promotionYears[g].toString() : '');
@@ -712,9 +720,9 @@ export default function SalaryScaleSettings() {
                         title="اضغط لتعديل أو حذف سنوات الترفيع"
                       >
                         <div className="flex items-center justify-center gap-1">
-                          <span>{promotionYears[g] !== null && promotionYears[g] !== undefined ? `${promotionYears[g]} سنوات` : '—'}</span>
-                          <div className="absolute left-1 hidden group-hover/promo:flex items-center bg-white rounded border border-slate-200 p-0.5 shadow-sm">
-                            <Edit2 size={10} className="text-[#1B3A6B]" />
+                          <span className="text-[11px] whitespace-nowrap">{promotionYears[g] !== null && promotionYears[g] !== undefined ? `${promotionYears[g]} س` : '—'}</span>
+                          <div className="absolute left-0.5 hidden group-hover/promo:flex items-center bg-white rounded border border-slate-200 p-0.5 shadow-xs">
+                            <Edit2 size={9} className="text-[#1B3A6B]" />
                           </div>
                         </div>
                       </td>
@@ -722,8 +730,8 @@ export default function SalaryScaleSettings() {
 
                     {/* العلاوة السنوية */}
                     {editingIncrementGrade === g ? (
-                      <td className="px-2 py-1.5 text-center bg-slate-50/60 border border-slate-200">
-                        <div className="flex items-center gap-1 justify-center">
+                      <td className="px-1 py-1 text-center bg-slate-50/60 border border-slate-200">
+                        <div className="flex items-center gap-0.5 justify-center">
                           <input
                             type="number"
                             value={editIncrementValue}
@@ -736,13 +744,13 @@ export default function SalaryScaleSettings() {
                                 setEditingIncrementGrade(null);
                               }
                             }}
-                            className="w-20 bg-white border border-slate-300 rounded px-1.5 py-1 text-center font-bold text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 text-emerald-900"
+                            className="w-14 bg-white border border-slate-300 rounded px-1 py-0.5 text-center font-mono font-bold text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 text-emerald-900"
                             autoFocus
                           />
                           <button
                             type="button"
                             onClick={() => handleSaveIncrement(g, editIncrementValue)}
-                            className="bg-emerald-500 hover:bg-emerald-600 text-white p-1 rounded transition-colors shadow-sm"
+                            className="bg-emerald-500 hover:bg-emerald-600 text-white p-0.5 rounded transition-colors shadow-xs"
                             title="حفظ"
                           >
                             <Check size={10} />
@@ -750,7 +758,7 @@ export default function SalaryScaleSettings() {
                           <button
                             type="button"
                             onClick={() => handleDeleteIncrement(g)}
-                            className="bg-red-500 hover:bg-red-600 text-white p-1 rounded transition-colors shadow-sm"
+                            className="bg-red-500 hover:bg-red-600 text-white p-0.5 rounded transition-colors shadow-xs"
                             title="حذف العلاوة (ضبط كـ 0)"
                           >
                             <Trash2 size={10} />
@@ -758,7 +766,7 @@ export default function SalaryScaleSettings() {
                           <button
                             type="button"
                             onClick={() => setEditingIncrementGrade(null)}
-                            className="bg-slate-300 hover:bg-slate-400 text-slate-700 p-1 rounded transition-colors shadow-sm"
+                            className="bg-slate-300 hover:bg-slate-400 text-slate-700 p-0.5 rounded transition-colors shadow-xs"
                             title="إلغاء"
                           >
                             <X size={10} />
@@ -767,7 +775,7 @@ export default function SalaryScaleSettings() {
                       </td>
                     ) : (
                       <td 
-                        className="px-3 py-3 text-center font-bold text-emerald-700 bg-slate-50/40 cursor-pointer hover:bg-amber-50/40 relative group/inc transition-colors"
+                        className="px-1 py-2 text-center font-bold text-emerald-700 bg-slate-50/40 cursor-pointer hover:bg-amber-50/40 relative group/inc transition-colors"
                         onClick={() => {
                           setEditingIncrementGrade(g);
                           setEditIncrementValue(annualIncrements[g] ? annualIncrements[g].toString() : '');
@@ -775,13 +783,15 @@ export default function SalaryScaleSettings() {
                         title="اضغط لتعديل أو حذف العلاوة السنوية"
                       >
                         <div className="flex items-center justify-center gap-1">
-                          <span>{new Intl.NumberFormat('ar-IQ').format(annualIncrements[g] || 0)} د.ع</span>
-                          <div className="absolute left-1 hidden group-hover/inc:flex items-center bg-white rounded border border-slate-200 p-0.5 shadow-sm">
-                            <Edit2 size={10} className="text-[#1B3A6B]" />
+                          <span className="font-mono text-[11px] whitespace-nowrap">{annualIncrements[g] ? Number(annualIncrements[g]).toLocaleString() : 0}</span>
+                          <div className="absolute left-0.5 hidden group-hover/inc:flex items-center bg-white rounded border border-slate-200 p-0.5 shadow-xs">
+                            <Edit2 size={9} className="text-[#1B3A6B]" />
                           </div>
                         </div>
                       </td>
                     )}
+
+                    {/* المراحل من 1 إلى 11 */}
                     {[1,2,3,4,5,6,7,8,9,10,11].map(s => {
                       const rec = records.find(r => r.grade === g && r.step === s);
                       const amount = rec ? rec.amount : (SALARY_TABLE[g]?.[s] || null);
@@ -789,8 +799,8 @@ export default function SalaryScaleSettings() {
 
                       if (isEditing) {
                         return (
-                          <td key={s} className="px-2 py-1.5 text-center border border-slate-150 bg-amber-50/60 shadow-inner">
-                            <div className="flex items-center gap-1 justify-center">
+                          <td key={s} className="px-0.5 py-1 text-center border border-slate-200 bg-amber-50/70 shadow-inner">
+                            <div className="flex items-center gap-0.5 justify-center">
                               <input
                                 type="number"
                                 value={inlineValue}
@@ -802,22 +812,22 @@ export default function SalaryScaleSettings() {
                                     setInlineEditing(null);
                                   }
                                 }}
-                                className="w-20 bg-white border border-amber-300 rounded px-1.5 py-1 text-center font-mono font-bold text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 text-amber-900"
+                                className="w-14 bg-white border border-amber-400 rounded px-1 py-0.5 text-center font-mono font-bold text-[11px] focus:outline-none focus:ring-1 focus:ring-amber-500 text-amber-900"
                                 autoFocus
                               />
                               <button
                                 type="button"
                                 onClick={() => handleInlineSave(g, s, inlineValue)}
-                                className="bg-emerald-500 hover:bg-emerald-600 text-white p-1 rounded transition-colors shadow-sm"
+                                className="bg-emerald-500 hover:bg-emerald-600 text-white p-0.5 rounded transition-colors shadow-xs"
                               >
-                                <Check size={10} />
+                                <Check size={9} />
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setInlineEditing(null)}
-                                className="bg-slate-300 hover:bg-slate-400 text-slate-700 p-1 rounded transition-colors shadow-sm"
+                                className="bg-slate-300 hover:bg-slate-400 text-slate-700 p-0.5 rounded transition-colors shadow-xs"
                               >
-                                <X size={10} />
+                                <X size={9} />
                               </button>
                             </div>
                           </td>
@@ -827,17 +837,17 @@ export default function SalaryScaleSettings() {
                       return (
                         <td 
                           key={s} 
-                          className="px-2 py-2 text-center text-slate-600 font-mono border border-slate-100 group/cell relative hover:bg-amber-50/40 cursor-pointer transition-colors"
+                          className="px-0.5 py-2 text-center text-slate-700 font-mono border border-slate-100/90 group/cell relative hover:bg-amber-50/50 cursor-pointer transition-colors"
                           onClick={() => {
                             setInlineEditing({ grade: g, step: s });
                             setInlineValue(amount ? amount.toString() : '');
                           }}
                         >
                           {amount !== null ? (
-                            <div className="flex items-center justify-center gap-1">
-                              <span className="font-semibold text-slate-800">{new Intl.NumberFormat('ar-IQ').format(amount)}</span>
+                            <div className="flex items-center justify-center gap-0.5">
+                              <span className="font-bold text-slate-800 text-[11px] block text-center truncate">{Number(amount).toLocaleString()}</span>
                               {/* Quick Hover Actions */}
-                              <div className="absolute inset-y-0 right-0 hidden group-hover/cell:flex items-center gap-1 bg-slate-50 border-r border-slate-200 px-1 rounded-l shadow-sm">
+                              <div className="absolute inset-y-0 right-0 hidden group-hover/cell:flex items-center gap-0.5 bg-white border border-slate-200 px-0.5 rounded shadow-xs z-10">
                                 <button
                                   type="button"
                                   className="text-slate-500 hover:text-[#1B3A6B] p-0.5"
@@ -848,7 +858,7 @@ export default function SalaryScaleSettings() {
                                   }}
                                   title="تعديل الراتب"
                                 >
-                                  <Edit2 size={10} />
+                                  <Edit2 size={9} />
                                 </button>
                                 {rec && (
                                   <button
@@ -860,14 +870,14 @@ export default function SalaryScaleSettings() {
                                     }}
                                     title="حذف القيمة المخصصة واستعادة الافتراضية"
                                   >
-                                    <Trash2 size={10} />
+                                    <Trash2 size={9} />
                                   </button>
                                 )}
                               </div>
                             </div>
                           ) : (
-                            <span className="text-slate-300 text-[10px] group-hover/cell:text-emerald-600 font-bold flex items-center justify-center gap-0.5">
-                              <Plus size={8} /> أضف
+                            <span className="text-slate-300 text-[9px] group-hover/cell:text-emerald-600 font-bold flex items-center justify-center">
+                              —
                             </span>
                           )}
                         </td>
@@ -1135,7 +1145,7 @@ export default function SalaryScaleSettings() {
       )}
 
       {deleteConfirm.isOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-xl overflow-hidden animate-scale-up">
             <div className="p-6 text-center space-y-4">
               <div className="mx-auto w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center">
@@ -1170,7 +1180,7 @@ export default function SalaryScaleSettings() {
       )}
 
       {isWarningOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 pointer-events-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden animate-scale-up" dir="rtl">
             <div className="p-6 space-y-4">
               <div className="mx-auto w-12 h-12 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center">

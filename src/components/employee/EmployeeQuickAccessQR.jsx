@@ -18,7 +18,7 @@ export default function EmployeeQuickAccessQR({ employee, compact = false }) {
   // Build unique access token & URLs
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
   const profileUrl = `${baseUrl}/employees/${employee.id}`;
-  const uniqueToken = `QR-EMP-${employee.company_number || employee.civil_service_number || employee.id}`;
+  const uniqueToken = `QR-EMP-${employee.employee_id_number || employee.company_number || employee.civil_service_number || employee.id}`;
 
   // Formatted VCard info for QR scanning
   const vcardText = `BEGIN:VCARD
@@ -29,7 +29,7 @@ ORG:${employee.department || employee.section || 'شركة النفط'}
 TITLE:${employee.job_title || ''}
 TEL;TYPE=CELL:${employee.phone || ''}
 EMAIL:${employee.email || ''}
-NOTE:رقم الشركة: ${employee.company_number || ''} | الرقم الوظيفي: ${employee.civil_service_number || ''}
+NOTE:رقم هوية الموظف: ${employee.employee_id_number || ''} | رقم الشركة: ${employee.company_number || ''} | الرقم الوظيفي: ${employee.civil_service_number || ''} | موقع العمل: ${employee.work_location || ''} | رقم التصريح الأمني: ${employee.security_clearance_number || ''}
 URL:${profileUrl}
 END:VCARD`;
 
@@ -249,6 +249,10 @@ END:VCARD`;
 
                 <div class="info-grid">
                   <div class="info-item">
+                    <span class="info-label">رقم هوية الموظف</span>
+                    <span class="info-val">${employee.employee_id_number || '—'}</span>
+                  </div>
+                  <div class="info-item">
                     <span class="info-label">رقم الشركة</span>
                     <span class="info-val">${employee.company_number || '—'}</span>
                   </div>
@@ -256,6 +260,15 @@ END:VCARD`;
                     <span class="info-label">الرقم الوظيفي</span>
                     <span class="info-val">${employee.civil_service_number || '—'}</span>
                   </div>
+                  <div class="info-item">
+                    <span class="info-label">موقع العمل</span>
+                    <span class="info-val">${employee.work_location || '—'}</span>
+                  </div>
+                  ${employee.security_clearance_number ? `
+                  <div class="info-item" style="grid-column: span 2;">
+                    <span class="info-label">رقم التصريح الأمني</span>
+                    <span class="info-val">${employee.security_clearance_number}${employee.security_clearance_date ? ' — ' + employee.security_clearance_date : ''}</span>
+                  </div>` : ''}
                 </div>
               </div>
 
@@ -425,6 +438,10 @@ END:VCARD`;
             {/* Key IDs Bar */}
             <div className="grid grid-cols-2 gap-1.5 text-[10px]">
               <div className="bg-slate-50 p-1.5 rounded-md text-center border border-slate-100">
+                <span className="text-slate-400 block text-[8px] font-bold">رقم هوية الموظف</span>
+                <span className="font-extrabold text-slate-700">{employee.employee_id_number || '—'}</span>
+              </div>
+              <div className="bg-slate-50 p-1.5 rounded-md text-center border border-slate-100">
                 <span className="text-slate-400 block text-[8px] font-bold">رقم الشركة</span>
                 <span className="font-extrabold text-slate-700">{employee.company_number || '—'}</span>
               </div>
@@ -432,7 +449,18 @@ END:VCARD`;
                 <span className="text-slate-400 block text-[8px] font-bold">الرقم الوظيفي</span>
                 <span className="font-extrabold text-slate-700">{employee.civil_service_number || '—'}</span>
               </div>
+              <div className="bg-slate-50 p-1.5 rounded-md text-center border border-slate-100">
+                <span className="text-slate-400 block text-[8px] font-bold">موقع العمل</span>
+                <span className="font-extrabold text-slate-700 truncate block">{employee.work_location || '—'}</span>
+              </div>
             </div>
+
+            {employee.security_clearance_number && (
+              <div className="mt-1.5 bg-amber-50 border border-amber-200 p-1.5 rounded-md text-center text-[10px]">
+                <span className="text-amber-700 block text-[8px] font-bold">رقم التصريح الأمني</span>
+                <span className="font-extrabold text-amber-900">{employee.security_clearance_number}{employee.security_clearance_date ? ` — ${employee.security_clearance_date}` : ''}</span>
+              </div>
+            )}
 
             {/* Footer stamp */}
             <div className="mt-2 pt-1 border-t border-slate-100 flex items-center justify-between text-[8px] text-slate-400">

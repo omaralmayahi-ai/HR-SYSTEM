@@ -11,7 +11,8 @@ import {
   Check,
   UserCheck,
   X,
-  RefreshCw
+  RefreshCw,
+  SlidersHorizontal
 } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
 
@@ -283,11 +284,17 @@ export default function FinancialRulesSettings() {
       {/* 1. Global Configuration Form */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
         <div>
-          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-            <Settings2 className="text-[#1B3A6B]" size={20} />
-            ضوابط الاحتساب المالي والتقاعد القانوني
-          </h2>
-          <p className="text-xs text-slate-500 mt-1">تحديد السن القانونية للتقاعد وتدقيق الموظفين المقتربين لتعديل أو تمديد خدمتهم الوظيفية.</p>
+          <div className="flex items-center gap-2.5 mb-1">
+            <div className="p-2 rounded-xl bg-[#1B3A6B]/10 text-[#1B3A6B]">
+              <SlidersHorizontal size={22} />
+            </div>
+            <h2 className="text-xl font-bold text-[#1B3A6B]">
+              ضوابط الاحتساب والتقاعد
+            </h2>
+          </div>
+          <p className="text-xs text-slate-500 font-medium leading-relaxed">
+            تحديد السن القانونية للتقاعد وتدقيق الموظفين المقتربين لتعديل أو تمديد خدمتهم الوظيفية.
+          </p>
         </div>
 
         {loading ? (
@@ -503,7 +510,7 @@ export default function FinancialRulesSettings() {
 
       {/* 3. Extension dialog (overlay modal) */}
       {selectedEmployee && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-fadeIn" dir="rtl">
+        <div className="fixed inset-0 pointer-events-auto z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-fadeIn" dir="rtl">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full overflow-hidden">
             {/* Modal Header */}
             <div className="bg-[#1B3A6B] text-white p-5 flex justify-between items-center">

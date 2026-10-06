@@ -83,7 +83,7 @@ function EmployeeSearchSelect({ employees, value, onChange, placeholder = "اب�
 
       {isOpen && (
         <>
-          <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
+          <div className="fixed inset-0 pointer-events-auto z-10" onClick={() => setIsOpen(false)} />
           <div className="absolute right-0 top-full mt-1 w-full max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-xl z-20 divide-y divide-slate-100 text-right">
             {filtered.length > 0 ? (
               filtered.slice(0, 50).map(e => (
@@ -2507,7 +2507,7 @@ export default function Penalties() {
                 {/* Dropdown Suggestions List */}
                 {isOrderDropdownOpen && (
                   <>
-                    <div className="fixed inset-0 z-10" onClick={() => setIsOrderDropdownOpen(false)} />
+                    <div className="fixed inset-0 pointer-events-auto z-10" onClick={() => setIsOrderDropdownOpen(false)} />
                     <div className="absolute right-0 top-full mt-1.5 w-full max-h-72 overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-2xl z-20 divide-y divide-slate-100 text-right">
                       {filteredDistinctOrders.length > 0 ? (
                         filteredDistinctOrders.map(ord => {

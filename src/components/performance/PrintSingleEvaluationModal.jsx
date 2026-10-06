@@ -93,7 +93,7 @@ export default function PrintSingleEvaluationModal({ isOpen, onClose, evaluation
   const gradeBadge = EVALUATION_GRADE_SCALE.find(g => g.label === gradeLabel) || { bg: 'bg-slate-100 text-slate-800' };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0 print:z-auto">
+    <div className="fixed inset-0 pointer-events-auto z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0 print:z-auto">
       {/* Print-specific CSS override */}
       <style>{`
         @media print {

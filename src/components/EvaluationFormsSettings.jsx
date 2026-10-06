@@ -525,8 +525,8 @@ export default function EvaluationFormsSettings() {
         <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="space-y-1.5">
             <div className="flex items-center gap-2 font-bold text-xs" style={{ color: secondaryColor }}>
-              <Award size={16} />
-              <span>نظام تقييم الأداء والكفاءة السنوي</span>
+              <ClipboardCheck size={16} />
+              <span>استمارات تقييم الأداء</span>
             </div>
             <h2 className="text-xl font-black tracking-tight text-white">
               إدارة وتخصيص استمارات تقييم الأداء حسب الفئات الوظيفية
@@ -840,7 +840,7 @@ export default function EvaluationFormsSettings() {
       {/* Editor Modal */}
       <AnimatePresence>
         {isEditorOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
+          <div className="fixed inset-0 pointer-events-auto z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -1302,7 +1302,7 @@ export default function EvaluationFormsSettings() {
       {/* Live Preview Modal */}
       <AnimatePresence>
         {isPreviewOpen && previewingForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
+          <div className="fixed inset-0 pointer-events-auto z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -1407,7 +1407,7 @@ export default function EvaluationFormsSettings() {
       {/* Strict Delete Confirmation Modal */}
       <AnimatePresence>
         {isDeleteModalOpen && deletingForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="fixed inset-0 pointer-events-auto z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
