@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { db, schema, eq, and, or, desc, asc, ensureSchema, pool } from './src/db/index.ts';
+import { db, schema, eq, and, or, desc, asc, ensureSchema, getSchemaHealth, pool } from './src/db/index.ts';
 import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
 import { requireAuth, requireAdmin, requireWriter, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
@@ -16,7 +16,12 @@ import { encryptData, decryptData, validateEncryptionKeyConfig } from './src/lib
 import { recalculateEligibilitySync, EngineContextData, formatDateString, isDateOnOrAfter } from './src/lib/promotionEngine.ts';
 import { calculateDegreeTrackSimulation, processDegreeTrackSettlement, processBatchDegreeTrackAutoSettlement } from './src/lib/degreeTrackEngine.ts';
 import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src/lib/promotionDelayReasonsEngine.ts';
-import { checkReferentialUsage } from './src/lib/referentialIntegrity.ts';
+import { checkReferentialUsage, isDbConnectionFailure } from './src/lib/referentialIntegrity.ts';
+import { respondIfDbWriteError, sendRouteError, HttpError, classifyDbError } from './server/dbErrors.ts';
+import { installRouteRegistry } from './server/routeRegistry.ts';
+import { syncEnrollmentToTrainingCourses } from './server/trainingSync.ts';
+import { resolveAccrualParams, accrueBalance, isValidAccrualMonth, ACCRUAL_ELIGIBLE_STATUSES, ACCRUAL_UPDATE_SQL, ACCRUAL_CLAIM_SQL, LEGAL_MONTHLY_REGULAR_LEAVE_DAYS, LEGAL_MAX_REGULAR_LEAVE_ACCUMULATION, DEFAULT_MONTHLY_SICK_LEAVE_DAYS, DEFAULT_MAX_SICK_LEAVE_ACCUMULATION } from './server/leaveAccrual.ts';
+import { LEAVE_STATUS, normalizeLeaveStatus, isApprovedLeaveStatus, isRejectedOrCancelledLeaveStatus, leaveStatusVariants, toEngineLeave } from './server/leaveStatus.ts';
 
 
 const currentFilename = typeof __filename !== 'undefined' ? __filename : '';
@@ -38,8 +43,10 @@ async function startServer() {
     console.error('[DB-CHECK] error.cause:', dbCheckErr?.cause?.message || dbCheckErr?.cause);
     console.error('[DB-CHECK] ==========================================================');
   }
-  await ensureSchema().catch(() => {});
+  await ensureSchema().catch((schemaErr: any) => console.error('[SCHEMA] تعذّر تنفيذ تجهيز المخطط:', schemaErr?.message || schemaErr));
   const app = express();
+  // يمنع تسجيل نفس METHOD+PATH مرتين (النسخة الثانية تكون ميتة دائماً في Express)
+  const routeRegistry = installRouteRegistry(app);
   const PORT = Number(process.env.PORT) || 5000;
 
   app.disable('x-powered-by');
@@ -66,10 +73,10 @@ async function startServer() {
     retirementAge: 60,
     retirementNotificationDays: 180,
     maxChildrenCount: 4,
-    monthlyRegularLeaveDays: 2.5, // عدد أيام الإجازة الاعتيادية المضافة شهرياً
-    monthlySickLeaveDays: 2.5, // عدد أيام الإجازة المرضية المضافة شهرياً
-    maxRegularLeaveAccumulation: 10000, // الحد الأقصى لتراكم الإجازة الاعتيادية (القيمة الافتراضية 10000 يوم)
-    maxSickLeaveAccumulation: 10000, // الحد الأقصى لتراكم الإجازة المرضية (القيمة الافتراضية 10000 يوم)
+    monthlyRegularLeaveDays: LEGAL_MONTHLY_REGULAR_LEAVE_DAYS, // م43: يوم عن كل 10 أيام خدمة = 3 أيام شهرياً
+    monthlySickLeaveDays: DEFAULT_MONTHLY_SICK_LEAVE_DAYS, // 30 يوماً براتب تام في السنة = 2.5 شهرياً
+    maxRegularLeaveAccumulation: LEGAL_MAX_REGULAR_LEAVE_ACCUMULATION, // م43: سقف التراكم 180 يوماً
+    maxSickLeaveAccumulation: DEFAULT_MAX_SICK_LEAVE_ACCUMULATION,
     autoMonthlyLeaveAccrual: true, // زيادة أرصدة الإجازات تلقائياً شهرياً
     lastLeaveAccrualMonth: '',
     lastLeaveAccrualDate: ''
@@ -79,20 +86,81 @@ async function startServer() {
   let leaveAccrualLogs: any[] = [];
 
   // Monthly Leave Accrual Execution Function
-  async function executeMonthlyLeaveAccrual(targetMonth?: string, force = false) {
+  // - الأيام والسقف من الإعدادات مع القيم القانونية الافتراضية (3 أيام/شهر، سقف 180) — server/leaveAccrual.ts
+  // - تخزين عشري (منزلتان) بلا تقريب إلى عدد صحيح
+  // - منع التكرار في قاعدة البيانات نفسها: صف لكل شهر في leave_accrual_runs، داخل معاملة واحدة مع التحديث
+  // - لا يوجد «إجبار» لإعادة ترحيل شهر نُفِّذ سابقاً (كان يضاعف الأرصدة)
+  async function executeMonthlyLeaveAccrual(targetMonth?: string, triggeredBy = 'النظام الآلي (ترحيل شهري)') {
     const currentMonth = targetMonth || new Date().toISOString().slice(0, 7); // e.g. '2026-08'
-    
+    if (!isValidAccrualMonth(currentMonth)) {
+      throw new HttpError(400, 'صيغة الشهر غير صحيحة (المطلوب YYYY-MM)');
+    }
+
+    let dbAvailable = true;
     try {
       const [dbSettings] = await db.select().from(schema.systemSettings).limit(1);
       if (dbSettings) {
         systemSettingsStore = { ...systemSettingsStore, ...dbSettings };
       }
-    } catch {
-      // Fallback to in-memory settings
+    } catch (settingsErr) {
+      if (!isDbConnectionFailure(settingsErr)) throw settingsErr;
+      dbAvailable = false;
     }
 
-    // If not forced and already accrued for this month, return status
-    if (!force && systemSettingsStore.lastLeaveAccrualMonth === currentMonth) {
+    const params = resolveAccrualParams(systemSettingsStore);
+    const accrualDate = new Date().toISOString();
+    let processedCount = 0;
+    let alreadyExecuted = false;
+
+    if (dbAvailable) {
+      let client: any = null;
+      try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const claim = await client.query(ACCRUAL_CLAIM_SQL, [currentMonth, params.regularDays, params.sickDays, triggeredBy]);
+        if (!claim.rowCount) {
+          await client.query('ROLLBACK');
+          alreadyExecuted = true;
+        } else {
+          const upd = await client.query(ACCRUAL_UPDATE_SQL, [params.regularDays, params.regularCap, params.sickDays, params.sickCap]);
+          processedCount = upd.rowCount || 0;
+          await client.query('UPDATE leave_accrual_runs SET employees_count = $1 WHERE month = $2', [processedCount, currentMonth]);
+          const st = await client.query('UPDATE system_settings SET last_leave_accrual_month = $1, last_leave_accrual_date = $2', [currentMonth, accrualDate]);
+          if (!st.rowCount) {
+            await client.query('INSERT INTO system_settings (last_leave_accrual_month, last_leave_accrual_date) VALUES ($1, $2)', [currentMonth, accrualDate]);
+          }
+          await client.query('COMMIT');
+        }
+      } catch (accErr) {
+        if (client) await client.query('ROLLBACK').catch((rbErr: any) => console.error('[LEAVE-ACCRUAL] ROLLBACK failed:', rbErr?.message));
+        if (!isDbConnectionFailure(accErr)) throw accErr;
+        dbAvailable = false;
+      } finally {
+        if (client) client.release();
+      }
+    }
+
+    if (!dbAvailable) {
+      // وضع عدم الاتصال: التخزين الاحتياطي في الذاكرة، مع منع التكرار بمفتاح الشهر
+      if (systemSettingsStore.lastLeaveAccrualMonth === currentMonth || leaveAccrualLogs.some(l => l.month === currentMonth)) {
+        alreadyExecuted = true;
+      } else {
+        for (const emp of inMemoryEmployees) {
+          const st = emp.status;
+          if (!st || ACCRUAL_ELIGIBLE_STATUSES.includes(st)) {
+            const newReg = accrueBalance(emp.initialRegularLeaveBalance ?? emp.initial_regular_leave_balance, params.regularDays, params.regularCap);
+            const newSick = accrueBalance(emp.initialSickLeaveBalance ?? emp.initial_sick_leave_balance, params.sickDays, params.sickCap);
+            emp.initialRegularLeaveBalance = newReg;
+            emp.initial_regular_leave_balance = newReg;
+            emp.initialSickLeaveBalance = newSick;
+            emp.initial_sick_leave_balance = newSick;
+            processedCount++;
+          }
+        }
+      }
+    }
+
+    if (alreadyExecuted) {
       return {
         success: true,
         alreadyExecuted: true,
@@ -101,89 +169,30 @@ async function startServer() {
       };
     }
 
-    const regDaysToAdd = parseFloat(String(systemSettingsStore.monthlyRegularLeaveDays ?? 2.5)) || 0;
-    const sickDaysToAdd = parseFloat(String(systemSettingsStore.monthlySickLeaveDays ?? 2.5)) || 0;
-    const maxRegCap = parseInt(String(systemSettingsStore.maxRegularLeaveAccumulation || 10000)) || 10000;
-    const maxSickCap = parseInt(String(systemSettingsStore.maxSickLeaveAccumulation || 10000)) || 10000;
-
-    let processedCount = 0;
-
-    // 1. Process in-memory employees
-    for (const emp of inMemoryEmployees) {
-      const isContinuing = emp.status === 'مستمر' || !emp.status || emp.status === 'مستمر بالخدمة' || emp.status === 'فعال';
-      if (isContinuing) {
-        const curReg = parseFloat(String(emp.initialRegularLeaveBalance ?? emp.initial_regular_leave_balance ?? 0)) || 0;
-        const curSick = parseFloat(String(emp.initialSickLeaveBalance ?? emp.initial_sick_leave_balance ?? 0)) || 0;
-
-        const newReg = Math.min(curReg + regDaysToAdd, maxRegCap);
-        const newSick = Math.min(curSick + sickDaysToAdd, maxSickCap);
-
-        emp.initialRegularLeaveBalance = Number(newReg.toFixed(1));
-        emp.initial_regular_leave_balance = Number(newReg.toFixed(1));
-        emp.initialSickLeaveBalance = Number(newSick.toFixed(1));
-        emp.initial_sick_leave_balance = Number(newSick.toFixed(1));
-
-        processedCount++;
-      }
-    }
-
-    // 2. Process database employees in a single bulk SQL query (fast for 6,000+ employees)
-    try {
-      const res = await pool.query(
-        `UPDATE employees
-         SET initial_regular_leave_balance = ROUND(LEAST(COALESCE(initial_regular_leave_balance, 0) + $1, $2)::numeric, 1)::real,
-             initial_sick_leave_balance = ROUND(LEAST(COALESCE(initial_sick_leave_balance, 0) + $3, $4)::numeric, 1)::real
-         WHERE status IN ('مستمر', 'مستمر بالخدمة', 'فعال') OR status IS NULL`,
-        [regDaysToAdd, maxRegCap, sickDaysToAdd, maxSickCap]
-      );
-      if (res && typeof res.rowCount === 'number' && res.rowCount > 0) {
-        processedCount = res.rowCount;
-      }
-    } catch (e) {
-      // Database fallback
-    }
-
-    // Update settings state
-    const accrualDate = new Date().toISOString();
     systemSettingsStore.lastLeaveAccrualMonth = currentMonth;
     systemSettingsStore.lastLeaveAccrualDate = accrualDate;
-
-    try {
-      const [existingSettings] = await db.select().from(schema.systemSettings).limit(1);
-      if (existingSettings) {
-        await db.update(schema.systemSettings)
-          .set({ lastLeaveAccrualMonth: currentMonth, lastLeaveAccrualDate: accrualDate, updatedAt: new Date() })
-          .where(eq(schema.systemSettings.id, existingSettings.id));
-      } else {
-        await db.insert(schema.systemSettings).values({
-          lastLeaveAccrualMonth: currentMonth,
-          lastLeaveAccrualDate: accrualDate
-        });
-      }
-    } catch {
-      // Fallback
-    }
 
     const logEntry = {
       id: leaveAccrualLogs.length + 1,
       month: currentMonth,
       employeesCount: processedCount,
-      regularDaysAdded: regDaysToAdd,
-      sickDaysAdded: sickDaysToAdd,
+      regularDaysAdded: params.regularDays,
+      sickDaysAdded: params.sickDays,
       timestamp: accrualDate,
-      triggeredBy: force ? 'مسؤول الموارد البشرية (يدوياً)' : 'النظام الآلي (ترحيل شهري)',
-      status: 'ناجح'
+      triggeredBy,
+      status: dbAvailable ? 'ناجح' : 'ناجح (تخزين احتياطي - بلا اتصال)'
     };
     leaveAccrualLogs.unshift(logEntry);
 
-    // Also add to system logs
-    systemLogsStore.unshift({
-      id: systemLogsStore.length + 1,
-      action: 'زيادة الأرصدة الشهرية للإجازات',
-      user: 'النظام الآلي',
-      details: `تم بنجاح تطبيق الزيادة الشهرية لشهر ${currentMonth} على ${processedCount} موظفاً (إجازة اعتيادية: +${regDaysToAdd} يوم، إجازة مرضية: +${sickDaysToAdd} يوم)`,
-      timestamp: accrualDate
-    });
+    const details = `تم تطبيق الزيادة الشهرية لشهر ${currentMonth} على ${processedCount} موظفاً (اعتيادية: +${params.regularDays} يوم بسقف ${params.regularCap}، مرضية: +${params.sickDays} يوم)`;
+    systemLogsStore.unshift({ id: systemLogsStore.length + 1, action: 'زيادة الأرصدة الشهرية للإجازات', user: 'النظام الآلي', details, timestamp: accrualDate });
+    if (dbAvailable) {
+      try {
+        await db.insert(schema.activityLogs).values({ action: 'زيادة الأرصدة الشهرية للإجازات', userEmail: triggeredBy, details });
+      } catch (logErr: any) {
+        console.warn('[ACTIVITY-LOG] تعذّر تسجيل الترحيل الشهري:', logErr?.message);
+      }
+    }
 
     saveLocalDb();
 
@@ -191,9 +200,11 @@ async function startServer() {
       success: true,
       month: currentMonth,
       employeesCount: processedCount,
-      regularDaysAdded: regDaysToAdd,
-      sickDaysAdded: sickDaysToAdd,
-      date: accrualDate
+      regularDaysAdded: params.regularDays,
+      sickDaysAdded: params.sickDays,
+      regularCap: params.regularCap,
+      date: accrualDate,
+      offline: !dbAvailable
     };
   }
 
@@ -243,40 +254,54 @@ async function startServer() {
             .where(eq(schema.systemSettings.id, existing.id));
         }
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'تعديل السجل')) return;
         console.warn('Database fallback for update settings');
       }
       saveLocalDb();
       res.json(systemSettingsStore);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
   // Leave Accrual Dedicated Endpoints
   app.get('/api/leave-accrual/status', requireAuth, async (req, res) => {
     const currentMonth = new Date().toISOString().slice(0, 7);
-    const isAccruedForCurrentMonth = systemSettingsStore.lastLeaveAccrualMonth === currentMonth;
+    let runs: any[] | null = null;
+    try {
+      const r = await pool.query('SELECT month, executed_at, employees_count, regular_days_added, sick_days_added, triggered_by FROM leave_accrual_runs ORDER BY month DESC LIMIT 60');
+      runs = r.rows;
+    } catch (statusErr) {
+      if (!isDbConnectionFailure(statusErr)) return sendRouteError(res, statusErr, 'قراءة حالة الترحيل الشهري');
+    }
+    const params = resolveAccrualParams(systemSettingsStore);
+    const logs = runs
+      ? runs.map((r: any, i: number) => ({ id: i + 1, month: r.month, employeesCount: r.employees_count, regularDaysAdded: r.regular_days_added, sickDaysAdded: r.sick_days_added, timestamp: r.executed_at, triggeredBy: r.triggered_by, status: 'ناجح' }))
+      : leaveAccrualLogs;
+    const isAccruedForCurrentMonth = runs ? runs.some((r: any) => r.month === currentMonth) : systemSettingsStore.lastLeaveAccrualMonth === currentMonth;
     res.json({
       currentMonth,
       isAccruedForCurrentMonth,
-      lastLeaveAccrualMonth: systemSettingsStore.lastLeaveAccrualMonth || '',
-      lastLeaveAccrualDate: systemSettingsStore.lastLeaveAccrualDate || '',
-      monthlyRegularLeaveDays: systemSettingsStore.monthlyRegularLeaveDays ?? 2.5,
-      monthlySickLeaveDays: systemSettingsStore.monthlySickLeaveDays ?? 2.5,
-      maxRegularLeaveAccumulation: systemSettingsStore.maxRegularLeaveAccumulation ?? 10000,
-      maxSickLeaveAccumulation: systemSettingsStore.maxSickLeaveAccumulation ?? 10000,
+      lastLeaveAccrualMonth: (runs && runs[0]?.month) || systemSettingsStore.lastLeaveAccrualMonth || '',
+      lastLeaveAccrualDate: (runs && runs[0]?.executed_at) || systemSettingsStore.lastLeaveAccrualDate || '',
+      monthlyRegularLeaveDays: params.regularDays,
+      monthlySickLeaveDays: params.sickDays,
+      maxRegularLeaveAccumulation: params.regularCap,
+      maxSickLeaveAccumulation: params.sickCap,
       autoMonthlyLeaveAccrual: systemSettingsStore.autoMonthlyLeaveAccrual !== false,
-      logs: leaveAccrualLogs
+      logs
     });
   });
 
-  app.post('/api/leave-accrual/execute', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/leave-accrual/execute', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     try {
-      const { month, force } = req.body || {};
-      const result = await executeMonthlyLeaveAccrual(month, force !== undefined ? Boolean(force) : true);
+      const { month } = req.body || {};
+      // ملاحظة: خيار force أُلغي — الشهر يُرحَّل مرة واحدة فقط (يُسجَّل في leave_accrual_runs).
+      const actor = req.user?.username ? `مسؤول (يدوياً): ${req.user.username}` : 'مسؤول الموارد البشرية (يدوياً)';
+      const result = await executeMonthlyLeaveAccrual(month, actor);
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err, 'تنفيذ الترحيل الشهري للإجازات');
     }
   });
 
@@ -445,11 +470,12 @@ async function startServer() {
     try {
       res.json(req.user);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
   // Users Management API
+  const BCRYPT_HASH_RE = /^\$2[aby]?\$\d{2}\$[./A-Za-z0-9]{53}$/;
   let inMemoryUsers: any[] = [
     {
       id: 1,
@@ -475,6 +501,7 @@ async function startServer() {
         return res.json(allUsers);
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for users list');
     }
     res.json(inMemoryUsers.map(({ password, ...safeUser }) => safeUser));
@@ -496,6 +523,9 @@ async function startServer() {
           return res.status(400).json({ error: 'اسم المستخدم هذا مسجل مسبقاً' });
         }
 
+        if (BCRYPT_HASH_RE.test(String(password).trim())) {
+          return res.status(400).json({ error: 'كلمة المرور يجب أن تكون نصاً صريحاً جديداً' });
+        }
         const hashedPassword = await bcrypt.hash(password, 10);
         const [newUser] = await db.insert(schema.users).values({
           username,
@@ -516,6 +546,7 @@ async function startServer() {
           });
         }
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
         console.warn('Database fallback for creating user');
       }
 
@@ -536,7 +567,7 @@ async function startServer() {
       res.status(201).json(newMemUser);
     } catch (error: any) {
       console.error('Error creating user:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -573,8 +604,16 @@ async function startServer() {
         if (name !== undefined) updateData.name = name;
         if (email !== undefined) updateData.email = email;
         if (role) updateData.role = role;
-        if (password) {
+        // تُشفَّر كلمة المرور فقط إذا أُرسلت كلمة جديدة نصية؛ إن أعادت الواجهة القيمة المشفّرة القديمة
+        // (bcrypt hash) تُتجاهل، فلا يُعاد تشفير الـ hash ولا يُقفل حساب المستخدم.
+        if (typeof password === 'string' && password.trim() && !BCRYPT_HASH_RE.test(password.trim())) {
           updateData.password = await bcrypt.hash(password, 10);
+        }
+        if (Object.keys(updateData).length === 0) {
+          const [cur] = await db.select().from(schema.users).where(eq(schema.users.id, id)).limit(1);
+          if (!cur) return res.status(404).json({ error: 'المستخدم غير موجود' });
+          const { password: _pw, ...safeCur } = cur as any;
+          return res.json(safeCur);
         }
 
         const [updatedUser] = await db.update(schema.users)
@@ -593,6 +632,7 @@ async function startServer() {
           });
         }
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'تعديل السجل')) return;
         console.warn('Database fallback for updating user');
       }
 
@@ -611,7 +651,7 @@ async function startServer() {
       res.json({ id, username, name, email, role });
     } catch (error: any) {
       console.error('Error updating user:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -632,6 +672,7 @@ async function startServer() {
         }
         await db.delete(schema.users).where(eq(schema.users.id, id));
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حذف السجل')) return;
         console.warn('Database fallback for deleting user');
       }
 
@@ -639,7 +680,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting user:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -720,21 +761,21 @@ async function startServer() {
     {
       id: 1,
       employee_id: 1,
-      order_number: '55212',
-      assignment_order: '55212',
-      order_date: '2026-08-26',
-      assignment_date: '2026-08-26',
+      order_number: 'TEST-0001',
+      assignment_order: 'TEST-0001',
+      order_date: '2020-01-01',
+      assignment_date: '2020-01-01',
       action_type: 'تكليف',
       assignment_type: 'تكليف',
-      primary_responsibility: 'مسؤول شعبة',
+      primary_responsibility: 'بلا مسؤولية',
       acting_responsibility: 'بلا وكالة',
       deputy_level: 'لا يوجد',
-      job_title: 'معاون رئيس مبرمجين',
-      department: 'قسم التدريب والتطوير الإداري',
-      section: 'قسم التدريب والتطوير الإداري',
+      job_title: 'مبرمج',
+      department: 'قسم تجريبي',
+      section: 'شعبة تجريبية',
       service_type: 'دائم',
-      notes: '',
-      responsibility: 'مسؤول شعبة',
+      notes: 'سجل تجريبي وهمي',
+      responsibility: 'بلا مسؤولية',
       created_at: new Date().toISOString()
     }
   ];
@@ -1064,6 +1105,24 @@ async function startServer() {
     return memMatch || null;
   }
 
+  // رقم الإضبارة (service_record_number): فريد أيضاً؛ يُفحص على الخادم (الواجهة لم تعد تحمّل كل الموظفين لفحصه).
+  async function findEmployeeByServiceRecordNumber(serviceRecordNumber: any, excludeId?: number) {
+    const value = String(serviceRecordNumber ?? '').trim();
+    if (!value || value === PENDING_VALUE_SENTINEL) return null;
+    try {
+      const rows = await db.select({ id: schema.employees.id }).from(schema.employees).where(eq(schema.employees.serviceRecordNumber, value));
+      const dbMatch = rows.find(r => excludeId === undefined || parseInt(String(r.id)) !== excludeId);
+      return dbMatch || null;
+    } catch (err) {
+      if (!isDbConnectionFailure(err)) throw err;
+    }
+    return inMemoryEmployees.find(e => {
+      const v = e.serviceRecordNumber !== undefined ? e.serviceRecordNumber : e.service_record_number;
+      if (!v || String(v).trim() !== value) return false;
+      return !(excludeId !== undefined && parseInt(String(e.id)) === excludeId);
+    }) || null;
+  }
+
   // رقم هوية الموظف: يُنشأ تلقائياً بالكامل من الخادم عند إضافة الموظف (لا يُدخله موظف الـHR يدوياً إطلاقاً)،
   // ويجب أن يبقى فريداً دوماً. يُستخدم كمعرّف الهوية الرقمية للموظف ورمز الوصول السريع (QR).
   const EMPLOYEE_ID_NUMBER_SEED = 500001;
@@ -1166,9 +1225,10 @@ async function startServer() {
     mapped.childrenDetails = mapped.children_details;
 
     // Ensure promotion & increment date fields are preserved and synced
-    const baseGradeDate = mapped.grade_date || emp.gradeDate || emp.grade_date || mapped.current_appointment_date || emp.currentAppointmentDate || '';
-    const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || mapped.last_promotion_date || mapped.lastPromotionDate || baseGradeDate || '';
-    const lastIncr = emp.lastIncrementDate || emp.last_increment_date || mapped.last_increment_date || mapped.lastIncrementDate || baseGradeDate || '';
+    // لا تُشتق تواريخ آخر ترفيع/علاوة من تاريخ الدرجة أو التعيين: القيمة غير المسجلة تبقى null
+    // (تعرضها الواجهة «غير معروف») حتى لا يحسب محرك الاستحقاق من تاريخ مختلق.
+    const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || mapped.last_promotion_date || mapped.lastPromotionDate || null;
+    const lastIncr = emp.lastIncrementDate || emp.last_increment_date || mapped.last_increment_date || mapped.lastIncrementDate || null;
     const nextPromo = emp.nextPromotionDueDate || emp.next_promotion_due_date || mapped.next_promotion_due_date || mapped.nextPromotionDueDate || null;
     const nextIncr = emp.nextIncrementDueDate || emp.next_increment_due_date || mapped.next_increment_due_date || mapped.nextIncrementDueDate || null;
 
@@ -1245,139 +1305,122 @@ async function startServer() {
     { id: 57, name: 'معاون كاتب', category: 'إداري', min_grade: 9, minGrade: 9, min_step: 1, minStep: 1, status: 'فعال', notes: '' }
   ];
 
-  function ensureJobTitleExists(title: string, grade?: number | string, category?: string) {
-    if (!title || typeof title !== 'string' || !title.trim()) return;
-    const clean = title.trim();
-    const norm = clean.replace(/[أإآا]/g, 'ا').replace(/[ىي]/g, 'ي').replace(/[ةه]/g, 'ه').toLowerCase();
-    const exists = inMemoryJobTitles.some(t => {
-      const tNorm = (t.name || '').replace(/[أإآا]/g, 'ا').replace(/[ىي]/g, 'ي').replace(/[ةه]/g, 'ه').toLowerCase();
-      return tNorm === norm;
-    });
-    if (!exists) {
-      const targetGrade = grade ? (parseInt(String(grade)) || 7) : 7;
-      const targetCategory = category || 'أخرى';
-      const newId = inMemoryJobTitles.reduce((max, t) => Math.max(max, parseInt(t.id) || 0), 0) + 1;
-      const newTitle = {
-        id: newId,
-        name: clean,
-        category: targetCategory,
-        min_grade: targetGrade,
-        minGrade: targetGrade,
-        status: 'فعال',
-        notes: `تمت إضافته تلقائياً عند حفظ الموظف (الدرجة ${targetGrade}) - تصنيف مؤقت (أخرى)`,
-        created_at: new Date().toISOString(),
-        createdAt: new Date().toISOString()
-      };
-      inMemoryJobTitles.push(newTitle);
-      try {
-        db.insert(schema.jobTitles).values({
-          name: clean,
-          category: targetCategory,
-          minGrade: targetGrade,
-          status: 'فعال',
-          notes: `تمت إضافته تلقائياً عند حفظ الموظف (الدرجة ${targetGrade}) - تصنيف مؤقت (أخرى)`
-        }).catch(() => {});
-      } catch (e) {}
+  // العنوان الوظيفي يجب أن يكون من الدليل المعتمد (job_titles). لم يعد النظام يُنشئ عنواناً تلقائياً
+  // من أي نص حر يُكتب في استمارة الموظف؛ العنوان غير المعروف يُرفض برسالة واضحة.
+  const normalizeJobTitleName = (text: any) => String(text || '')
+    .replace(/[أإآا]/g, 'ا').replace(/[ىي]/g, 'ي').replace(/[ةه]/g, 'ه')
+    .replace(/[\u064B-\u065F]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+  async function loadJobTitleDirectory(): Promise<any[]> {
+    try {
+      const rows = await db.select().from(schema.jobTitles);
+      if (rows && rows.length > 0) return rows;
+    } catch (err) {
+      if (!isDbConnectionFailure(err)) throw err;
     }
+    return inMemoryJobTitles || [];
   }
 
+  /** يعيد رسالة خطأ إن كان العنوان غير موجود أو معطلاً في الدليل، وإلا null مع السجل المطابق. */
+  async function checkJobTitleInDirectory(rawTitle: any): Promise<{ error: string | null; match: any | null }> {
+    const clean = String(rawTitle || '').trim();
+    if (!clean) return { error: null, match: null };
+    const directory = await loadJobTitleDirectory();
+    const norm = normalizeJobTitleName(clean);
+    const match = directory.find(t => t && t.name && normalizeJobTitleName(t.name) === norm) || null;
+    if (!match) {
+      return { error: `العنوان الوظيفي «${clean}» غير موجود في دليل العناوين الوظيفية المعتمد. أضِفه أولاً من إعدادات العناوين الوظيفية ثم أعد الحفظ.`, match: null };
+    }
+    if (match.status === 'معطل' || match.status === 'غير فعال') {
+      return { error: `العنوان الوظيفي «${clean}» معطّل في دليل العناوين الوظيفية ولا يمكن إسناده.`, match };
+    }
+    return { error: null, match };
+  }
+
+  // بذرة تجريبية وهمية بالكامل (لا تمثل أي شخص حقيقي) تظهر فقط في وضع عدم الاتصال بقاعدة البيانات.
   let inMemoryEmployees: any[] = [
     {
       id: 1,
-      fullName: 'عمر محمود سلمان محيميد المياحي',
-      full_name: 'عمر محمود سلمان محيميد المياحي',
-      firstName: 'عمر',
-      first_name: 'عمر',
-      fatherName: 'محمود',
-      father_name: 'محمود',
-      grandfatherName: 'سلمان',
-      grandfather_name: 'سلمان',
-      greatGrandfatherName: 'محيميد',
-      great_grandfather_name: 'محيميد',
-      surname: 'المياحي',
-      employeeNumber: '118789',
-      employee_number: '118789',
-      companyNumber: '118789',
-      company_number: '118789',
-      civilServiceNumber: '118789',
-      civil_service_number: '118789',
+      fullName: 'موظف تجريبي أول وهمي',
+      full_name: 'موظف تجريبي أول وهمي',
+      firstName: 'موظف',
+      first_name: 'موظف',
+      fatherName: 'تجريبي',
+      father_name: 'تجريبي',
+      grandfatherName: 'أول',
+      grandfather_name: 'أول',
+      greatGrandfatherName: 'وهمي',
+      great_grandfather_name: 'وهمي',
+      surname: 'التجريبي',
+      employeeNumber: '900001',
+      employee_number: '900001',
+      companyNumber: '900001',
+      company_number: '900001',
+      civilServiceNumber: '900001',
+      civil_service_number: '900001',
       gender: 'ذكر',
-      birthDate: '1989-10-12',
-      birth_date: '1989-10-12',
-      birthPlace: 'صلاح الدين',
-      birth_place: 'صلاح الدين',
+      birthDate: '1990-01-01',
+      birth_date: '1990-01-01',
+      birthPlace: 'مدينة تجريبية',
+      birth_place: 'مدينة تجريبية',
       nationality: 'عراقي',
-      ethnicity: 'عربي/ة',
-      religion: 'مسلم',
-      maritalStatus: 'متزوج',
-      marital_status: 'متزوج',
-      spouseNames: 'زينب أحمد حسن',
-      spouse_names: 'زينب أحمد حسن',
-      spousesData: JSON.stringify([{ id: 1, name: 'زينب أحمد حسن' }]),
-      spouses_data: JSON.stringify([{ id: 1, name: 'زينب أحمد حسن' }]),
-      childrenCount: 2,
-      children_count: 2,
-      childrenDetails: JSON.stringify([
-        { id: 1, name: 'علي عمر محمود', birth_date: '2018-05-14', gender: 'ذكر' },
-        { id: 2, name: 'مريم عمر محمود', birth_date: '2021-09-20', gender: 'أنثى' }
-      ]),
-      children_details: JSON.stringify([
-        { id: 1, name: 'علي عمر محمود', birth_date: '2018-05-14', gender: 'ذكر' },
-        { id: 2, name: 'مريم عمر محمود', birth_date: '2021-09-20', gender: 'أنثى' }
-      ]),
-      nationalId: '111111',
-      national_id: '111111',
-      passportNumber: '11',
-      passport_number: '11',
-      bloodType: 'AB+',
-      blood_type: 'AB+',
-      phone: '07701784629',
-      email: 'omar.almayahi@gmail.com',
-      address: 'بغداد / كفاءات السيدية',
-      appointmentDate: '2013-03-24',
-      appointment_date: '2013-03-24',
-      firstAppointmentDate: '2013-03-24',
-      first_appointment_date: '2013-03-24',
-      currentAppointmentDate: '2018-01-11',
-      current_appointment_date: '2018-01-11',
-      oilSectorStartDate: '2013-03-24',
-      oil_sector_start_date: '2013-03-24',
-      jobTitle: 'معاون رئيس مبرمجين',
-      job_title: 'معاون رئيس مبرمجين',
-      department: 'قسم التدريب والتطوير الإداري',
-      section: 'قسم التدريب والتطوير الإداري',
+      maritalStatus: 'أعزب',
+      marital_status: 'أعزب',
+      spouseNames: '',
+      spouse_names: '',
+      spousesData: JSON.stringify([]),
+      spouses_data: JSON.stringify([]),
+      childrenCount: 0,
+      children_count: 0,
+      childrenDetails: JSON.stringify([]),
+      children_details: JSON.stringify([]),
+      nationalId: '000000000000',
+      national_id: '000000000000',
+      phone: '07000000000',
+      email: 'test.employee@example.invalid',
+      address: 'عنوان تجريبي - لا يوجد',
+      appointmentDate: '2015-01-01',
+      appointment_date: '2015-01-01',
+      firstAppointmentDate: '2015-01-01',
+      first_appointment_date: '2015-01-01',
+      currentAppointmentDate: '2015-01-01',
+      current_appointment_date: '2015-01-01',
+      jobTitle: 'مبرمج',
+      job_title: 'مبرمج',
+      department: 'قسم تجريبي',
+      section: 'شعبة تجريبية',
       serviceType: 'دائم',
       service_type: 'دائم',
-      grade: 4,
-      step: 4,
-      gradeDate: '2025-12-20',
-      grade_date: '2025-12-20',
-      lastPromotionDate: '2025-12-20',
-      last_promotion_date: '2025-12-20',
-      lastIncrementDate: '2025-12-20',
-      last_increment_date: '2025-12-20',
+      grade: 6,
+      step: 1,
+      gradeDate: '2015-01-01',
+      grade_date: '2015-01-01',
+      lastPromotionDate: null,
+      last_promotion_date: null,
+      lastIncrementDate: null,
+      last_increment_date: null,
       jobResponsibility: 'بلا مسؤولية',
       job_responsibility: 'بلا مسؤولية',
       primaryResponsibility: 'بلا مسؤولية',
       primary_responsibility: 'بلا مسؤولية',
       educationLevel: 'بكالوريوس',
       education_level: 'بكالوريوس',
-      specialization: 'علوم الحاسبات',
-      university: 'جامعة تكريت',
-      institution: 'جامعة تكريت',
+      specialization: 'تخصص تجريبي',
+      university: 'جامعة تجريبية',
+      institution: 'جامعة تجريبية',
       graduationYear: 2012,
       graduation_year: 2012,
-      workLocation: 'المقر العام - بغداد',
-      work_location: 'المقر العام - بغداد',
+      workLocation: 'موقع تجريبي',
+      work_location: 'موقع تجريبي',
       workNature: 'مكتبي',
       work_nature: 'مكتبي',
       workShiftType: 'صباحي',
       work_shift_type: 'صباحي',
       status: 'مستمر',
-      initialRegularLeaveBalance: 392,
-      initial_regular_leave_balance: 392,
-      initialSickLeaveBalance: 277,
-      initial_sick_leave_balance: 277,
+      initialRegularLeaveBalance: 0,
+      initial_regular_leave_balance: 0,
+      initialSickLeaveBalance: 0,
+      initial_sick_leave_balance: 0,
       createdAt: new Date().toISOString(),
       created_at: new Date().toISOString()
     }
@@ -1424,6 +1467,11 @@ async function startServer() {
       saveLocalDb();
     }
   }
+
+  // صحة تجهيز مخطط قاعدة البيانات: أوامر DDL التي فشلت عند الإقلاع (للمسؤول فقط)
+  app.get('/api/admin/schema-health', requireAuth, requireAdmin, async (req, res) => {
+    res.json(getSchemaHealth());
+  });
 
   app.post('/api/admin/reload-local-db', requireAuth, requireAdmin, async (req, res) => {
     loadLocalDb();
@@ -1673,7 +1721,7 @@ async function startServer() {
         });
       } catch (error: any) {
         console.error('Error in paginated employees list:', error);
-        return res.status(500).json({ error: error.message });
+        return sendRouteError(res, error);
       }
     }
 
@@ -1686,6 +1734,7 @@ async function startServer() {
         return res.json(allEmployees.map(enhanceEmployeeRecord));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for employees list');
     }
     const memList = statusFilter
@@ -1720,19 +1769,28 @@ async function startServer() {
         }
       }
 
+      if (mappedData.serviceRecordNumber) {
+        const dupRecord = await findEmployeeByServiceRecordNumber(mappedData.serviceRecordNumber);
+        if (dupRecord) {
+          return res.status(400).json({ error: `رقم الإضبارة (${String(mappedData.serviceRecordNumber).trim()}) مستخدم بالفعل من قبل موظف آخر` });
+        }
+      }
+
       // رقم هوية الموظف: يُنشأ تلقائياً دوماً عند الإضافة (يتجاهل أي قيمة قد تُرسل من الواجهة لهذا الحقل تحديداً)
       mappedData.employeeIdNumber = await generateUniqueEmployeeIdNumber();
 
       const cleanData = sanitizeEmployeeData(mappedData);
 
       if (mappedData.jobTitle || data.job_title) {
-        const empGrade = mappedData.grade || data.grade || 7;
         const rawTitle = String(mappedData.jobTitle || data.job_title || '').trim();
-        ensureJobTitleExists(rawTitle, empGrade, 'أخرى');
-        const matchTitle = inMemoryJobTitles.find(t => (t.name && String(t.name).trim() === rawTitle) || (t.id && String(t.id) === String(mappedData.jobTitleId || data.job_title_id)));
-        if (matchTitle) {
-          cleanData.jobTitleId = matchTitle.id;
-          mappedData.jobTitleId = matchTitle.id;
+        const titleCheck = await checkJobTitleInDirectory(rawTitle);
+        if (titleCheck.error) {
+          return res.status(400).json({ error: titleCheck.error });
+        }
+        if (titleCheck.match) {
+          mappedData.jobTitle = titleCheck.match.name;
+          cleanData.jobTitle = titleCheck.match.name;
+          mappedData.jobTitleId = titleCheck.match.id;
         }
       }
 
@@ -1743,7 +1801,7 @@ async function startServer() {
           insertedFromDb = newEmployee;
         }
       } catch (dbErr) {
-        console.warn('Database fallback for creating employee');
+        if (respondIfDbWriteError(res, dbErr, 'إضافة الموظف')) return;
       }
 
       const newId = insertedFromDb?.id || (inMemoryEmployees.length > 0 ? Math.max(...inMemoryEmployees.map(e => parseInt(String(e.id)) || 0)) + 1 : 1);
@@ -1782,7 +1840,7 @@ async function startServer() {
       res.status(201).json(enhanceEmployeeRecord(memEmployee));
     } catch (error: any) {
       console.error('Error creating employee:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -1836,9 +1894,7 @@ async function startServer() {
         processEmployeeNameData(mappedData, true);
         processEmployeeEducationData(mappedData);
 
-        if (!mappedData.status) mappedData.status = 'مستمر بالخدمة';
-        if (!mappedData.serviceType) mappedData.serviceType = 'ملاك دائم';
-        if (!mappedData.gender) mappedData.gender = 'ذكر';
+        // لا تُختلق قيم افتراضية للحالة أو نوع الخدمة أو الجنس: الحقل الفارغ يبقى فارغاً («بيانات ناقصة»).
 
         const cleanData = sanitizeEmployeeData(mappedData);
         let handled = false;
@@ -1863,6 +1919,7 @@ async function startServer() {
               .where(eq(schema.employees.id, existingEmp.id))
               .returning();
 
+            handled = true;
             updatedCount++;
             if (updated) {
               await syncEmployeeQualificationFromEmployee(updated.id, mappedData);
@@ -1872,6 +1929,7 @@ async function startServer() {
             }
           } else {
             const [inserted] = await db.insert(schema.employees).values(cleanData).returning();
+            handled = true;
             insertedCount++;
 
             if (inserted) {
@@ -1882,7 +1940,20 @@ async function startServer() {
             }
           }
         } catch (dbErr) {
-          console.warn('Database fallback for bulk import item');
+          if (!isDbConnectionFailure(dbErr)) {
+            // خطأ بيانات حقيقي (تكرار، قيد، صيغة): يُرفض الصف ولا يُحسب ضمن المُدرَجين ولا يُكتب في الذاكرة.
+            const classified = classifyDbError(dbErr, 'حفظ الصف');
+            console.error(`[DB-ERROR] bulk import row ${rowNum}:`, (dbErr as any)?.cause?.message || (dbErr as any)?.message);
+            rejectedRows.push({
+              rowNumber: rowNum,
+              name: mappedData.fullName || mappedData.firstName || empData.full_name || empData.first_name || 'موظف',
+              companyNumber: mappedData.companyNumber || empData.company_number || '',
+              reason: classified.message,
+              errors: [classified.message]
+            });
+            continue;
+          }
+          console.warn('Database fallback (offline) for bulk import item');
         }
 
         if (!handled) {
@@ -1909,7 +1980,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Error in bulk import:', error);
-      res.status(500).json({ error: error.message || 'فشلت عملية ترحيل الموظفين' });
+      sendRouteError(res, error, 'ترحيل الموظفين');
     }
   });
 
@@ -1953,6 +2024,7 @@ async function startServer() {
         return res.json(enhanceEmployeeRecord(employee));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for get employee by id');
     }
     const memEmp = inMemoryEmployees.find(e => parseInt(String(e.id)) === id);
@@ -1992,34 +2064,68 @@ async function startServer() {
       }
     }
 
+    if (mappedData.serviceRecordNumber) {
+      try {
+        const dupRecord = await findEmployeeByServiceRecordNumber(mappedData.serviceRecordNumber, id);
+        if (dupRecord) {
+          return res.status(400).json({ error: `رقم الإضبارة (${String(mappedData.serviceRecordNumber).trim()}) مستخدم بالفعل من قبل موظف آخر` });
+        }
+      } catch (dupErr) {
+        return sendRouteError(res, dupErr, 'التحقق من رقم الإضبارة');
+      }
+    }
+
     // رقم هوية الموظف: يُنشأ تلقائياً مرة واحدة فقط عند الإضافة، ولا يُسمح بتعديله يدوياً عبر واجهة التعديل إطلاقاً
     delete mappedData.employeeIdNumber;
 
     const cleanData = sanitizeEmployeeData(mappedData);
 
     if (mappedData.jobTitle || data.job_title) {
-      const empGrade = mappedData.grade || data.grade || 7;
       const rawTitle = String(mappedData.jobTitle || data.job_title || '').trim();
-      ensureJobTitleExists(rawTitle, empGrade, 'أخرى');
-      const matchTitle = inMemoryJobTitles.find(t => (t.name && String(t.name).trim() === rawTitle) || (t.id && String(t.id) === String(mappedData.jobTitleId || data.job_title_id)));
-      if (matchTitle) {
-        cleanData.jobTitleId = matchTitle.id;
-        mappedData.jobTitleId = matchTitle.id;
+      // يُفحص العنوان مقابل الدليل فقط إذا تغيّر عن العنوان المحفوظ حالياً (السجلات القديمة لا تُقفل).
+      let currentTitle = '';
+      try {
+        const [cur] = await db.select({ jobTitle: schema.employees.jobTitle }).from(schema.employees).where(eq(schema.employees.id, id));
+        currentTitle = String(cur?.jobTitle || '').trim();
+      } catch (curErr) {
+        if (!isDbConnectionFailure(curErr)) return sendRouteError(res, curErr, 'تعديل الموظف');
+        const memCur = inMemoryEmployees.find(e => parseInt(String(e.id)) === id);
+        currentTitle = String(memCur?.jobTitle || memCur?.job_title || '').trim();
+      }
+      if (normalizeJobTitleName(rawTitle) !== normalizeJobTitleName(currentTitle)) {
+        let titleCheck: { error: string | null; match: any | null };
+        try {
+          titleCheck = await checkJobTitleInDirectory(rawTitle);
+        } catch (dirErr) {
+          return sendRouteError(res, dirErr, 'التحقق من العنوان الوظيفي');
+        }
+        if (titleCheck.error) {
+          return res.status(400).json({ error: titleCheck.error });
+        }
+        if (titleCheck.match) {
+          mappedData.jobTitle = titleCheck.match.name;
+          cleanData.jobTitle = titleCheck.match.name;
+          mappedData.jobTitleId = titleCheck.match.id;
+        }
       }
     }
 
     let updatedFromDb: any = null;
+    let dbAnswered = false;
     try {
-      const [updatedEmployee] = await db.update(schema.employees)
-        .set(cleanData)
-        .where(eq(schema.employees.id, id))
-        .returning();
+      const [updatedEmployee] = Object.keys(cleanData).length > 0
+        ? await db.update(schema.employees).set(cleanData).where(eq(schema.employees.id, id)).returning()
+        : await db.select().from(schema.employees).where(eq(schema.employees.id, id));
+      dbAnswered = true;
 
       if (updatedEmployee && updatedEmployee.id) {
         updatedFromDb = updatedEmployee;
       }
     } catch (error: any) {
-      console.warn('Database fallback for update employee');
+      if (respondIfDbWriteError(res, error, 'تعديل بيانات الموظف')) return;
+    }
+    if (dbAnswered && !updatedFromDb) {
+      return res.status(404).json({ error: 'الموظف غير موجود' });
     }
 
     const idx = inMemoryEmployees.findIndex(e => parseInt(String(e.id)) === id);
@@ -2540,30 +2646,65 @@ async function startServer() {
   });
 
   // Leave Requests API
+  // الحالة موحّدة: معلق / معتمد / مرفوض / ملغى (انظر server/leaveStatus.ts)؛ القيم القديمة
+  // («مقبولة»، «موافق_عليها»، approved...) تُقرأ كـ«معتمد» وتُعاد بالقيمة الموحدة.
+  const presentLeave = (r: any) => {
+    const out = mapKeys(r, camelToSnake);
+    if (out && out.status !== undefined) out.status = normalizeLeaveStatus(out.status);
+    return out;
+  };
+
   app.get('/api/leaves', requireAuth, async (req, res) => {
-    try {
-      const empIdParam = req.query.employeeId || req.query.employee_id;
-      const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
-      let query = db.select().from(schema.leaveRequests);
-      if (employeeId && !isNaN(employeeId)) {
-        query = db.select().from(schema.leaveRequests).where(eq(schema.leaveRequests.employeeId, employeeId)) as any;
-      }
-      const leaves = await query.orderBy(desc(schema.leaveRequests.createdAt));
-      if (leaves && leaves.length > 0) {
-        return res.json(leaves.map(r => mapKeys(r, camelToSnake)));
-      }
-    } catch (error: any) {
-      console.warn('Database fallback for leaves list');
-    }
     const empIdParam = req.query.employeeId || req.query.employee_id;
+    const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
+    const statusParam = req.query.status && req.query.status !== 'all' ? String(req.query.status) : null;
+    const statusVariants = statusParam ? leaveStatusVariants(statusParam) : [];
+    try {
+      const conds: any[] = [];
+      if (employeeId && !isNaN(employeeId)) conds.push(eq(schema.leaveRequests.employeeId, employeeId));
+      if (statusParam) {
+        // حالة فارغة/NULL في السجلات القديمة تُعامل «معلق»
+        conds.push(normalizeLeaveStatus(statusParam) === LEAVE_STATUS.PENDING
+          ? or(inArray(schema.leaveRequests.status, statusVariants), isNull(schema.leaveRequests.status), eq(schema.leaveRequests.status, ''))
+          : inArray(schema.leaveRequests.status, statusVariants));
+      }
+      const leaves = conds.length > 0
+        ? await db.select().from(schema.leaveRequests).where(and(...conds)).orderBy(desc(schema.leaveRequests.createdAt))
+        : await db.select().from(schema.leaveRequests).orderBy(desc(schema.leaveRequests.createdAt));
+      return res.json(leaves.map(presentLeave));
+    } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة طلبات الإجازة');
+      console.warn('Database fallback (offline) for leaves list');
+    }
     let memList = genericMemoryStores['leaves'] || inMemoryLeaves || [];
     if (empIdParam) {
       memList = memList.filter(item => String(item.employee_id || item.employeeId) === String(empIdParam));
     }
-    res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
+    if (statusParam) {
+      const wanted = normalizeLeaveStatus(statusParam);
+      memList = memList.filter(item => (normalizeLeaveStatus(item.status) || LEAVE_STATUS.PENDING) === wanted);
+    }
+    res.json(memList.map(presentLeave));
   });
 
-  app.post('/api/leaves', requireAuth, async (req, res) => {
+  // خصم الرصيد (في السجل المركزي) يحدث مرة واحدة فقط عند انتقال الطلب إلى «معتمد»، لا عند تقديمه معلقاً،
+  // ويُعاد الرصيد عند رفض/إلغاء/حذف طلب كان معتمداً. direction: -1 خصم، +1 إعادة.
+  async function adjustLeaveBalance(employeeId: number, days: number, leaveType: any, direction: -1 | 1) {
+    if (!employeeId || !(days > 0)) return;
+    const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === employeeId);
+    if (!emp) return;
+    const lType = String(leaveType || '').toLowerCase();
+    if (lType.includes('مرض') || lType.includes('sick')) {
+      const cur = parseFloat(String(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 0)) || 0;
+      await updateEmployeeCentralRecord(employeeId, { sickLeaveBalance: Math.max(0, Number((cur + direction * days).toFixed(2))) });
+    } else {
+      const cur = parseFloat(String(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 0)) || 0;
+      await updateEmployeeCentralRecord(employeeId, { regularLeaveBalance: Math.max(0, Number((cur + direction * days).toFixed(2))) });
+    }
+  }
+  const deductLeaveBalanceOnApproval = (employeeId: number, days: number, leaveType: any) => adjustLeaveBalance(employeeId, days, leaveType, -1);
+
+  app.post('/api/leaves', requireAuth, async (req: AuthRequest, res) => {
     try {
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
@@ -2580,44 +2721,38 @@ async function startServer() {
       delete mappedData.createdAt;
 
       if (!mappedData.employeeId || isNaN(mappedData.employeeId)) {
-        return res.status(400).json({ error: 'employee_id is required' });
+        return res.status(400).json({ error: 'يجب تحديد الموظف (employee_id) لطلب الإجازة' });
       }
+
+      mappedData.status = normalizeLeaveStatus(mappedData.status) || LEAVE_STATUS.PENDING;
+      // صاحب دور «موظف» يقدّم طلباً فقط ولا يعتمده لنفسه
+      if (req.user?.role === 'employee') mappedData.status = LEAVE_STATUS.PENDING;
+
+      const validCols = new Set(Object.keys(getTableColumns(schema.leaveRequests)));
+      const dbData: any = {};
+      for (const [k, v] of Object.entries(mappedData)) if (validCols.has(k)) dbData[k] = v;
 
       let newLeave: any = null;
       try {
-        const [inserted] = await db.insert(schema.leaveRequests).values(mappedData).returning();
+        const [inserted] = await db.insert(schema.leaveRequests).values(dbData).returning();
         newLeave = inserted;
       } catch (dbErr) {
-        console.warn('Database fallback for create leave');
+        if (respondIfDbWriteError(res, dbErr, 'حفظ طلب الإجازة')) return;
       }
 
-      // Sync leave balance to central employee record
-      const days = mappedData.daysCount || 0;
-      const lType = (mappedData.leaveType || '').toLowerCase();
-      if (days > 0 && mappedData.status !== 'مرفوضة' && mappedData.status !== 'rejected') {
-        const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === mappedData.employeeId);
-        if (emp) {
-          if (lType.includes('مرض') || lType.includes('sick')) {
-            const cur = parseFloat(String(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30));
-            const updatedSick = Math.max(0, Number((cur - days).toFixed(1)));
-            await updateEmployeeCentralRecord(mappedData.employeeId, { sickLeaveBalance: updatedSick });
-          } else {
-            const cur = parseFloat(String(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 30));
-            const updatedReg = Math.max(0, Number((cur - days).toFixed(1)));
-            await updateEmployeeCentralRecord(mappedData.employeeId, { regularLeaveBalance: updatedReg });
-          }
-        }
+      if (mappedData.status === LEAVE_STATUS.APPROVED) {
+        await deductLeaveBalanceOnApproval(mappedData.employeeId, mappedData.daysCount || 0, mappedData.leaveType);
       }
 
       const newId = newLeave?.id || (genericMemoryStores['leaves']?.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
-      const cleanSnake = mapKeys(req.body, camelToSnake);
-      const memRecord = { ...cleanSnake, id: newId, created_at: new Date().toISOString() };
+      const cleanSnake = { ...mapKeys(req.body, camelToSnake), status: mappedData.status };
+      const memRecord = { ...cleanSnake, ...(newLeave ? mapKeys(newLeave, camelToSnake) : {}), id: newId, created_at: newLeave?.createdAt || new Date().toISOString() };
       syncEntityRecord('leaves', memRecord, 'insert');
 
-      res.status(201).json(mapKeys(newLeave || memRecord, camelToSnake));
+      res.status(201).json(presentLeave(newLeave || memRecord));
     } catch (error: any) {
       console.error('Error creating leave:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error, 'حفظ طلب الإجازة');
     }
   });
 
@@ -2625,7 +2760,7 @@ async function startServer() {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
-        return res.status(400).json({ error: 'Invalid ID format' });
+        return res.status(400).json({ error: 'معرّف طلب الإجازة غير صالح' });
       }
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
@@ -2635,66 +2770,80 @@ async function startServer() {
       if (mappedData.daysCount !== undefined) {
         mappedData.daysCount = parseFloat(mappedData.daysCount);
       }
+      if (mappedData.status !== undefined) {
+        mappedData.status = normalizeLeaveStatus(mappedData.status) || LEAVE_STATUS.PENDING;
+      }
       delete mappedData.id;
       delete mappedData.createdAt;
 
+      const validCols = new Set(Object.keys(getTableColumns(schema.leaveRequests)));
+      const dbData: any = {};
+      for (const [k, v] of Object.entries(mappedData)) if (validCols.has(k)) dbData[k] = v;
+
+      const memPrev = (genericMemoryStores['leaves'] || []).find(r => String(r.id) === String(id));
+      let previous: any = memPrev ? mapKeys(memPrev, snakeToCamel) : null;
       let updatedLeave: any = null;
+      let dbAnswered = false;
       try {
-        const [updated] = await db.update(schema.leaveRequests)
-          .set(mappedData)
-          .where(eq(schema.leaveRequests.id, id))
-          .returning();
-        updatedLeave = updated;
+        updatedLeave = await db.transaction(async (tx) => {
+          const [prev] = await tx.select().from(schema.leaveRequests).where(eq(schema.leaveRequests.id, id));
+          if (!prev) return null;
+          previous = prev;
+          if (Object.keys(dbData).length === 0) return prev;
+          const [updated] = await tx.update(schema.leaveRequests)
+            .set(dbData)
+            .where(eq(schema.leaveRequests.id, id))
+            .returning();
+          return updated;
+        });
+        dbAnswered = true;
       } catch (dbErr) {
-        console.warn('Database fallback for update leave');
+        if (respondIfDbWriteError(res, dbErr, 'تعديل طلب الإجازة')) return;
+      }
+      if (dbAnswered && !updatedLeave) {
+        return res.status(404).json({ error: 'طلب الإجازة غير موجود' });
       }
 
-      // Sync leave balance to central employee record if approved
-      if (mappedData.status === 'مقبولة' || mappedData.status === 'approved') {
-        const days = mappedData.daysCount || 0;
-        const empId = mappedData.employeeId;
-        const lType = (mappedData.leaveType || '').toLowerCase();
-        if (days > 0 && empId) {
-          const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empId);
-          if (emp) {
-            if (lType.includes('مرض') || lType.includes('sick')) {
-              const cur = parseFloat(String(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30));
-              const updatedSick = Math.max(0, Number((cur - days).toFixed(1)));
-              await updateEmployeeCentralRecord(empId, { sickLeaveBalance: updatedSick });
-            } else {
-              const cur = parseFloat(String(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 30));
-              const updatedReg = Math.max(0, Number((cur - days).toFixed(1)));
-              await updateEmployeeCentralRecord(empId, { regularLeaveBalance: updatedReg });
-            }
-          }
-        }
+      const merged = { ...(previous || {}), ...mappedData, ...(updatedLeave || {}) };
+      const wasApproved = isApprovedLeaveStatus(previous?.status);
+      const nowApproved = isApprovedLeaveStatus(merged.status);
+      if (!wasApproved && nowApproved) {
+        await deductLeaveBalanceOnApproval(parseInt(String(merged.employeeId)), parseFloat(String(merged.daysCount || 0)) || 0, merged.leaveType);
+      } else if (wasApproved && isRejectedOrCancelledLeaveStatus(merged.status)) {
+        await adjustLeaveBalance(parseInt(String(merged.employeeId)), parseFloat(String(merged.daysCount || 0)) || 0, merged.leaveType, 1);
       }
 
-      const cleanSnake = mapKeys(req.body, camelToSnake);
-      const memRecord = { ...cleanSnake, id };
+      const cleanSnake = { ...mapKeys(req.body, camelToSnake), ...(mappedData.status !== undefined ? { status: mappedData.status } : {}) };
+      const memRecord = { ...cleanSnake, ...(updatedLeave ? mapKeys(updatedLeave, camelToSnake) : {}), id };
       syncEntityRecord('leaves', memRecord, 'update');
 
-      res.json(mapKeys(updatedLeave || memRecord, camelToSnake));
+      res.json(presentLeave(updatedLeave || memRecord));
     } catch (error: any) {
       console.error('Error updating leave request:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error, 'تعديل طلب الإجازة');
     }
   });
 
   app.delete('/api/leaves/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      if (isNaN(id)) return res.status(400).json({ error: 'معرّف طلب الإجازة غير صالح' });
+      const memPrev = (genericMemoryStores['leaves'] || []).find(r => String(r.id) === String(id));
+      let removed: any = memPrev ? mapKeys(memPrev, snakeToCamel) : null;
       try {
-        await db.delete(schema.leaveRequests).where(eq(schema.leaveRequests.id, id));
+        const rows = await db.delete(schema.leaveRequests).where(eq(schema.leaveRequests.id, id)).returning();
+        if (rows[0]) removed = rows[0];
       } catch (error: any) {
-        console.warn('Database fallback for delete leave');
+        if (respondIfDbWriteError(res, error, 'حذف طلب الإجازة')) return;
+      }
+      if (removed && isApprovedLeaveStatus(removed.status)) {
+        await adjustLeaveBalance(parseInt(String(removed.employeeId)), parseFloat(String(removed.daysCount || 0)) || 0, removed.leaveType, 1);
       }
       syncEntityRecord('leaves', { id }, 'delete');
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting leave:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error, 'حذف طلب الإجازة');
     }
   });
 
@@ -2708,10 +2857,9 @@ async function startServer() {
         query = db.select().from(schema.penalties).where(eq(schema.penalties.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.penalties.createdAt));
-      if (results && results.length > 0) {
-        return res.json(results.map(r => mapKeys(r, camelToSnake)));
-      }
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for penalties list');
     }
     const empIdParam = req.query.employeeId || req.query.employee_id;
@@ -2729,11 +2877,18 @@ async function startServer() {
       if (mappedData.employeeId !== undefined) {
         mappedData.employeeId = parseInt(mappedData.employeeId);
       }
+      if (mappedData.daysCount !== undefined) {
+        const dc = parseInt(String(mappedData.daysCount));
+        if (mappedData.daysCount !== null && String(mappedData.daysCount).trim() !== '' && (isNaN(dc) || dc < 0)) {
+          return res.status(400).json({ error: 'عدد أيام القطع يجب أن يكون رقماً صحيحاً موجباً' });
+        }
+        mappedData.daysCount = isNaN(dc) ? null : dc;
+      }
       delete mappedData.id;
       delete mappedData.createdAt;
 
       if (!mappedData.employeeId || isNaN(mappedData.employeeId)) {
-        return res.status(400).json({ error: 'employee_id is required' });
+        return res.status(400).json({ error: 'يجب تحديد الموظف (employee_id) للعقوبة' });
       }
 
       let newPenalty: any = null;
@@ -2741,6 +2896,7 @@ async function startServer() {
         const [inserted] = await db.insert(schema.penalties).values(mappedData).returning();
         newPenalty = inserted;
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
         console.warn('Database fallback for create penalty');
       }
 
@@ -2750,13 +2906,13 @@ async function startServer() {
       syncEntityRecord('penalties', memRecord, 'insert');
 
       if (mappedData.employeeId) {
-        triggerRecalculateEligibility(mappedData.employeeId).catch(() => {});
+        triggerRecalculateEligibility(mappedData.employeeId).catch(logRecalcError);
       }
 
       res.status(201).json(mapKeys(newPenalty || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating penalty:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2769,6 +2925,13 @@ async function startServer() {
       if (mappedData.employeeId !== undefined) {
         mappedData.employeeId = parseInt(mappedData.employeeId);
       }
+      if (mappedData.daysCount !== undefined) {
+        const dc = parseInt(String(mappedData.daysCount));
+        if (mappedData.daysCount !== null && String(mappedData.daysCount).trim() !== '' && (isNaN(dc) || dc < 0)) {
+          return res.status(400).json({ error: 'عدد أيام القطع يجب أن يكون رقماً صحيحاً موجباً' });
+        }
+        mappedData.daysCount = isNaN(dc) ? null : dc;
+      }
       delete mappedData.id;
       delete mappedData.createdAt;
 
@@ -2777,6 +2940,7 @@ async function startServer() {
         const [updated] = await db.update(schema.penalties).set(mappedData).where(eq(schema.penalties.id, id)).returning();
         updatedPenalty = updated;
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'تعديل السجل')) return;
         console.warn('Database fallback for update penalty');
       }
 
@@ -2785,13 +2949,13 @@ async function startServer() {
       syncEntityRecord('penalties', memRecord, 'update');
 
       if (mappedData.employeeId) {
-        triggerRecalculateEligibility(mappedData.employeeId).catch(() => {});
+        triggerRecalculateEligibility(mappedData.employeeId).catch(logRecalcError);
       }
 
       res.json(mapKeys(updatedPenalty || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating penalty:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2803,19 +2967,20 @@ async function startServer() {
       try {
         await db.delete(schema.penalties).where(eq(schema.penalties.id, id));
       } catch (error: any) {
+        if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
         console.warn('Database fallback for delete penalty');
       }
       syncEntityRecord('penalties', { id }, 'delete');
 
       const empId = parseInt(String(existing?.employee_id || existing?.employeeId || '0'));
       if (empId) {
-        triggerRecalculateEligibility(empId).catch(() => {});
+        triggerRecalculateEligibility(empId).catch(logRecalcError);
       }
 
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting penalty:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2829,10 +2994,9 @@ async function startServer() {
         query = db.select().from(schema.appreciations).where(eq(schema.appreciations.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.appreciations.createdAt));
-      if (results && results.length > 0) {
-        return res.json(results.map(r => mapKeys(r, camelToSnake)));
-      }
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for appreciations list');
     }
     const empIdParam = req.query.employeeId || req.query.employee_id;
@@ -2862,6 +3026,7 @@ async function startServer() {
         const [inserted] = await db.insert(schema.appreciations).values(mappedData).returning();
         newAppreciation = inserted;
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
         console.warn('Database fallback for create appreciation');
       }
 
@@ -2871,13 +3036,13 @@ async function startServer() {
       syncEntityRecord('appreciations', memRecord, 'insert');
 
       if (mappedData.employeeId) {
-        triggerRecalculateEligibility(mappedData.employeeId).catch(() => {});
+        triggerRecalculateEligibility(mappedData.employeeId).catch(logRecalcError);
       }
 
       res.status(201).json(mapKeys(newAppreciation || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating appreciation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2898,6 +3063,7 @@ async function startServer() {
         const [updated] = await db.update(schema.appreciations).set(mappedData).where(eq(schema.appreciations.id, id)).returning();
         updatedApprec = updated;
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'تعديل السجل')) return;
         console.warn('Database fallback for update appreciation');
       }
 
@@ -2906,13 +3072,13 @@ async function startServer() {
       syncEntityRecord('appreciations', memRecord, 'update');
 
       if (mappedData.employeeId) {
-        triggerRecalculateEligibility(mappedData.employeeId).catch(() => {});
+        triggerRecalculateEligibility(mappedData.employeeId).catch(logRecalcError);
       }
 
       res.json(mapKeys(updatedApprec || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating appreciation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2924,19 +3090,20 @@ async function startServer() {
       try {
         await db.delete(schema.appreciations).where(eq(schema.appreciations.id, id));
       } catch (error: any) {
+        if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
         console.warn('Database fallback for delete appreciation');
       }
       syncEntityRecord('appreciations', { id }, 'delete');
 
       const empId = parseInt(String(existing?.employee_id || existing?.employeeId || '0'));
       if (empId) {
-        triggerRecalculateEligibility(empId).catch(() => {});
+        triggerRecalculateEligibility(empId).catch(logRecalcError);
       }
 
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting appreciation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2945,21 +3112,25 @@ async function startServer() {
     try {
       const empIdParam = req.query.employeeId || req.query.employee_id;
       const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
-      let query = db.select().from(schema.performanceEvaluations);
-      if (employeeId && !isNaN(employeeId)) {
-        query = db.select().from(schema.performanceEvaluations).where(eq(schema.performanceEvaluations.employeeId, employeeId)) as any;
-      }
-      const results = await query.orderBy(desc(schema.performanceEvaluations.createdAt));
-      if (results && results.length > 0) {
-        return res.json(results.map(r => mapKeys(r, camelToSnake)));
-      }
+      const statusParam = req.query.status && req.query.status !== 'all' ? String(req.query.status) : null;
+      const conds: any[] = [];
+      if (employeeId && !isNaN(employeeId)) conds.push(eq(schema.performanceEvaluations.employeeId, employeeId));
+      if (statusParam) conds.push(eq(schema.performanceEvaluations.status, statusParam));
+      const results = conds.length > 0
+        ? await db.select().from(schema.performanceEvaluations).where(and(...conds)).orderBy(desc(schema.performanceEvaluations.createdAt))
+        : await db.select().from(schema.performanceEvaluations).orderBy(desc(schema.performanceEvaluations.createdAt));
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for performance list');
     }
     const empIdParam = req.query.employeeId || req.query.employee_id;
     let memList = genericMemoryStores['performance'] || inMemoryPerformanceEvaluations || [];
     if (empIdParam) {
       memList = memList.filter(item => String(item.employee_id || item.employeeId) === String(empIdParam));
+    }
+    if (req.query.status && req.query.status !== 'all') {
+      memList = memList.filter(item => String(item.status || 'مرفوع للاعتماد') === String(req.query.status));
     }
     res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
   });
@@ -3009,6 +3180,7 @@ async function startServer() {
         const [inserted] = await db.insert(schema.performanceEvaluations).values(mappedData).returning();
         newEval = inserted;
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
         console.warn('Database fallback for create performance evaluation');
       }
 
@@ -3020,7 +3192,7 @@ async function startServer() {
       res.status(201).json(mapKeys(newEval || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating performance evaluation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3046,6 +3218,7 @@ async function startServer() {
           .returning();
         updatedEval = updated;
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'تعديل السجل')) return;
         console.warn('Database fallback for update performance evaluation');
       }
 
@@ -3056,7 +3229,7 @@ async function startServer() {
       res.json(mapKeys(updatedEval || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating performance evaluation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3069,13 +3242,14 @@ async function startServer() {
       try {
         await db.delete(schema.performanceEvaluations).where(eq(schema.performanceEvaluations.id, id));
       } catch (error: any) {
+        if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
         console.warn('Database fallback for delete performance evaluation');
       }
       syncEntityRecord('performance', { id }, 'delete');
       res.json({ success: true, message: 'تم حذف التقييم بنجاح' });
     } catch (error: any) {
       console.error('Error deleting performance evaluation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3091,10 +3265,9 @@ async function startServer() {
         .from(schema.careerHistories)
         .where(eq(schema.careerHistories.employeeId, employeeId))
         .orderBy(desc(schema.careerHistories.createdAt));
-      if (results && results.length > 0) {
-        return res.json(results.map(r => mapKeys(r, camelToSnake)));
-      }
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for career history query');
     }
     const store = genericMemoryStores['career'] || inMemoryCareerHistories || [];
@@ -3121,6 +3294,7 @@ async function startServer() {
         const [inserted] = await db.insert(schema.careerHistories).values(mappedData).returning();
         newHistory = inserted;
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
         console.warn('Database fallback for create career history');
       }
 
@@ -3132,7 +3306,7 @@ async function startServer() {
       res.status(201).json(mapKeys(newHistory || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating career history:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3143,13 +3317,14 @@ async function startServer() {
       try {
         await db.delete(schema.careerHistories).where(eq(schema.careerHistories.id, id));
       } catch (error: any) {
+        if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
         console.warn('Database fallback for delete career history');
       }
       syncEntityRecord('career', { id }, 'delete');
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting career history:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3267,19 +3442,17 @@ async function startServer() {
     try {
       const track = req.query.track as string;
       const year = req.query.year ? parseInt(req.query.year as string) : undefined;
-      let query = db.select().from(schema.trainings);
-      if (track && year) {
-        query = db.select().from(schema.trainings).where(and(eq(schema.trainings.track, track), eq(schema.trainings.year, year))) as any;
-      } else if (track) {
-        query = db.select().from(schema.trainings).where(eq(schema.trainings.track, track)) as any;
-      } else if (year) {
-        query = db.select().from(schema.trainings).where(eq(schema.trainings.year, year)) as any;
-      }
-      const courses = await query.orderBy(desc(schema.trainings.startDate));
-      if (courses && courses.length > 0) {
-        return res.json(courses.map(enhanceTrainingRecord));
-      }
+      const statusParam = req.query.status && req.query.status !== 'all' ? String(req.query.status) : null;
+      const conds: any[] = [];
+      if (track) conds.push(eq(schema.trainings.track, track));
+      if (year) conds.push(eq(schema.trainings.year, year));
+      if (statusParam) conds.push(eq(schema.trainings.status, statusParam));
+      const courses = conds.length > 0
+        ? await db.select().from(schema.trainings).where(and(...conds)).orderBy(desc(schema.trainings.startDate))
+        : await db.select().from(schema.trainings).orderBy(desc(schema.trainings.startDate));
+      return res.json(courses.map(enhanceTrainingRecord));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for trainings list');
     }
     const track = req.query.track as string;
@@ -3287,6 +3460,7 @@ async function startServer() {
     let list = inMemoryTrainings;
     if (track) list = list.filter(c => c.track === track);
     if (year) list = list.filter(c => c.year === year);
+    if (req.query.status && req.query.status !== 'all') list = list.filter(c => String(c.status || '') === String(req.query.status));
     res.json(list.map(enhanceTrainingRecord));
   });
 
@@ -3310,6 +3484,7 @@ async function startServer() {
       const [inserted] = await db.insert(schema.trainings).values(data).returning();
       newCourse = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create training course');
     }
     const newId = newCourse?.id || (inMemoryTrainings.reduce((max, c) => Math.max(max, parseInt(c.id) || 0), 0) || 0) + 1;
@@ -3343,6 +3518,7 @@ async function startServer() {
       const [updated] = await db.update(schema.trainings).set(data).where(eq(schema.trainings.id, id)).returning();
       updatedFromDb = updated;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update training');
     }
     const idx = inMemoryTrainings.findIndex(c => parseInt(String(c.id)) === id);
@@ -3363,6 +3539,7 @@ async function startServer() {
     try {
       await db.delete(schema.trainings).where(eq(schema.trainings.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete training');
     }
     inMemoryTrainings = inMemoryTrainings.filter(c => parseInt(String(c.id)) !== id);
@@ -3382,10 +3559,9 @@ async function startServer() {
         query = db.select().from(schema.trainingEnrollments).where(eq(schema.trainingEnrollments.trainingId, trainingId)) as any;
       }
       const enrollments = await query.orderBy(desc(schema.trainingEnrollments.createdAt));
-      if (enrollments && enrollments.length > 0) {
-        return res.json(enrollments.map(enhanceEnrollmentRecord));
-      }
+      return res.json(enrollments.map(enhanceEnrollmentRecord));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for enrollments list');
     }
     const employeeId = req.query.employeeId ? parseInt(req.query.employeeId as string) : undefined;
@@ -3404,30 +3580,13 @@ async function startServer() {
 
     let newEnroll: any = null;
     try {
-      const [inserted] = await db.insert(schema.trainingEnrollments).values(data).returning();
-      newEnroll = inserted;
-      if (newEnroll) {
-        if (newEnroll.employeeId && (newEnroll.result === 'اجتاز' || newEnroll.result === 'مشارك')) {
-          const [course] = await db.select().from(schema.trainings).where(eq(schema.trainings.id, newEnroll.trainingId)).limit(1);
-          if (course) {
-            await db.insert(schema.trainingCourses).values({
-              employeeId: newEnroll.employeeId,
-              courseName: course.courseName,
-              courseType: course.courseType || 'حضوري',
-              provider: course.provider || 'قسم التدريب والتطوير',
-              location: course.location || (course.locationType === 'موقعي' ? 'داخل الشركة' : 'خارج العراق'),
-              startDate: course.startDate,
-              endDate: course.endDate,
-              durationDays: course.days || 1,
-              average: newEnroll.score || '',
-              grade: newEnroll.grade || newEnroll.result,
-              rank: 'مشارك'
-            }).catch(() => {});
-          }
-        }
-      }
+      newEnroll = await db.transaction(async (tx) => {
+        const [inserted] = await tx.insert(schema.trainingEnrollments).values(data).returning();
+        if (inserted) await syncEnrollmentToTrainingCourses(tx, schema, { eq, and }, inserted);
+        return inserted;
+      });
     } catch (error: any) {
-      console.warn('Database fallback for enroll');
+      if (respondIfDbWriteError(res, error, 'تسجيل المتدرب في الدورة')) return;
     }
 
     const newId = newEnroll?.id || (inMemoryEnrollments.reduce((max, e) => Math.max(max, parseInt(e.id) || 0), 0) || 0) + 1;
@@ -3449,29 +3608,20 @@ async function startServer() {
     if (data.employeeId) data.employeeId = parseInt(data.employeeId) || null;
 
     let updatedFromDb: any = null;
+    let dbAnswered = false;
     try {
-      const [updated] = await db.update(schema.trainingEnrollments).set(data).where(eq(schema.trainingEnrollments.id, id)).returning();
-      updatedFromDb = updated;
-      if (updated && updated.employeeId && (updated.result === 'اجتاز' || updated.result === 'مشارك')) {
-        const [course] = await db.select().from(schema.trainings).where(eq(schema.trainings.id, updated.trainingId)).limit(1);
-        if (course) {
-          await db.insert(schema.trainingCourses).values({
-            employeeId: updated.employeeId,
-            courseName: course.courseName,
-            courseType: course.courseType || 'حضوري',
-            provider: course.provider || 'قسم التدريب والتطوير',
-            location: course.location || (course.locationType === 'موقعي' ? 'داخل الشركة' : 'خارج العراق'),
-            startDate: course.startDate,
-            endDate: course.endDate,
-            durationDays: course.days || 1,
-            average: updated.score || '',
-            grade: updated.grade || updated.result,
-            rank: 'مشارك'
-          }).catch(() => {});
-        }
-      }
+      // تعديل التسجيل ومزامنة نتيجته إلى دورات الموظف (upsert بالموظف + الدورة) في معاملة واحدة
+      updatedFromDb = await db.transaction(async (tx) => {
+        const [updated] = await tx.update(schema.trainingEnrollments).set(data).where(eq(schema.trainingEnrollments.id, id)).returning();
+        if (updated) await syncEnrollmentToTrainingCourses(tx, schema, { eq, and }, updated);
+        return updated;
+      });
+      dbAnswered = true;
     } catch (error: any) {
-      console.warn('Database fallback for update enrollment');
+      if (respondIfDbWriteError(res, error, 'تعديل نتيجة المتدرب')) return;
+    }
+    if (dbAnswered && !updatedFromDb) {
+      return res.status(404).json({ error: 'سجل التسجيل في الدورة غير موجود' });
     }
 
     const idx = inMemoryEnrollments.findIndex(e => parseInt(String(e.id)) === id);
@@ -3492,6 +3642,7 @@ async function startServer() {
     try {
       await db.delete(schema.trainingEnrollments).where(eq(schema.trainingEnrollments.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete enrollment');
     }
     inMemoryEnrollments = inMemoryEnrollments.filter(e => parseInt(String(e.id)) !== id);
@@ -3520,6 +3671,7 @@ async function startServer() {
         return res.json(result.rows.map(enhanceTrainerRecord));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for trainers list');
     }
     res.json(inMemoryTrainers.map(enhanceTrainerRecord));
@@ -3533,6 +3685,7 @@ async function startServer() {
         return res.json(enhanceTrainerRecord(result.rows[0]));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for trainer get by id');
     }
     const id = parseInt(req.params.id);
@@ -3604,6 +3757,7 @@ async function startServer() {
           savedRow = result.rows[0];
         }
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
         console.warn('Database fallback for insert trainer');
       }
 
@@ -3679,6 +3833,7 @@ async function startServer() {
           savedRow = result.rows[0];
         }
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'تعديل السجل')) return;
         console.warn('Database fallback for update trainer');
       }
 
@@ -3704,6 +3859,7 @@ async function startServer() {
       const id = parseInt(req.params.id);
       await pool.query('DELETE FROM trainers WHERE id = $1', [id]);
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete trainer');
     }
     inMemoryTrainers = inMemoryTrainers.filter(t => parseInt(String(t.id)) !== id);
@@ -3719,6 +3875,7 @@ async function startServer() {
         return res.json(plans.map(enhancePlanRecord));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for annual plans list');
     }
     res.json(inMemoryAnnualPlans.map(enhancePlanRecord));
@@ -3749,6 +3906,7 @@ async function startServer() {
           savedPlan = newPlan;
         }
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
         console.warn('Database fallback for save annual plan');
       }
 
@@ -3802,6 +3960,7 @@ async function startServer() {
       }));
       return res.json(mapped);
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for salary records');
     }
     res.json([]);
@@ -3823,13 +3982,19 @@ async function startServer() {
         netSalary: item.net_salary,
         status: item.status || 'مسودة'
       }));
-      if (toInsert.length > 0) {
-        await db.insert(schema.salaryRecords).values(toInsert);
+      const invalid = toInsert.findIndex(r => !r.employeeId || !r.month || !r.year);
+      if (invalid !== -1) {
+        return res.status(400).json({ error: `بيانات ناقصة في السجل رقم ${invalid + 1}: الموظف والشهر والسنة مطلوبة` });
       }
-      res.status(201).json({ success: true, count: toInsert.length });
+      let inserted: any[] = [];
+      if (toInsert.length > 0) {
+        // إدراج واحد (ذري): إما أن تُحفظ كل القسائم أو لا يُحفظ شيء
+        inserted = await db.insert(schema.salaryRecords).values(toInsert).returning({ id: schema.salaryRecords.id });
+      }
+      res.status(201).json({ success: true, count: inserted.length });
     } catch (error: any) {
-      console.warn('Database fallback for bulk salary records');
-      res.status(201).json({ success: true, count: Array.isArray(req.body) ? req.body.length : 0 });
+      // لا يوجد تخزين احتياطي لقسائم الرواتب: أي فشل (بما فيه انقطاع الاتصال) يُعاد كخطأ ولا يُبلَّغ كنجاح
+      sendRouteError(res, error, 'حفظ قسائم الرواتب');
     }
   });
 
@@ -3842,14 +4007,18 @@ async function startServer() {
       const data = req.body;
       const updateObj: any = {};
       if (data.status) updateObj.status = data.status;
+      if (Object.keys(updateObj).length === 0) {
+        return res.status(400).json({ error: 'لا توجد حقول للتعديل' });
+      }
       const [updated] = await db.update(schema.salaryRecords)
         .set(updateObj)
         .where(eq(schema.salaryRecords.id, id))
         .returning();
+      if (!updated) return res.status(404).json({ error: 'قسيمة الراتب غير موجودة' });
       res.json(updated);
     } catch (error: any) {
       console.error('Error updating salary record:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3876,6 +4045,7 @@ async function startServer() {
       }));
       return res.json(mapped);
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for attendance records');
     }
     res.json([]);
@@ -3900,7 +4070,7 @@ async function startServer() {
 
       const [newRecord] = await db.insert(schema.attendance).values(toInsert as any).returning();
       
-      res.status(210).json({
+      res.status(201).json({
         id: newRecord.id,
         employee_id: newRecord.employeeId,
         date: newRecord.date,
@@ -3913,7 +4083,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Error creating attendance record:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3931,10 +4101,14 @@ async function startServer() {
       if (data.late_minutes !== undefined) updateObj.lateMinutes = parseInt(data.late_minutes) || 0;
       if (data.notes !== undefined) updateObj.notes = data.notes;
 
+      if (Object.keys(updateObj).length === 0) {
+        return res.status(400).json({ error: 'لا توجد حقول للتعديل' });
+      }
       const [updated] = await db.update(schema.attendance)
         .set(updateObj)
         .where(eq(schema.attendance.id, id))
         .returning();
+      if (!updated) return res.status(404).json({ error: 'سجل الدوام غير موجود' });
 
       res.json({
         id: updated.id,
@@ -3949,7 +4123,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Error updating attendance record:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3963,7 +4137,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting attendance record:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3987,6 +4161,7 @@ async function startServer() {
         })));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for org units');
     }
     res.json(inMemoryOrgUnits);
@@ -4033,6 +4208,7 @@ async function startServer() {
         });
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create org unit');
     }
 
@@ -4082,6 +4258,7 @@ async function startServer() {
         });
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update org unit');
     }
 
@@ -4120,10 +4297,14 @@ async function startServer() {
       };
 
       const idsToDelete = [id, ...getDescendantIds(id)];
-      for (const deleteId of idsToDelete.reverse()) {
-        await db.delete(schema.orgUnits).where(eq(schema.orgUnits.id, deleteId));
-      }
+      // حذف الفرع كاملاً داخل معاملة: إما كله أو لا شيء
+      await db.transaction(async (tx) => {
+        for (const deleteId of idsToDelete.reverse()) {
+          await tx.delete(schema.orgUnits).where(eq(schema.orgUnits.id, deleteId));
+        }
+      });
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete org unit');
     }
 
@@ -4540,6 +4721,7 @@ async function startServer() {
         }
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for job titles');
     }
     const statusParam = req.query.status as string;
@@ -4602,7 +4784,7 @@ async function startServer() {
         return res.status(201).json(mapKeys(newRecord, camelToSnake));
       }
     } catch (error: any) {
-      console.warn('Database fallback for create job title');
+      if (respondIfDbWriteError(res, error, 'إضافة العنوان الوظيفي')) return;
     }
     const newId = inMemoryJobTitles.reduce((max, t) => Math.max(max, parseInt(t.id) || 0), 0) + 1;
     const memItem = {
@@ -4716,63 +4898,42 @@ async function startServer() {
         if (status !== undefined) updateData.status = status;
         if (notes !== undefined) updateData.notes = notes;
 
-        const [updated] = await db.update(schema.jobTitles)
-          .set(updateData)
-          .where(eq(schema.jobTitles.id, id))
-          .returning();
-
-        // If title name was updated, cascade change to all employee records and job assignments in DB
-        if (oldName && newName && oldName !== newName) {
-          try {
-            await db.update(schema.employees)
+        // تعديل العنوان + تحديث العنوان الحالي للموظفين الحاملين للاسم القديم داخل معاملة واحدة.
+        // ملاحظة: لا تُعدَّل سجلات job_assignments إطلاقاً؛ فهي أوامر تاريخية صدرت بالاسم القديم.
+        const updated = await db.transaction(async (tx) => {
+          const [row] = await tx.update(schema.jobTitles)
+            .set(updateData)
+            .where(eq(schema.jobTitles.id, id))
+            .returning();
+          if (row && oldName && newName && oldName !== newName) {
+            await tx.update(schema.employees)
               .set({ jobTitle: newName, updatedAt: new Date() })
-              .where(or(
-                eq(schema.employees.jobTitle, oldName),
-                eq(schema.employees.jobTitleId, id)
-              ));
-            await db.update(schema.jobAssignments)
-              .set({ jobTitle: newName })
-              .where(or(
-                eq(schema.jobAssignments.jobTitle, oldName),
-                eq(schema.jobAssignments.jobTitleId, id)
-              ));
-          } catch (cascErr) {
-            console.warn('Database fallback for cascading job title rename');
+              .where(eq(schema.employees.jobTitle, oldName));
           }
+          return row;
+        });
 
-          // Cascade in-memory employees and job assignments
+        if (!updated) {
+          return res.status(404).json({ error: 'العنوان الوظيفي غير موجود' });
+        }
+
+        if (oldName && newName && oldName !== newName) {
           (inMemoryEmployees || []).forEach(emp => {
             const curTitle = String(emp.jobTitle || emp.job_title || '').trim();
-            const curTitleId = parseInt(String(emp.jobTitleId || emp.job_title_id || '0'));
-            if ((oldName && curTitle === oldName) || (curTitleId && curTitleId === id)) {
+            if (curTitle === oldName) {
               emp.jobTitle = newName;
               emp.job_title = newName;
-              emp.jobTitleId = id;
-              emp.job_title_id = id;
               emp.updatedAt = new Date().toISOString();
               emp.updated_at = new Date().toISOString();
             }
           });
-
-          const jaStore = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
-          jaStore.forEach((ja: any) => {
-            const jaTitle = String(ja.jobTitle || ja.job_title || '').trim();
-            const jaTitleId = parseInt(String(ja.jobTitleId || ja.job_title_id || '0'));
-            if ((oldName && jaTitle === oldName) || (jaTitleId && jaTitleId === id)) {
-              ja.jobTitle = newName;
-              ja.job_title = newName;
-              ja.jobTitleId = id;
-              ja.job_title_id = id;
-            }
-          });
         }
-
-        if (updated) {
-          saveLocalDb();
-          return res.json(mapKeys(updated, camelToSnake));
-        }
+        const memIdx = inMemoryJobTitles.findIndex(r => parseInt(String(r.id)) === id);
+        if (memIdx !== -1) inMemoryJobTitles[memIdx] = { ...inMemoryJobTitles[memIdx], ...mapKeys(updated, camelToSnake), ...updated };
+        saveLocalDb();
+        return res.json(mapKeys(updated, camelToSnake));
       } catch (error: any) {
-        console.warn('Database fallback for update job title');
+        if (respondIfDbWriteError(res, error, 'تعديل العنوان الوظيفي')) return;
       }
 
       const idx = inMemoryJobTitles.findIndex(r => parseInt(String(r.id)) === id);
@@ -4807,18 +4968,7 @@ async function startServer() {
               emp.updated_at = new Date().toISOString();
             }
           });
-
-          const jaStore = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
-          jaStore.forEach((ja: any) => {
-            const jaTitle = String(ja.jobTitle || ja.job_title || '').trim();
-            const jaTitleId = parseInt(String(ja.jobTitleId || ja.job_title_id || '0'));
-            if ((oldName && jaTitle === oldName) || (jaTitleId && jaTitleId === id)) {
-              ja.jobTitle = newName;
-              ja.job_title = newName;
-              ja.jobTitleId = id;
-              ja.job_title_id = id;
-            }
-          });
+          // سجلات التكليف (job_assignments) تاريخية ولا تُعاد كتابتها عند إعادة تسمية العنوان.
         }
 
         saveLocalDb();
@@ -4827,7 +4977,7 @@ async function startServer() {
       res.json({ id, name: newName, category, min_grade: mGrade, min_step: mStep, next_title_id: nxtId, status, notes });
     } catch (err: any) {
       console.error('Error updating job title:', err);
-      res.status(500).json({ error: err.message || 'حدث خطأ أثناء تعديل العنوان الوظيفي' });
+      sendRouteError(res, err, 'تعديل العنوان الوظيفي');
     }
   });
 
@@ -4871,14 +5021,14 @@ async function startServer() {
       try {
         await db.delete(schema.jobTitles).where(eq(schema.jobTitles.id, id));
       } catch (error: any) {
-        console.warn('Database fallback for delete job title');
+        if (respondIfDbWriteError(res, error, 'حذف العنوان الوظيفي')) return;
       }
       inMemoryJobTitles = inMemoryJobTitles.filter(r => r.id !== id);
       saveLocalDb();
       res.json({ success: true });
     } catch (err: any) {
       console.error('Error deleting job title:', err);
-      res.status(500).json({ error: err.message || 'حدث خطأ أثناء حذف العنوان الوظيفي' });
+      sendRouteError(res, err, 'حذف العنوان الوظيفي');
     }
   });
 
@@ -4890,6 +5040,7 @@ async function startServer() {
         return res.json(records);
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for salary scale query');
     }
     if (inMemorySalaryScale.length === 0) {
@@ -4910,6 +5061,7 @@ async function startServer() {
       }).returning();
       if (newRecord) return res.status(201).json(newRecord);
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create salary scale');
     }
     const memRecord = {
@@ -4943,6 +5095,7 @@ async function startServer() {
         await db.insert(schema.salaryScale).values(toInsert);
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for bulk salary scale');
     }
     inMemorySalaryScale = items.map((item, idx) => ({
@@ -4972,6 +5125,7 @@ async function startServer() {
         .returning();
       if (updated) return res.json(updated);
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update salary scale');
     }
     const idx = inMemorySalaryScale.findIndex(r => r.id === id);
@@ -4993,6 +5147,7 @@ async function startServer() {
     try {
       await db.delete(schema.salaryScale).where(eq(schema.salaryScale.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete salary scale');
     }
     inMemorySalaryScale = inMemorySalaryScale.filter(r => r.id !== id);
@@ -5008,6 +5163,7 @@ async function startServer() {
         return res.json(records.map(r => mapKeys(r, camelToSnake)));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for grade promotion rules query');
     }
     res.json(inMemoryGradePromotionRules.map(r => mapKeys(r, camelToSnake)));
@@ -5036,6 +5192,7 @@ async function startServer() {
         return res.json(mapKeys(updated, camelToSnake));
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update grade promotion rule');
     }
 
@@ -5077,6 +5234,7 @@ async function startServer() {
         });
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for bulk grade promotion rules');
     }
 
@@ -5099,6 +5257,7 @@ async function startServer() {
       const records = await db.select().from(schema.commendationTypes).orderBy(asc(schema.commendationTypes.id));
       if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
     } catch (e) {
+      if (!isDbConnectionFailure(e)) return sendRouteError(res, e, 'قراءة البيانات');
       console.warn('Database fallback for commendation-types');
     }
     res.json(inMemoryCommendationTypes.map(r => mapKeys(r, camelToSnake)));
@@ -5120,6 +5279,7 @@ async function startServer() {
         return res.status(201).json(mapKeys(inserted, camelToSnake));
       }
     } catch (e) {
+      if (respondIfDbWriteError(res, e, 'حفظ السجل')) return;
       console.warn('Database fallback for create commendation-type');
     }
     const newId = inMemoryCommendationTypes.length + 1;
@@ -5151,6 +5311,7 @@ async function startServer() {
         return res.json(mapKeys(updated, camelToSnake));
       }
     } catch (e) {
+      if (respondIfDbWriteError(res, e, 'تعديل السجل')) return;
       console.warn('Database fallback for update commendation-type');
     }
     const idx = inMemoryCommendationTypes.findIndex(r => r.id === id);
@@ -5173,6 +5334,7 @@ async function startServer() {
     try {
       await db.delete(schema.commendationTypes).where(eq(schema.commendationTypes.id, id));
     } catch (e) {
+      if (respondIfDbWriteError(res, e, 'حذف السجل')) return;
       console.warn('Database fallback for delete commendation-type');
     }
     inMemoryCommendationTypes = inMemoryCommendationTypes.filter(r => r.id !== id);
@@ -5192,6 +5354,7 @@ async function startServer() {
       const records = await query.orderBy(desc(schema.employeeCommendations.createdAt));
       if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
     } catch (e) {
+      if (!isDbConnectionFailure(e)) return sendRouteError(res, e, 'قراءة البيانات');
       console.warn('Database fallback for employee-commendations');
     }
     let list = inMemoryEmployeeCommendations;
@@ -5227,17 +5390,18 @@ async function startServer() {
       if (inserted) {
         inMemoryEmployeeCommendations.push(mapKeys(inserted, camelToSnake));
         saveLocalDb();
-        triggerRecalculateEligibility(employeeId).catch(() => {});
+        triggerRecalculateEligibility(employeeId).catch(logRecalcError);
         return res.status(201).json(mapKeys(inserted, camelToSnake));
       }
     } catch (e) {
+      if (respondIfDbWriteError(res, e, 'حفظ السجل')) return;
       console.warn('Database fallback for create employee-commendation');
     }
     const newId = inMemoryEmployeeCommendations.length + 1;
     const mem = { id: newId, employee_id: employeeId, ...data, credit_months_snapshot: creditMonthsSnapshot, creditMonthsSnapshot, created_at: new Date().toISOString() };
     inMemoryEmployeeCommendations.push(mem);
     saveLocalDb();
-    triggerRecalculateEligibility(employeeId).catch(() => {});
+    triggerRecalculateEligibility(employeeId).catch(logRecalcError);
     res.status(201).json(mem);
   });
 
@@ -5262,10 +5426,11 @@ async function startServer() {
         const idx = inMemoryEmployeeCommendations.findIndex(r => r.id === id);
         if (idx !== -1) inMemoryEmployeeCommendations[idx] = { ...inMemoryEmployeeCommendations[idx], ...mapKeys(updated, camelToSnake) };
         saveLocalDb();
-        if (updated.employeeId) triggerRecalculateEligibility(updated.employeeId).catch(() => {});
+        if (updated.employeeId) triggerRecalculateEligibility(updated.employeeId).catch(logRecalcError);
         return res.json(mapKeys(updated, camelToSnake));
       }
     } catch (e) {
+      if (respondIfDbWriteError(res, e, 'تعديل السجل')) return;
       console.warn('Database fallback for update employee-commendation');
     }
     const idx = inMemoryEmployeeCommendations.findIndex(r => r.id === id);
@@ -5273,7 +5438,7 @@ async function startServer() {
       inMemoryEmployeeCommendations[idx] = { ...inMemoryEmployeeCommendations[idx], ...data };
       saveLocalDb();
       const empId = inMemoryEmployeeCommendations[idx].employee_id || inMemoryEmployeeCommendations[idx].employeeId;
-      if (empId) triggerRecalculateEligibility(empId).catch(() => {});
+      if (empId) triggerRecalculateEligibility(empId).catch(logRecalcError);
       return res.json(inMemoryEmployeeCommendations[idx]);
     }
     res.json({ id, ...data });
@@ -5285,12 +5450,13 @@ async function startServer() {
     try {
       await db.delete(schema.employeeCommendations).where(eq(schema.employeeCommendations.id, id));
     } catch (e) {
+      if (respondIfDbWriteError(res, e, 'حذف السجل')) return;
       console.warn('Database fallback for delete employee-commendation');
     }
     inMemoryEmployeeCommendations = inMemoryEmployeeCommendations.filter(r => r.id !== id);
     saveLocalDb();
     if (existing?.employee_id || existing?.employeeId) {
-      triggerRecalculateEligibility(existing.employee_id || existing.employeeId).catch(() => {});
+      triggerRecalculateEligibility(existing.employee_id || existing.employeeId).catch(logRecalcError);
     }
     res.json({ success: true });
   });
@@ -5320,6 +5486,7 @@ async function startServer() {
         return res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
       }
     } catch (e) {
+      if (!isDbConnectionFailure(e)) return sendRouteError(res, e, 'قراءة البيانات');
       console.warn('Database fallback for commendation-rules-settings');
     }
     res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
@@ -5373,6 +5540,7 @@ async function startServer() {
         }
       });
     } catch (e) {
+      if (respondIfDbWriteError(res, e, 'تعديل السجل')) return;
       console.warn('Database fallback for update commendation-rules-settings');
     }
     inMemoryCommendationRulesSettings = {
@@ -5399,11 +5567,18 @@ async function startServer() {
   });
 
   // --- Allowances and Deductions API ---
+  // فئة البند الصريحة يرسلها محرك الرواتب (src/lib/salaryTable.js ITEM_CATEGORIES). نص حر صغير؛ الفارغ = NULL.
+  function normalizeAllowanceCategory(v: any): string | null {
+    if (v === undefined || v === null) return null;
+    const t = String(v).trim();
+    return t ? t.slice(0, 50) : null;
+  }
   app.get('/api/allowances-deductions', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.allowancesDeductions).orderBy(asc(schema.allowancesDeductions.id));
       if (records && records.length > 0) return res.json(records);
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for allowances/deductions');
     }
     res.json(inMemoryAllowancesDeductions);
@@ -5413,18 +5588,25 @@ async function startServer() {
     const { name, type, calcType, value, status, calculationBase, calculation_base, deactivatedAt, deactivated_at } = req.body;
     const calcBase = calculationBase || calculation_base || 'nominal';
     const deactAt = deactivatedAt || deactivated_at || null;
+    const category = normalizeAllowanceCategory(req.body?.category ?? req.body?.item_category ?? req.body?.itemCategory);
+    const numValue = parseFloat(value);
+    if (!name || !type || !calcType || !Number.isFinite(numValue)) {
+      return res.status(400).json({ error: 'بيانات ناقصة: الاسم والنوع وطريقة الاحتساب والقيمة (رقم عشري) مطلوبة' });
+    }
     try {
       const [newRecord] = await db.insert(schema.allowancesDeductions).values({
         name,
         type,
         calcType,
-        value: parseFloat(value),
+        value: numValue,
+        category,
         calculationBase: calcBase,
         deactivatedAt: deactAt,
         status: status || 'فعال',
       }).returning();
       if (newRecord) return res.status(201).json(newRecord);
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create allowance');
     }
     const memItem = {
@@ -5432,7 +5614,8 @@ async function startServer() {
       name,
       type,
       calcType,
-      value: parseFloat(value),
+      value: numValue,
+      category,
       calculationBase: calcBase,
       calculation_base: calcBase,
       deactivatedAt: deactAt,
@@ -5450,6 +5633,11 @@ async function startServer() {
     const { name, type, calcType, value, status, calculationBase, calculation_base, deactivatedAt, deactivated_at } = req.body;
     const calcBase = calculationBase !== undefined ? calculationBase : calculation_base;
     const deactAt = deactivatedAt !== undefined ? deactivatedAt : deactivated_at;
+    const rawCategory = req.body?.category !== undefined ? req.body.category : (req.body?.item_category !== undefined ? req.body.item_category : req.body?.itemCategory);
+    const category = rawCategory !== undefined ? normalizeAllowanceCategory(rawCategory) : undefined;
+    if (value !== undefined && !Number.isFinite(parseFloat(value))) {
+      return res.status(400).json({ error: 'قيمة البند يجب أن تكون رقماً (يُسمح بالكسور العشرية)' });
+    }
 
     if (status === 'موقوف' || status === 'غير فعال' || status === 'معطل') {
       const refCheck = checkReferentialUsage('allowances_deductions', id, true, buildRefContext());
@@ -5466,6 +5654,7 @@ async function startServer() {
           calcType,
           value: value !== undefined ? parseFloat(value) : undefined,
           calculationBase: calcBase !== undefined ? calcBase : undefined,
+          category,
           deactivatedAt: deactAt !== undefined ? deactAt : undefined,
           status: status !== undefined ? status : undefined,
         })
@@ -5473,6 +5662,7 @@ async function startServer() {
         .returning();
       if (updated) return res.json(updated);
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update allowance');
     }
     const idx = inMemoryAllowancesDeductions.findIndex(r => r.id === id);
@@ -5485,6 +5675,7 @@ async function startServer() {
         value: value !== undefined ? parseFloat(value) : inMemoryAllowancesDeductions[idx].value,
         calculationBase: calcBase !== undefined ? calcBase : inMemoryAllowancesDeductions[idx].calculationBase,
         calculation_base: calcBase !== undefined ? calcBase : inMemoryAllowancesDeductions[idx].calculation_base,
+        category: category !== undefined ? category : (inMemoryAllowancesDeductions[idx].category ?? null),
         deactivatedAt: deactAt !== undefined ? deactAt : inMemoryAllowancesDeductions[idx].deactivatedAt,
         deactivated_at: deactAt !== undefined ? deactAt : inMemoryAllowancesDeductions[idx].deactivated_at,
         status: status || inMemoryAllowancesDeductions[idx].status
@@ -5506,6 +5697,7 @@ async function startServer() {
     try {
       await db.delete(schema.allowancesDeductions).where(eq(schema.allowancesDeductions.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete allowance');
     }
     inMemoryAllowancesDeductions = inMemoryAllowancesDeductions.filter(r => r.id !== id);
@@ -5519,6 +5711,7 @@ async function startServer() {
       const records = await db.select().from(schema.workLocations).orderBy(asc(schema.workLocations.id));
       if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for work locations');
     }
     res.json(inMemoryWorkLocations);
@@ -5553,6 +5746,7 @@ async function startServer() {
       }).returning();
       if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create work location');
     }
     const memItem = {
@@ -5585,6 +5779,7 @@ async function startServer() {
         .returning();
       if (updated) return res.json(mapKeys(updated, camelToSnake));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update work location');
     }
     const idx = inMemoryWorkLocations.findIndex(r => r.id === id);
@@ -5608,6 +5803,7 @@ async function startServer() {
     try {
       await db.delete(schema.workLocations).where(eq(schema.workLocations.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete work location');
     }
     inMemoryWorkLocations = inMemoryWorkLocations.filter(r => r.id !== id);
@@ -5621,6 +5817,7 @@ async function startServer() {
       const records = await db.select().from(schema.serviceTypes).orderBy(asc(schema.serviceTypes.id));
       if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for service types');
     }
     res.json(inMemoryServiceTypes);
@@ -5647,6 +5844,7 @@ async function startServer() {
       const [inserted] = await db.insert(schema.serviceTypes).values({ name }).returning();
       newRecord = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create service type');
     }
     const memItem = newRecord || { id: (inMemoryServiceTypes.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1, name, created_at: new Date().toISOString() };
@@ -5661,6 +5859,7 @@ async function startServer() {
       const records = await db.select().from(schema.employeeStatuses).orderBy(asc(schema.employeeStatuses.id));
       if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for employee statuses');
     }
     res.json(inMemoryEmployeeStatuses);
@@ -5687,6 +5886,7 @@ async function startServer() {
       const [inserted] = await db.insert(schema.employeeStatuses).values({ name }).returning();
       newRecord = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create employee status');
     }
     const memItem = newRecord || { id: (inMemoryEmployeeStatuses.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1, name, created_at: new Date().toISOString() };
@@ -5739,6 +5939,7 @@ async function startServer() {
       try {
         await db.delete(schema.employeeStatuses).where(eq(schema.employeeStatuses.id, id));
       } catch (err) {
+        if (respondIfDbWriteError(res, err, 'حذف السجل')) return;
         console.warn('Database fallback for delete employee status');
       }
       inMemoryEmployeeStatuses = inMemoryEmployeeStatuses.filter(r => parseInt(String(r.id)) !== id);
@@ -5746,7 +5947,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting employee status:', error);
-      res.status(500).json({ error: error.message || 'فشل حذف حالة الموظف' });
+      sendRouteError(res, error, 'حذف حالة الموظف');
     }
   });
 
@@ -5756,6 +5957,7 @@ async function startServer() {
       const records = await db.select().from(schema.educationDegrees).orderBy(asc(schema.educationDegrees.id));
       if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for education degrees');
     }
     res.json(inMemoryEducationDegrees);
@@ -5788,6 +5990,7 @@ async function startServer() {
       }).returning();
       if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create education degree');
     }
     const memItem = {
@@ -5856,6 +6059,7 @@ async function startServer() {
         return res.json(mapKeys(updated, camelToSnake));
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update education degree');
     }
     const idx = inMemoryEducationDegrees.findIndex(r => r.id === id);
@@ -5892,6 +6096,7 @@ async function startServer() {
     try {
       await db.delete(schema.educationDegrees).where(eq(schema.educationDegrees.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete education degree');
     }
     inMemoryEducationDegrees = inMemoryEducationDegrees.filter(r => r.id !== id);
@@ -5905,6 +6110,7 @@ async function startServer() {
       const records = await db.select().from(schema.responsibilityAllowances).orderBy(asc(schema.responsibilityAllowances.id));
       if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for responsibility allowances');
     }
     res.json(inMemoryResponsibilityAllowances);
@@ -5919,6 +6125,7 @@ async function startServer() {
       }).returning();
       if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create responsibility allowance');
     }
     const memItem = {
@@ -5954,6 +6161,7 @@ async function startServer() {
         .returning();
       if (updated) return res.json(mapKeys(updated, camelToSnake));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update responsibility allowance');
     }
     const idx = inMemoryResponsibilityAllowances.findIndex(r => r.id === id);
@@ -5980,6 +6188,7 @@ async function startServer() {
     try {
       await db.delete(schema.responsibilityAllowances).where(eq(schema.responsibilityAllowances.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete responsibility allowance');
     }
     inMemoryResponsibilityAllowances = inMemoryResponsibilityAllowances.filter(r => r.id !== id);
@@ -5993,6 +6202,7 @@ async function startServer() {
       const records = await db.select().from(schema.leaveTypes).orderBy(asc(schema.leaveTypes.id));
       if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for leave types');
     }
     res.json(inMemoryLeaveTypes.map(r => mapKeys(r, camelToSnake)));
@@ -6048,6 +6258,7 @@ async function startServer() {
       }).returning();
       newRec = newRecord;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create leave type');
     }
 
@@ -6140,6 +6351,7 @@ async function startServer() {
         .returning();
       updatedRec = updated;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update leave type');
     }
 
@@ -6181,6 +6393,7 @@ async function startServer() {
     try {
       await db.delete(schema.leaveTypes).where(eq(schema.leaveTypes.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete leave type');
     }
     inMemoryLeaveTypes = inMemoryLeaveTypes.filter(r => r.id !== id);
@@ -6310,42 +6523,47 @@ async function startServer() {
     };
   };
 
+  // قراءة فقط: لا يحذف هذا المسار ولا يعيد زرع أي بيانات (أُلغي ?reset=true ومسح الجدول عند فراغه).
+  // إعادة الزرع القانوني تتم حصراً عبر POST /api/penalty-types/reset-legal (للمسؤول).
   app.get('/api/penalty-types', requireAuth, async (req, res) => {
     try {
-      let records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
-
-      if (records.length === 0 || req.query.reset === 'true') {
-        await db.delete(schema.penaltyTypes);
-        for (const item of LEGAL_ARTICLE_8_PENALTIES) {
-          await db.insert(schema.penaltyTypes).values(item).catch(() => {});
-        }
-        records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
-      }
-
-      if (records && records.length > 0) {
-        const enrichedRecords = records.map(enrichPenaltyRecord);
-        return res.json(mapKeys(enrichedRecords, camelToSnake));
-      }
+      const records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
+      return res.json(mapKeys(records.map(enrichPenaltyRecord), camelToSnake));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة أنواع العقوبات');
       console.warn('Database fallback for penalty types');
     }
     res.json(mapKeys((inMemoryPenaltyTypes && inMemoryPenaltyTypes.length > 0 ? inMemoryPenaltyTypes : LEGAL_ARTICLE_8_PENALTIES).map(enrichPenaltyRecord), camelToSnake));
   });
 
-  app.post('/api/penalty-types/reset-legal', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/penalty-types/reset-legal', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     try {
-      await db.delete(schema.penaltyTypes);
-      for (const item of LEGAL_ARTICLE_8_PENALTIES) {
-        await db.insert(schema.penaltyTypes).values(item).catch(() => {});
-      }
-      const records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
+      // upsert بالاسم داخل معاملة: تُحدَّث أنواع المادة 8 الموجودة وتُضاف الناقصة. لا يُمسح الجدول، فتبقى
+      // المعرّفات ثابتة والأنواع المضافة يدوياً محفوظة، وأي فشل يُرجع كل شيء كما كان.
+      const records = await db.transaction(async (tx) => {
+        const existing = await tx.select().from(schema.penaltyTypes);
+        for (const item of LEGAL_ARTICLE_8_PENALTIES) {
+          const match = existing.find(r => String(r.name || '').trim() === item.name);
+          if (match) {
+            await tx.update(schema.penaltyTypes).set(item).where(eq(schema.penaltyTypes.id, match.id));
+          } else {
+            await tx.insert(schema.penaltyTypes).values(item);
+          }
+        }
+        return tx.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
+      });
       const enrichedRecords = records.map(enrichPenaltyRecord);
       inMemoryPenaltyTypes = enrichedRecords;
       saveLocalDb();
+      try {
+        await db.insert(schema.activityLogs).values({ action: 'إعادة الضبط القانوني لأنواع العقوبات', userEmail: req.user?.username || 'admin', details: `upsert لـ ${LEGAL_ARTICLE_8_PENALTIES.length} نوعاً (المادة 8)` });
+      } catch (logErr: any) {
+        console.warn('[ACTIVITY-LOG] تعذّر تسجيل إعادة ضبط أنواع العقوبات:', logErr?.message);
+      }
       res.json(mapKeys(enrichedRecords, camelToSnake));
     } catch (error: any) {
-      console.error('Error resetting penalty types:', error);
-      res.status(500).json({ error: error.message });
+      console.error('Error resetting penalty types:', error?.message);
+      sendRouteError(res, error, 'إعادة الضبط القانوني لأنواع العقوبات');
     }
   });
 
@@ -6365,6 +6583,7 @@ async function startServer() {
         }).returning();
         savedRecord = newRecord;
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
         console.warn('Database fallback for create penalty type');
       }
 
@@ -6385,7 +6604,7 @@ async function startServer() {
       res.status(201).json(mapKeys(enrichPenaltyRecord(savedRecord || memItem), camelToSnake));
     } catch (error: any) {
       console.error('Error creating penalty type:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6417,6 +6636,7 @@ async function startServer() {
           .returning();
         updatedRecord = updated;
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'تعديل السجل')) return;
         console.warn('Database fallback for update penalty type');
       }
 
@@ -6437,7 +6657,7 @@ async function startServer() {
       res.json(mapKeys(enrichPenaltyRecord(updatedRecord || inMemoryPenaltyTypes[idx] || { id, ...data }), camelToSnake));
     } catch (error: any) {
       console.error('Error updating penalty type:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6454,6 +6674,7 @@ async function startServer() {
       try {
         await db.delete(schema.penaltyTypes).where(eq(schema.penaltyTypes.id, id));
       } catch (dbErr) {
+        if (respondIfDbWriteError(res, dbErr, 'حذف السجل')) return;
         console.warn('Database fallback for delete penalty type');
       }
       inMemoryPenaltyTypes = inMemoryPenaltyTypes.filter(r => r.id !== id);
@@ -6461,7 +6682,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting penalty type:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6631,6 +6852,7 @@ async function startServer() {
         return res.json(mapKeys(records, camelToSnake));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for evaluation forms');
     }
     res.json(mapKeys(CANONICAL_SEED_FORMS.map((f, i) => ({ id: i + 1, ...f })), camelToSnake));
@@ -6660,7 +6882,7 @@ async function startServer() {
       res.json({ success: true, message: 'تم إعادة ضبط وسيد القوالب الثلاثة القياسية بنجاح', data: records.map(r => mapKeys(r, camelToSnake)) });
     } catch (error: any) {
       console.error('Error seeding canonical forms:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6705,7 +6927,7 @@ async function startServer() {
       res.status(201).json(mapKeys(newRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating evaluation form:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6760,7 +6982,7 @@ async function startServer() {
       res.json(mapKeys(updated, camelToSnake));
     } catch (error: any) {
       console.error('Error updating evaluation form:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6778,7 +7000,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting evaluation form:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6796,6 +7018,7 @@ async function startServer() {
         return res.json(mapKeys(records, camelToSnake));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for shift systems');
     }
     res.json(DEFAULT_SHIFT_SYSTEMS);
@@ -6824,13 +7047,14 @@ async function startServer() {
 
         if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
       } catch (err) {
+        if (respondIfDbWriteError(res, err, 'حفظ السجل')) return;
         console.warn('Database fallback for create shift system');
       }
 
       res.status(201).json({ id: Date.now(), ...req.body });
     } catch (error: any) {
       console.error('Error creating shift system:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6871,13 +7095,14 @@ async function startServer() {
 
         if (updated) return res.json(mapKeys(updated, camelToSnake));
       } catch (err) {
+        if (respondIfDbWriteError(res, err, 'تعديل السجل')) return;
         console.warn('Database fallback for update shift system');
       }
 
       res.json({ id, ...req.body });
     } catch (error: any) {
       console.error('Error updating shift system:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6894,12 +7119,13 @@ async function startServer() {
       try {
         await db.delete(schema.shiftSystems).where(eq(schema.shiftSystems.id, id));
       } catch (err) {
+        if (respondIfDbWriteError(res, err, 'حذف السجل')) return;
         console.warn('Database fallback for delete shift system');
       }
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting shift system:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -7055,6 +7281,7 @@ async function startServer() {
         return res.json(resultsMapped);
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for qualifications');
     }
 
@@ -7119,6 +7346,7 @@ async function startServer() {
       }).returning();
       record = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create qualification');
     }
 
@@ -7201,6 +7429,7 @@ async function startServer() {
         .returning();
       updatedRec = updated;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update qualification');
     }
 
@@ -7229,7 +7458,7 @@ async function startServer() {
     const empId = parseInt(String(updatedRec?.employeeId || memItem.employee_id || memItem.employeeId));
     if (empId) {
       await syncEmployeeEducationQualification(empId);
-      triggerRecalculateEligibility(empId).catch(() => {});
+      triggerRecalculateEligibility(empId).catch(logRecalcError);
     }
     saveLocalDb();
 
@@ -7271,6 +7500,7 @@ async function startServer() {
         updatedRec = updated;
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for toggle qualification');
     }
 
@@ -7287,7 +7517,7 @@ async function startServer() {
 
     if (empId) {
       await syncEmployeeEducationQualification(empId);
-      triggerRecalculateEligibility(empId).catch(() => {});
+      triggerRecalculateEligibility(empId).catch(logRecalcError);
     }
     saveLocalDb();
 
@@ -7326,6 +7556,7 @@ async function startServer() {
         await db.delete(schema.qualifications).where(eq(schema.qualifications.id, id));
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete qualification');
     }
 
@@ -7337,7 +7568,7 @@ async function startServer() {
 
     if (empId) {
       await syncEmployeeEducationQualification(empId);
-      triggerRecalculateEligibility(empId).catch(() => {});
+      triggerRecalculateEligibility(empId).catch(logRecalcError);
     }
     saveLocalDb();
 
@@ -7357,6 +7588,7 @@ async function startServer() {
       const results = await query.orderBy(desc(schema.jobAssignments.createdAt));
       if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for job assignments');
     }
     let list = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
@@ -7394,6 +7626,7 @@ async function startServer() {
       }).returning();
       record = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create job assignment');
     }
 
@@ -7437,6 +7670,7 @@ async function startServer() {
       const [updated] = await db.update(schema.jobAssignments).set(mappedData).where(eq(schema.jobAssignments.id, id)).returning();
       updatedRec = updated;
     } catch (err) {
+      if (respondIfDbWriteError(res, err, 'تعديل السجل')) return;
       console.warn('Database fallback for update job assignment');
     }
     const memItem = { id, ...data };
@@ -7450,6 +7684,7 @@ async function startServer() {
     try {
       await db.delete(schema.jobAssignments).where(eq(schema.jobAssignments.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete job assignment');
     }
     syncEntityRecord('job-assignments', { id }, 'delete');
@@ -7469,6 +7704,7 @@ async function startServer() {
       const results = await query.orderBy(desc(schema.promotionsIncrements.createdAt));
       if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for promotions');
     }
     let list = genericMemoryStores['promotions'] || inMemoryPromotions || [];
@@ -7500,6 +7736,7 @@ async function startServer() {
       }).returning();
       record = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create promotion');
     }
 
@@ -7556,6 +7793,7 @@ async function startServer() {
       const [updated] = await db.update(schema.promotionsIncrements).set(mappedData).where(eq(schema.promotionsIncrements.id, id)).returning();
       updatedRec = updated;
     } catch (err) {
+      if (respondIfDbWriteError(res, err, 'تعديل السجل')) return;
       console.warn('Database fallback for update promotion');
     }
     const memItem = { id, ...data };
@@ -7569,6 +7807,7 @@ async function startServer() {
     try {
       await db.delete(schema.promotionsIncrements).where(eq(schema.promotionsIncrements.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete promotion');
     }
     syncEntityRecord('promotions', { id }, 'delete');
@@ -7595,6 +7834,7 @@ async function startServer() {
         })));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for salary allowances');
     }
     let list = genericMemoryStores['salary-allowances'] || inMemorySalaryAllowances || [];
@@ -7634,6 +7874,7 @@ async function startServer() {
       const [inserted] = await db.insert(schema.salaryAllowances).values(values).returning();
       record = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create salary allowance');
     }
 
@@ -7656,6 +7897,7 @@ async function startServer() {
       const [updated] = await db.update(schema.salaryAllowances).set(mappedData).where(eq(schema.salaryAllowances.id, id)).returning();
       updatedRec = updated;
     } catch (err) {
+      if (respondIfDbWriteError(res, err, 'تعديل السجل')) return;
       console.warn('Database fallback for update salary allowance');
     }
     const memItem = { id, ...data };
@@ -7669,6 +7911,7 @@ async function startServer() {
     try {
       await db.delete(schema.salaryAllowances).where(eq(schema.salaryAllowances.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete salary allowance');
     }
     syncEntityRecord('salary-allowances', { id }, 'delete');
@@ -7688,6 +7931,7 @@ async function startServer() {
       const results = await query.orderBy(desc(schema.annualEvaluations.createdAt));
       if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for annual evaluations');
     }
     let list = genericMemoryStores['annual-evaluations'] || inMemoryAnnualEvaluations || [];
@@ -7715,6 +7959,7 @@ async function startServer() {
       }).returning();
       record = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create annual evaluation');
     }
 
@@ -7737,6 +7982,7 @@ async function startServer() {
       const [updated] = await db.update(schema.annualEvaluations).set(mappedData).where(eq(schema.annualEvaluations.id, id)).returning();
       updatedRec = updated;
     } catch (err) {
+      if (respondIfDbWriteError(res, err, 'تعديل السجل')) return;
       console.warn('Database fallback for update annual evaluation');
     }
     const memItem = { id, ...data };
@@ -7750,6 +7996,7 @@ async function startServer() {
     try {
       await db.delete(schema.annualEvaluations).where(eq(schema.annualEvaluations.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete annual evaluation');
     }
     syncEntityRecord('annual-evaluations', { id }, 'delete');
@@ -7769,6 +8016,7 @@ async function startServer() {
       const results = await query.orderBy(desc(schema.trainingCourses.createdAt));
       if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for training courses');
     }
     let list = genericMemoryStores['training-courses'] || inMemoryTrainingCourses || [];
@@ -7798,6 +8046,7 @@ async function startServer() {
       }).returning();
       record = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create training course');
     }
 
@@ -7820,6 +8069,7 @@ async function startServer() {
       const [updated] = await db.update(schema.trainingCourses).set(mappedData).where(eq(schema.trainingCourses.id, id)).returning();
       updatedRec = updated;
     } catch (err) {
+      if (respondIfDbWriteError(res, err, 'تعديل السجل')) return;
       console.warn('Database fallback for update training course');
     }
     const memItem = { id, ...data };
@@ -7833,6 +8083,7 @@ async function startServer() {
     try {
       await db.delete(schema.trainingCourses).where(eq(schema.trainingCourses.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete training course');
     }
     syncEntityRecord('training-courses', { id }, 'delete');
@@ -7852,6 +8103,7 @@ async function startServer() {
       const results = await query.orderBy(desc(schema.transfers.createdAt));
       if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for transfers');
     }
     let list = genericMemoryStores['transfers'] || inMemoryTransfers || [];
@@ -7877,6 +8129,7 @@ async function startServer() {
       }).returning();
       record = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create transfer');
     }
 
@@ -7908,6 +8161,7 @@ async function startServer() {
       const [updated] = await db.update(schema.transfers).set(mappedData).where(eq(schema.transfers.id, id)).returning();
       updatedRec = updated;
     } catch (err) {
+      if (respondIfDbWriteError(res, err, 'تعديل السجل')) return;
       console.warn('Database fallback for update transfer');
     }
     const memItem = { id, ...data };
@@ -7921,6 +8175,7 @@ async function startServer() {
     try {
       await db.delete(schema.transfers).where(eq(schema.transfers.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete transfer');
     }
     syncEntityRecord('transfers', { id }, 'delete');
@@ -7940,6 +8195,7 @@ async function startServer() {
       const results = await query.orderBy(desc(schema.retirements.createdAt));
       if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for retirements');
     }
     let list = genericMemoryStores['retirements'] || inMemoryRetirements || [];
@@ -7974,6 +8230,7 @@ async function startServer() {
         [record] = await db.insert(schema.retirements).values(values).returning();
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for create/update retirement');
     }
 
@@ -7998,6 +8255,7 @@ async function startServer() {
     try {
       await db.delete(schema.retirements).where(eq(schema.retirements.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete retirement');
     }
     syncEntityRecord('retirements', { id }, 'delete');
@@ -8017,6 +8275,7 @@ async function startServer() {
       const results = await query.orderBy(desc(schema.documents.createdAt));
       if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for documents');
     }
     let list = genericMemoryStores['documents'] || inMemoryDocuments || [];
@@ -8039,6 +8298,7 @@ async function startServer() {
       }).returning();
       record = inserted;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create document');
     }
 
@@ -8056,6 +8316,7 @@ async function startServer() {
     try {
       await db.delete(schema.documents).where(eq(schema.documents.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete document');
     }
     syncEntityRecord('documents', { id }, 'delete');
@@ -8083,6 +8344,7 @@ async function startServer() {
         })));
       }
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for service records');
     }
     let list = inMemoryServiceRecords;
@@ -8136,6 +8398,7 @@ async function startServer() {
         }
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create service record');
     }
 
@@ -8162,7 +8425,7 @@ async function startServer() {
     inMemoryServiceRecords.push(memRecord);
     saveLocalDb();
 
-    triggerRecalculateEligibility(employeeId).catch(() => {});
+    triggerRecalculateEligibility(employeeId).catch(logRecalcError);
     const formatted = record ? {
       ...record,
       employee_id: record.employeeId,
@@ -8203,6 +8466,7 @@ async function startServer() {
         .returning();
       updated = resDb;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update service record');
     }
 
@@ -8219,7 +8483,7 @@ async function startServer() {
     }
 
     if (updated?.employeeId || updated?.employee_id) {
-      triggerRecalculateEligibility(updated.employeeId || updated.employee_id).catch(() => {});
+      triggerRecalculateEligibility(updated.employeeId || updated.employee_id).catch(logRecalcError);
     }
     const formatted = updated ? {
       ...updated,
@@ -8270,6 +8534,7 @@ async function startServer() {
         }
       }
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete service record');
     }
 
@@ -8277,7 +8542,7 @@ async function startServer() {
     saveLocalDb();
 
     if (recordToDelete?.employeeId || recordToDelete?.employee_id) {
-      triggerRecalculateEligibility(recordToDelete.employeeId || recordToDelete.employee_id).catch(() => {});
+      triggerRecalculateEligibility(recordToDelete.employeeId || recordToDelete.employee_id).catch(logRecalcError);
     }
     res.json({ success: true });
   });
@@ -8569,14 +8834,29 @@ async function startServer() {
   app.post('/api/governing-courses/reset-defaults', requireAuth, requireAdmin, async (req, res) => {
     try {
       await ensureGoverningCoursesTable();
-      await db.delete(schema.governingCourses).catch(() => {});
-      await db.insert(schema.governingCourses).values(DEFAULT_GOVERNING_COURSES as any).catch(() => {});
-      const results = await db.select().from(schema.governingCourses).orderBy(asc(schema.governingCourses.grade), asc(schema.governingCourses.id));
-      if (results.length > 0) {
-        return res.json(results);
+      // إعادة الضبط داخل معاملة وبطريقة upsert (بالدرجة + اسم الدورة): تُحدَّث الدورات الافتراضية
+      // الموجودة وتُضاف الناقصة، دون حذف الجدول كاملاً (تبقى المعرّفات ثابتة ولا تضيع البيانات عند الفشل).
+      const results = await db.transaction(async (tx) => {
+        const existing = await tx.select().from(schema.governingCourses);
+        for (const item of DEFAULT_GOVERNING_COURSES as any[]) {
+          const match = existing.find(r => r.grade === item.grade && String(r.courseName || '').trim() === String(item.courseName).trim());
+          if (match) {
+            await tx.update(schema.governingCourses).set({ ...item, status: 'فعال' }).where(eq(schema.governingCourses.id, match.id));
+          } else {
+            await tx.insert(schema.governingCourses).values({ ...item, status: 'فعال' });
+          }
+        }
+        return tx.select().from(schema.governingCourses).orderBy(asc(schema.governingCourses.grade), asc(schema.governingCourses.id));
+      });
+      try {
+        await db.insert(schema.activityLogs).values({ action: 'إعادة ضبط الدورات الحاكمة', userEmail: (req as AuthRequest).user?.username || 'admin', details: `upsert لـ ${DEFAULT_GOVERNING_COURSES.length} دورة افتراضية` });
+      } catch (logErr: any) {
+        console.warn('[ACTIVITY-LOG] تعذّر تسجيل إعادة ضبط الدورات الحاكمة:', logErr?.message);
       }
+      return res.json(results);
     } catch (error: any) {
-      // Quiet fallback
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'إعادة ضبط الدورات الحاكمة');
+      console.warn('[DB-OFFLINE] إعادة ضبط الدورات الحاكمة: تُطبَّق على التخزين الاحتياطي');
     }
 
     inMemoryGoverningCourses = DEFAULT_GOVERNING_COURSES.map((item, idx) => ({
@@ -9123,9 +9403,9 @@ async function startServer() {
         }
         if (Array.isArray(state.inMemoryEmployees) && state.inMemoryEmployees.length > 0) {
           inMemoryEmployees = state.inMemoryEmployees.map((emp: any) => {
-            const baseDt = emp.gradeDate || emp.grade_date || emp.currentAppointmentDate || emp.current_appointment_date || emp.firstAppointmentDate || emp.first_appointment_date || emp.appointmentDate || emp.appointment_date || '';
-            const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || baseDt;
-            const lastIncr = emp.lastIncrementDate || emp.last_increment_date || baseDt;
+            // لا اشتقاق لتواريخ آخر ترفيع/علاوة من تواريخ أخرى (تبقى null إن لم تُسجَّل)
+            const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || null;
+            const lastIncr = emp.lastIncrementDate || emp.last_increment_date || null;
             return {
               ...emp,
               lastPromotionDate: lastPromo,
@@ -9343,16 +9623,30 @@ async function startServer() {
   // Automatic periodic check for monthly leave accrual
   setTimeout(() => {
     if (systemSettingsStore.autoMonthlyLeaveAccrual !== false) {
-      executeMonthlyLeaveAccrual().catch(() => {});
+      executeMonthlyLeaveAccrual().catch((accErr: any) => console.error('[LEAVE-ACCRUAL] فشل الترحيل الشهري التلقائي:', accErr?.message || accErr));
     }
   }, 3000);
   setInterval(() => {
     if (systemSettingsStore.autoMonthlyLeaveAccrual !== false) {
-      executeMonthlyLeaveAccrual().catch(() => {});
+      executeMonthlyLeaveAccrual().catch((accErr: any) => console.error('[LEAVE-ACCRUAL] فشل الترحيل الشهري التلقائي:', accErr?.message || accErr));
     }
   }, 1000 * 60 * 60);
 
   // Central Promotion and Increment Recalculation Trigger
+  async function loadPenaltyTypesForEngine(): Promise<any[] | undefined> {
+    try {
+      const rows = await db.select().from(schema.penaltyTypes);
+      if (rows.length > 0) return rows;
+    } catch (ptErr) {
+      if (!isDbConnectionFailure(ptErr)) throw ptErr;
+    }
+    return Array.isArray(inMemoryPenaltyTypes) && inMemoryPenaltyTypes.length > 0 ? inMemoryPenaltyTypes : undefined;
+  }
+
+  function logRecalcError(err: any) {
+    console.error('[ELIGIBILITY] فشلت إعادة احتساب الاستحقاق:', err?.message || err);
+  }
+
   async function triggerRecalculateEligibility(employeeId: number | string) {
     if (!employeeId) return null;
     const empIdNum = parseInt(String(employeeId));
@@ -9381,7 +9675,7 @@ async function startServer() {
       ...(genericMemoryStores['performance'] || []).filter(e => parseInt(String(e.employee_id || e.employeeId)) === empIdNum),
       ...(genericMemoryStores['annual-evaluations'] || []).filter(e => parseInt(String(e.employee_id || e.employeeId)) === empIdNum)
     ];
-    const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empIdNum);
+    const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empIdNum).map(toEngineLeave);
     const serviceCredits = [
       ...(genericMemoryStores['service-credits'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum),
       ...(genericMemoryStores['service-records'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum)
@@ -9402,8 +9696,10 @@ async function startServer() {
       specializationCredits,
       governingCourses: inMemoryGoverningCourses,
       governingAssignments: inMemoryEmployeeAssignments,
-      gradeRules: inMemoryGradePromotionRules
-    };
+      gradeRules: inMemoryGradePromotionRules,
+      // أنواع العقوبات من الإعدادات (جدول penalty_types) بدل الجدول الثابت في المحرك
+      penaltyTypes: await loadPenaltyTypesForEngine()
+    } as EngineContextData;
 
     const fullResult = recalculateEligibilitySync(emp, context);
 
@@ -9594,30 +9890,15 @@ async function startServer() {
     return fullResult;
   }
 
-  const fullCrudAlreadyRegistered = new Set([
-    'qualifications',
-    'job-assignments',
-    'promotions',
-    'salary-allowances',
-    'annual-evaluations',
-    'training-courses',
-    'transfers',
-    'service-records',
-    'leaves',
-    'penalties',
-    'appreciations',
-    'performance'
-  ]);
-  const putOnlyNeeded = new Set(['career', 'retirements', 'documents']);
-
+  // المولّد العام: يُسجَّل فقط المسار الذي لم يُعرَّف صراحةً قبله (المسارات الصريحة تسبقه في الأسبقية،
+  // وأي نسخة مولّدة لمسار مسجّل مسبقاً ستكون ميتة؛ مسجّل المسارات يمنع التكرار عند الإقلاع).
   Object.entries(genericEntitiesMap).forEach(([endpoint, schemaKey]) => {
     genericMemoryStores[endpoint] = genericMemoryStores[endpoint] || [];
-    if (fullCrudAlreadyRegistered.has(endpoint)) {
-      return;
-    }
+    const listPath = `/api/${endpoint}`;
+    const itemPath = `/api/${endpoint}/:id`;
 
-    if (!putOnlyNeeded.has(endpoint)) {
-    app.get(`/api/${endpoint}`, requireAuth, async (req, res) => {
+    if (!routeRegistry.has('get', listPath)) {
+    app.get(listPath, requireAuth, async (req, res) => {
       const empIdParam = req.query.employeeId || req.query.employee_id;
       try {
         const targetTable = (schema as any)[schemaKey];
@@ -9627,11 +9908,10 @@ async function startServer() {
             query = query.where(eq(targetTable.employeeId, parseInt(empIdParam as string))) as any;
           }
           const records = await query;
-          if (records && records.length > 0) {
-            return res.json(records.map((r: any) => mapKeys(r, camelToSnake)));
-          }
+          return res.json(records.map((r: any) => mapKeys(r, camelToSnake)));
         }
       } catch (err: any) {
+        if (!isDbConnectionFailure(err)) return sendRouteError(res, err, 'قراءة السجلات');
         console.warn(`Database fallback for /api/${endpoint}`);
       }
       let memList = genericMemoryStores[endpoint] || [];
@@ -9642,7 +9922,10 @@ async function startServer() {
       res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
     });
 
-    app.post(`/api/${endpoint}`, requireAuth, requireWriter, async (req, res) => {
+    }
+
+    if (!routeRegistry.has('post', listPath)) {
+    app.post(listPath, requireAuth, requireWriter, async (req, res) => {
       const data = mapKeys(req.body, snakeToCamel);
       let insertedRecord: any = null;
       try {
@@ -9680,11 +9963,11 @@ async function startServer() {
           }
         }
       } catch (err: any) {
-        console.warn(`Database fallback for POST /api/${endpoint}:`, err?.message || err);
+        if (respondIfDbWriteError(res, err, 'إضافة السجل')) return;
       }
       const newId = insertedRecord?.id || (genericMemoryStores[endpoint].reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
       const cleanSnake = mapKeys(req.body, camelToSnake);
-      const memRecord = { ...cleanSnake, id: newId, created_at: new Date().toISOString() };
+      const memRecord = { ...cleanSnake, ...(insertedRecord ? mapKeys(insertedRecord, camelToSnake) : {}), id: newId, created_at: insertedRecord?.createdAt || new Date().toISOString() };
       genericMemoryStores[endpoint].push(memRecord);
 
       // If qualification was added and isActive is true, sync to central employee record!
@@ -9708,7 +9991,7 @@ async function startServer() {
       // Trigger real-time promotion/increment recalculation if relevant entity
       const targetEmpId = parseInt(String(cleanSnake.employee_id || cleanSnake.employeeId || data.employeeId));
       if (targetEmpId && !isNaN(targetEmpId)) {
-        triggerRecalculateEligibility(targetEmpId).catch(() => {});
+        triggerRecalculateEligibility(targetEmpId).catch(logRecalcError);
       }
 
       saveLocalDb();
@@ -9716,10 +9999,13 @@ async function startServer() {
     });
     }
 
-    app.put(`/api/${endpoint}/:id`, requireAuth, requireWriter, async (req, res) => {
+    if (!routeRegistry.has('put', itemPath)) {
+    app.put(itemPath, requireAuth, requireWriter, async (req, res) => {
       const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'معرّف السجل غير صالح' });
       const data = mapKeys(req.body, snakeToCamel);
       let updatedRecord: any = null;
+      let dbAnswered = false;
       try {
         const targetTable = (schema as any)[schemaKey];
         if (targetTable && targetTable.id) {
@@ -9750,15 +10036,19 @@ async function startServer() {
           }
 
           const [updated] = await db.update(targetTable).set(cleanData).where(eq(targetTable.id, id)).returning();
+          dbAnswered = true;
           if (updated) {
             updatedRecord = updated;
           }
         }
       } catch (err: any) {
-        console.warn(`Database fallback for PUT /api/${endpoint}:`, err?.message || err);
+        if (respondIfDbWriteError(res, err, 'تعديل السجل')) return;
+      }
+      if (dbAnswered && !updatedRecord) {
+        return res.status(404).json({ error: 'السجل المطلوب تعديله غير موجود في قاعدة البيانات' });
       }
       const idx = genericMemoryStores[endpoint].findIndex(r => String(r.id) === String(id));
-      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const cleanSnake = { ...mapKeys(req.body, camelToSnake), ...(updatedRecord ? mapKeys(updatedRecord, camelToSnake) : {}) };
       let savedRecord: any;
       if (idx !== -1) {
         genericMemoryStores[endpoint][idx] = { ...genericMemoryStores[endpoint][idx], ...cleanSnake, id };
@@ -9808,24 +10098,27 @@ async function startServer() {
       // Trigger real-time promotion/increment recalculation if relevant entity
       const targetEmpId = parseInt(String(savedRecord?.employee_id || savedRecord?.employeeId || data.employeeId));
       if (targetEmpId && !isNaN(targetEmpId)) {
-        triggerRecalculateEligibility(targetEmpId).catch(() => {});
+        triggerRecalculateEligibility(targetEmpId).catch(logRecalcError);
       }
 
       saveLocalDb();
       return res.json(mapKeys(savedRecord, camelToSnake));
     });
+    }
 
-    if (!putOnlyNeeded.has(endpoint)) {
-    app.delete(`/api/${endpoint}/:id`, requireAuth, requireWriter, async (req, res) => {
+    if (!routeRegistry.has('delete', itemPath)) {
+    app.delete(itemPath, requireAuth, requireWriter, async (req, res) => {
       const id = parseInt(req.params.id);
-      const deletedRecord = (genericMemoryStores[endpoint] || []).find(r => String(r.id) === String(id));
+      if (isNaN(id)) return res.status(400).json({ error: 'معرّف السجل غير صالح' });
+      let deletedRecord: any = (genericMemoryStores[endpoint] || []).find(r => String(r.id) === String(id));
       try {
         const targetTable = (schema as any)[schemaKey];
         if (targetTable && targetTable.id) {
-          await db.delete(targetTable).where(eq(targetTable.id, id));
+          const removed = await db.delete(targetTable).where(eq(targetTable.id, id)).returning();
+          if (removed && removed[0]) deletedRecord = deletedRecord || mapKeys(removed[0], camelToSnake);
         }
       } catch (err: any) {
-        console.warn(`Database fallback for DELETE /api/${endpoint}`);
+        if (respondIfDbWriteError(res, err, 'حذف السجل')) return;
       }
       genericMemoryStores[endpoint] = (genericMemoryStores[endpoint] || []).filter(r => String(r.id) !== String(id));
 
@@ -9855,7 +10148,7 @@ async function startServer() {
       // Trigger real-time promotion/increment recalculation if relevant entity
       const targetEmpId = parseInt(String(deletedRecord?.employee_id || deletedRecord?.employeeId));
       if (targetEmpId && !isNaN(targetEmpId)) {
-        triggerRecalculateEligibility(targetEmpId).catch(() => {});
+        triggerRecalculateEligibility(targetEmpId).catch(logRecalcError);
       }
 
       saveLocalDb();
@@ -9876,7 +10169,7 @@ async function startServer() {
       return res.json(result);
     } catch (err: any) {
       console.error('Error calculating promotion eligibility:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10037,7 +10330,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error initiating degree recognition:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10075,7 +10368,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error fetching degree track simulation:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10110,7 +10403,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error fetching employee degree track:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10261,7 +10554,7 @@ async function startServer() {
           if (activeSnap) {
             const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
             const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-            const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+            const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId).map(toEngineLeave);
             const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
 
             const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
@@ -10522,6 +10815,9 @@ async function startServer() {
         dueDate: string;
         activeSnapshot?: any;
       }> = [];
+      // الموظفون في حالة «نهاية_المرحلة» أو «بيانات_ناقصة» يُتجاوزون (لا يُعتمدون ولا يُفشلون الدفعة كلها)
+      const SKIP_ELIGIBILITY_STATES = new Set(['نهاية_المرحلة', 'بيانات_ناقصة']);
+      const skippedItems: Array<{ employeeId: number; name: string; type: string; status: string; reason: string }> = [];
 
       for (const item of items) {
         const empId = parseInt(String(item.employee_id || item.employeeId));
@@ -10538,11 +10834,20 @@ async function startServer() {
         }
 
         const empName = emp.fullName || emp.full_name || emp.name || `موظف #${empId}`;
-        const curGrade = parseInt(String(emp.grade)) || 10;
-        const curStep = parseInt(String(emp.step)) || 1;
+        const curGrade = parseInt(String(emp.grade));
+        const curStep = parseInt(String(emp.step));
+        if (type !== 'تسوية' && (isNaN(curGrade) || isNaN(curStep))) {
+          // لا تُختلق درجة/مرحلة افتراضية: الموظف بلا درجة أو مرحلة مسجلة يُتجاوز
+          skippedItems.push({ employeeId: empId, name: empName, type, status: 'بيانات_ناقصة', reason: 'الدرجة أو المرحلة غير مسجلة' });
+          continue;
+        }
 
         if (type === 'علاوة') {
           const eligibility = await triggerRecalculateEligibility(empId);
+          if (SKIP_ELIGIBILITY_STATES.has(eligibility?.increment?.eligibilityStatus)) {
+            skippedItems.push({ employeeId: empId, name: empName, type, status: eligibility.increment.eligibilityStatus, reason: eligibility.increment.statusReason || '' });
+            continue;
+          }
           if (eligibility?.increment?.eligibilityStatus !== 'مستحق_للعلاوة' || !eligibility?.increment?.isIncrementEligible) {
             return res.status(400).json({
               error: `الموظف (${empName}) غير مستحق للعلاوة السنوية حالياً: ${eligibility?.increment?.statusReason || 'شروط غير مستوفاة'}`
@@ -10564,6 +10869,10 @@ async function startServer() {
           });
         } else if (type === 'ترفيع') {
           const eligibility = await triggerRecalculateEligibility(empId);
+          if (SKIP_ELIGIBILITY_STATES.has(eligibility?.promotion?.eligibilityStatus)) {
+            skippedItems.push({ employeeId: empId, name: empName, type, status: eligibility.promotion.eligibilityStatus, reason: eligibility.promotion.statusReason || '' });
+            continue;
+          }
           if (eligibility?.promotion?.eligibilityStatus !== 'مستحق_للترفيع' || !eligibility?.promotion?.isPromotionEligible) {
             return res.status(400).json({
               error: `الموظف (${empName}) غير مستحق للترفيع الوظيفي حالياً: ${eligibility?.promotion?.statusReason || 'شروط غير مستوفاة'}`
@@ -10597,7 +10906,7 @@ async function startServer() {
 
           const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
           const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-          const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+          const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId).map(toEngineLeave);
           const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
 
           const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
@@ -10622,6 +10931,14 @@ async function startServer() {
             activeSnapshot: activeSnap
           });
         }
+      }
+
+      if (validatedBatch.length === 0) {
+        return res.status(400).json({
+          error: 'لا توجد معاملة قابلة للاعتماد: جميع الموظفين المحددين في حالة «نهاية المرحلة» أو «بيانات ناقصة»',
+          skippedCount: skippedItems.length,
+          skipped: skippedItems
+        });
       }
 
       // Phase 2: Transactional Execution (Apply DB + Memory updates atomically)
@@ -10678,8 +10995,7 @@ async function startServer() {
           console.error('CRITICAL: Batch promotion approval database transaction failed (Transaction Rolled Back):', dbErr);
           return res.status(500).json({
             error: 'فشلت عملية الاعتماد بالكامل في قاعدة البيانات، وتم التراجع عن كافة التغييرات (Rollback)',
-            details: dbErr?.message || String(dbErr),
-            code: dbErr?.code
+            code: dbErr?.cause?.code || dbErr?.code
           });
         }
       }
@@ -10752,6 +11068,8 @@ async function startServer() {
         success: true,
         storageMode: dbOffline ? 'local_encrypted' : 'database_and_local',
         approvedCount: validatedBatch.length,
+        skippedCount: skippedItems.length,
+        skipped: skippedItems,
         orderNumber: finalOrderNumber,
         orderDate: finalOrderDate,
         message: dbOffline
@@ -10760,7 +11078,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error in batch promotion approval:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10776,7 +11094,7 @@ async function startServer() {
         {
           specializationCredits: genericMemoryStores['specialization-credits'] || [],
           penalties: genericMemoryStores['penalties'] || [],
-          leaves: genericMemoryStores['leaves'] || [],
+          leaves: (genericMemoryStores['leaves'] || []).map(toEngineLeave),
           attendances: genericMemoryStores['attendance'] || []
         },
         {
@@ -10855,7 +11173,7 @@ async function startServer() {
       res.json(batchResult);
     } catch (err: any) {
       console.error('Error in batch auto settlement:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10900,7 +11218,7 @@ async function startServer() {
       res.json(employeeReasons);
     } catch (err: any) {
       console.error('Error fetching employee delay reasons:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10934,7 +11252,7 @@ async function startServer() {
       res.json({ success: true, isHidden, id });
     } catch (err: any) {
       console.error('Error updating delay reason visibility:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10969,7 +11287,7 @@ async function startServer() {
       res.json({ success: true, reminderDate, isAutoReminder: false, id });
     } catch (err: any) {
       console.error('Error updating delay reason reminder date:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 

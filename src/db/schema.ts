@@ -1,6 +1,6 @@
 // src/db/schema.ts
 import { relations } from 'drizzle-orm';
-import { boolean, integer, pgTable, real, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, integer, numeric, pgTable, real, serial, text, timestamp } from 'drizzle-orm/pg-core';
 
 // 1. Users table (Custom Username and Password)
 export const users = pgTable('users', {
@@ -20,11 +20,11 @@ export const employees = pgTable('employees', {
   companyNumber: text('company_number').unique(), // رقم الشركة - معرّف فريد إلزامي (6 أرقام، أو حروف لعقد/أجر يومي)
   civilServiceNumber: text('civil_service_number').unique(), // الرقم الوظيفي - رقم فريد أيضاً (رقم وزارة التخطيط)، لكن الاعتماد الأساسي في النظام على رقم الشركة
   fullName: text('full_name').notNull(),
-  firstName: text('first_name'), // الاسم الأول (مثل: عمر)
-  fatherName: text('father_name'), // اسم الأب (مثل: محمود)
-  grandfatherName: text('grandfather_name'), // اسم الجد (مثل: سلمان)
-  greatGrandfatherName: text('great_grandfather_name'), // اسم والد الجد / الاسم الرابع (مثل: محيميد)
-  surname: text('surname'), // اللقب (مثل: المياحي)
+  firstName: text('first_name'), // الاسم الأول
+  fatherName: text('father_name'), // اسم الأب
+  grandfatherName: text('grandfather_name'), // اسم الجد
+  greatGrandfatherName: text('great_grandfather_name'), // اسم والد الجد / الاسم الرابع
+  surname: text('surname'), // اللقب
   gender: text('gender'),
   birthDate: text('birth_date'),
   birthPlace: text('birth_place'),
@@ -160,6 +160,7 @@ export const penalties = pgTable('penalties', {
   decisionDate: text('decision_date'), // تاريخ القرار
   implementationDate: text('implementation_date'), // تاريخ التنفيذ
   appealStatus: text('appeal_status').default('لا يوجد'), // حالة الاعتراض: لا يوجد / قيد الطعن / مرفوض الطعن / مقبول الطعن
+  daysCount: integer('days_count'), // عدد أيام القطع (لعقوبة قطع الراتب: م8/ثالثاً)
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -425,7 +426,7 @@ export const systemSettings = pgTable('system_settings', {
   retirementNotificationPeriod: text('retirement_notification_period').default('three_months'), // فترة إشعار التقاعد (month, three_months, etc)
   retirementNotificationDays: integer('retirement_notification_days').default(90), // فترة الإشعار بالأيام في حال مخصص
   degreeTrackAutoSettlement: boolean('degree_track_auto_settlement').default(false), // تفعيل التسوية التلقائية لمسار احتساب الشهادات
-  monthlyRegularLeaveDays: real('monthly_regular_leave_days').default(2.5),
+  monthlyRegularLeaveDays: real('monthly_regular_leave_days').default(3), // م43: يوم عن كل 10 أيام خدمة = 3 أيام شهرياً
   monthlySickLeaveDays: real('monthly_sick_leave_days').default(2.5),
   maxRegularLeaveAccumulation: real('max_regular_leave_accumulation').default(180),
   maxSickLeaveAccumulation: real('max_sick_leave_accumulation').default(180),
@@ -433,6 +434,16 @@ export const systemSettings = pgTable('system_settings', {
   lastLeaveAccrualMonth: text('last_leave_accrual_month').default(''),
   lastLeaveAccrualDate: text('last_leave_accrual_date').default(''),
   createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 10-ب. سجل الترحيل الشهري للإجازات: صف واحد لكل شهر (يمنع تكرار الترحيل على مستوى قاعدة البيانات)
+export const leaveAccrualRuns = pgTable('leave_accrual_runs', {
+  month: text('month').primaryKey(), // YYYY-MM
+  executedAt: timestamp('executed_at').defaultNow(),
+  employeesCount: integer('employees_count').default(0),
+  regularDaysAdded: real('regular_days_added').notNull(),
+  sickDaysAdded: real('sick_days_added').notNull(),
+  triggeredBy: text('triggered_by'),
 });
 
 // 11. Activity Logs table
@@ -630,6 +641,7 @@ export const trainingCourses = pgTable('training_courses', {
   average: text('average'), // المعدل (0.00 – 100.00)
   grade: text('grade'), // ممتاز / جيد جدا / جيد / متوسط / مقبول / ضعيف
   rank: text('rank'), // الأول – الثاني – الثالث - مشارك
+  sourceTrainingId: integer('source_training_id'), // الدورة في موديول التدريب التي وُلِّد منها السجل (للمزامنة بلا تكرار)
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -720,7 +732,8 @@ export const allowancesDeductions = pgTable('allowances_deductions', {
   type: text('type').notNull(), // allowance (مخصصات) or deduction (استقطاع)
   calcType: text('calc_type').notNull(), // percentage (نسبة من الراتب الاسمي) or flat (مبلغ مقطوع)
   calculationBase: text('calculation_base').default('nominal'), // nominal | gross | net
-  value: real('value').notNull(), // قيمة النسبة أو المبلغ المقطوع (تدعم الكسور العشرية مثل 5.25)
+  value: numeric('value', { precision: 14, scale: 4, mode: 'number' }).notNull(), // قيمة النسبة أو المبلغ المقطوع (عشري دقيق مثل 5.25)
+  category: text('category'), // فئة البند الصريحة (spouse/child/retirement/certificate/position/tax/general...) — NULL للسجلات القديمة
   status: text('status').default('فعال'), // فعال أو متوقف مؤقتاً
   deactivatedAt: text('deactivated_at'), // تاريخ إيقاف المخصص أو الاستقطاع
   createdAt: timestamp('created_at').defaultNow(),

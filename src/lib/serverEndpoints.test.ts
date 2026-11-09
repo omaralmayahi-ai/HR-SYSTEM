@@ -7,7 +7,7 @@ describe('Server Endpoints Logic Verification', () => {
   it('should calculate eligibility and sync promotion delay reasons without throwing', () => {
     const sampleEmp = {
       id: 1,
-      fullName: 'عمر محمود سلمان',
+      fullName: 'موظف تجريبي وهمي',
       grade: 3,
       step: 4,
       lastPromotionDate: '2022-01-01',
