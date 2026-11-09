@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { db, schema, eq, and, or, desc, asc, ensureSchema, pool } from './src/db/index.ts';
 import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
-import { requireAuth, requireAdmin, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
+import { requireAuth, requireAdmin, requireWriter, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -304,7 +304,7 @@ async function startServer() {
     }
     res.json(systemLogsStore);
   });
-  app.post('/api/logs', requireAuth, async (req: AuthRequest, res) => {
+  app.post('/api/logs', requireAuth, requireWriter, async (req: AuthRequest, res) => {
     const userActor = req.user?.username || req.user?.email || 'admin';
     const logItem = { 
       id: systemLogsStore.length + 1, 
@@ -1694,7 +1694,7 @@ async function startServer() {
     res.json(memList.map(enhanceEmployeeRecord));
   });
 
-  app.post('/api/employees', requireAuth, async (req, res) => {
+  app.post('/api/employees', requireAuth, requireWriter, async (req, res) => {
     try {
       const data = normalizeEmployeePayload(req.body);
       const mappedData = mapKeys(data, snakeToCamel);
@@ -1962,7 +1962,7 @@ async function startServer() {
     res.status(404).json({ error: 'الموظف غير موجود' });
   });
 
-  app.put('/api/employees/:id', requireAuth, async (req, res) => {
+  app.put('/api/employees/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid ID format' });
@@ -2621,7 +2621,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/leaves/:id', requireAuth, async (req, res) => {
+  app.put('/api/leaves/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -2681,7 +2681,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/leaves/:id', requireAuth, async (req, res) => {
+  app.delete('/api/leaves/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
@@ -2722,7 +2722,7 @@ async function startServer() {
     res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
   });
 
-  app.post('/api/penalties', requireAuth, async (req, res) => {
+  app.post('/api/penalties', requireAuth, requireWriter, async (req, res) => {
     try {
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
@@ -2760,7 +2760,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/penalties/:id', requireAuth, async (req, res) => {
+  app.put('/api/penalties/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
@@ -2795,7 +2795,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/penalties/:id', requireAuth, async (req, res) => {
+  app.delete('/api/penalties/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
@@ -2843,7 +2843,7 @@ async function startServer() {
     res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
   });
 
-  app.post('/api/appreciations', requireAuth, async (req, res) => {
+  app.post('/api/appreciations', requireAuth, requireWriter, async (req, res) => {
     try {
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
@@ -2881,7 +2881,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/appreciations/:id', requireAuth, async (req, res) => {
+  app.put('/api/appreciations/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
@@ -2916,7 +2916,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/appreciations/:id', requireAuth, async (req, res) => {
+  app.delete('/api/appreciations/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
@@ -2964,7 +2964,7 @@ async function startServer() {
     res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
   });
 
-  app.post('/api/performance', requireAuth, async (req, res) => {
+  app.post('/api/performance', requireAuth, requireWriter, async (req, res) => {
     try {
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
@@ -3024,7 +3024,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/performance/:id', requireAuth, async (req, res) => {
+  app.put('/api/performance/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -3060,7 +3060,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/performance/:id', requireAuth, async (req, res) => {
+  app.delete('/api/performance/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -3102,7 +3102,7 @@ async function startServer() {
     res.json(filtered.map(r => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/career', requireAuth, async (req, res) => {
+  app.post('/api/career', requireAuth, requireWriter, async (req, res) => {
     try {
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
@@ -3136,7 +3136,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/career/:id', requireAuth, async (req, res) => {
+  app.delete('/api/career/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
@@ -3290,7 +3290,7 @@ async function startServer() {
     res.json(list.map(enhanceTrainingRecord));
   });
 
-  app.post('/api/trainings', requireAuth, async (req, res) => {
+  app.post('/api/trainings', requireAuth, requireWriter, async (req, res) => {
     const data = mapKeys(req.body, snakeToCamel);
     if (data.trainerId !== undefined && data.trainerId !== null) {
       if (typeof data.trainerId === 'string') {
@@ -3324,7 +3324,7 @@ async function startServer() {
     res.status(201).json(enhanceTrainingRecord(memCourse));
   });
 
-  app.put('/api/trainings/:id', requireAuth, async (req, res) => {
+  app.put('/api/trainings/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     const data = mapKeys(req.body, snakeToCamel);
     if (data.trainerId !== undefined && data.trainerId !== null) {
@@ -3358,7 +3358,7 @@ async function startServer() {
     res.json(enhanceTrainingRecord(record));
   });
 
-  app.delete('/api/trainings/:id', requireAuth, async (req, res) => {
+  app.delete('/api/trainings/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     try {
       await db.delete(schema.trainings).where(eq(schema.trainings.id, id));
@@ -3396,7 +3396,7 @@ async function startServer() {
     res.json(list.map(enhanceEnrollmentRecord));
   });
 
-  app.post('/api/trainings/enroll', requireAuth, async (req, res) => {
+  app.post('/api/trainings/enroll', requireAuth, requireWriter, async (req, res) => {
     const data = mapKeys(req.body, snakeToCamel);
     if (data.trainingId) data.trainingId = parseInt(data.trainingId);
     if (data.employeeId) data.employeeId = parseInt(data.employeeId) || null;
@@ -3442,7 +3442,7 @@ async function startServer() {
     res.status(201).json(enhanceEnrollmentRecord(memEnroll));
   });
 
-  app.put('/api/trainings/enrollments/:id', requireAuth, async (req, res) => {
+  app.put('/api/trainings/enrollments/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     const data = mapKeys(req.body, snakeToCamel);
     if (data.trainingId) data.trainingId = parseInt(data.trainingId);
@@ -3487,7 +3487,7 @@ async function startServer() {
     res.json(enhanceEnrollmentRecord(record));
   });
 
-  app.delete('/api/trainings/enrollments/:id', requireAuth, async (req, res) => {
+  app.delete('/api/trainings/enrollments/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     try {
       await db.delete(schema.trainingEnrollments).where(eq(schema.trainingEnrollments.id, id));
@@ -3541,7 +3541,7 @@ async function startServer() {
     res.status(404).json({ error: 'المدرب غير موجود' });
   });
 
-  app.post('/api/trainers', requireAuth, async (req, res) => {
+  app.post('/api/trainers', requireAuth, requireWriter, async (req, res) => {
     try {
       const rawData = req.body;
       const existingCols = await getExistingColumns('trainers');
@@ -3618,7 +3618,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/trainers/:id', requireAuth, async (req, res) => {
+  app.put('/api/trainers/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const rawData = req.body;
@@ -3699,7 +3699,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/trainers/:id', requireAuth, async (req, res) => {
+  app.delete('/api/trainers/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       await pool.query('DELETE FROM trainers WHERE id = $1', [id]);
@@ -3724,7 +3724,7 @@ async function startServer() {
     res.json(inMemoryAnnualPlans.map(enhancePlanRecord));
   });
 
-  app.post('/api/annual-plans', requireAuth, async (req, res) => {
+  app.post('/api/annual-plans', requireAuth, requireWriter, async (req, res) => {
     try {
       const data = mapKeys(req.body, snakeToCamel);
       if (data.year) data.year = parseInt(data.year);
@@ -3807,7 +3807,7 @@ async function startServer() {
     res.json([]);
   });
 
-  app.post('/api/salaries/bulk', requireAuth, async (req, res) => {
+  app.post('/api/salaries/bulk', requireAuth, requireWriter, async (req, res) => {
     try {
       const data = req.body;
       if (!Array.isArray(data)) {
@@ -3833,7 +3833,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/salaries/:id', requireAuth, async (req, res) => {
+  app.put('/api/salaries/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -3881,7 +3881,7 @@ async function startServer() {
     res.json([]);
   });
 
-  app.post('/api/attendance', requireAuth, async (req, res) => {
+  app.post('/api/attendance', requireAuth, requireWriter, async (req, res) => {
     try {
       const data = req.body;
       const toInsert = {
@@ -3917,7 +3917,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/attendance/:id', requireAuth, async (req, res) => {
+  app.put('/api/attendance/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -3953,7 +3953,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/attendance/:id', requireAuth, async (req, res) => {
+  app.delete('/api/attendance/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -3992,7 +3992,7 @@ async function startServer() {
     res.json(inMemoryOrgUnits);
   });
 
-  app.post('/api/org-units', requireAuth, async (req, res) => {
+  app.post('/api/org-units', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const parentId = (data.parentId !== undefined && data.parentId !== null && data.parentId !== '') ? parseInt(data.parentId) : ((data.parent_id !== undefined && data.parent_id !== null && data.parent_id !== '') ? parseInt(data.parent_id) : null);
     const managerId = (data.managerId !== undefined && data.managerId !== null && data.managerId !== '') ? parseInt(data.managerId) : ((data.manager_id !== undefined && data.manager_id !== null && data.manager_id !== '') ? parseInt(data.manager_id) : null);
@@ -4050,7 +4050,7 @@ async function startServer() {
     res.status(201).json(memUnit);
   });
 
-  app.put('/api/org-units/:id', requireAuth, async (req, res) => {
+  app.put('/api/org-units/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid ID format' });
@@ -4102,7 +4102,7 @@ async function startServer() {
     res.json({ id, ...data });
   });
 
-  app.delete('/api/org-units/:id', requireAuth, async (req, res) => {
+  app.delete('/api/org-units/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid ID format' });
@@ -4550,7 +4550,7 @@ async function startServer() {
     res.json(list.map(t => mapKeys(t, camelToSnake)));
   });
 
-  app.post('/api/job-titles', requireAuth, async (req, res) => {
+  app.post('/api/job-titles', requireAuth, requireWriter, async (req, res) => {
     const { name, category, min_grade, minGrade, min_step, minStep, next_title_id, nextTitleId, status, notes } = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'اسم العنوان الوظيفي مطلوب' });
@@ -4625,7 +4625,7 @@ async function startServer() {
     res.status(201).json(mapKeys(memItem, camelToSnake));
   });
 
-  app.put('/api/job-titles/:id', requireAuth, async (req, res) => {
+  app.put('/api/job-titles/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const { name, category, min_grade, minGrade, min_step, minStep, next_title_id, nextTitleId, status, notes } = req.body;
@@ -4831,7 +4831,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/job-titles/:id', requireAuth, async (req, res) => {
+  app.delete('/api/job-titles/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -5199,7 +5199,7 @@ async function startServer() {
     res.json(list);
   });
 
-  app.post('/api/employee-commendations', requireAuth, async (req, res) => {
+  app.post('/api/employee-commendations', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -5241,7 +5241,7 @@ async function startServer() {
     res.status(201).json(mem);
   });
 
-  app.put('/api/employee-commendations/:id', requireAuth, async (req, res) => {
+  app.put('/api/employee-commendations/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     const data = req.body;
     try {
@@ -5279,7 +5279,7 @@ async function startServer() {
     res.json({ id, ...data });
   });
 
-  app.delete('/api/employee-commendations/:id', requireAuth, async (req, res) => {
+  app.delete('/api/employee-commendations/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     const existing = inMemoryEmployeeCommendations.find(r => r.id === id);
     try {
@@ -5626,7 +5626,7 @@ async function startServer() {
     res.json(inMemoryServiceTypes);
   });
 
-  app.post('/api/service-types', requireAuth, async (req, res) => {
+  app.post('/api/service-types', requireAuth, requireWriter, async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) {
       return res.status(400).json({ error: 'اسم نوع الخدمة مطلوب' });
@@ -5666,7 +5666,7 @@ async function startServer() {
     res.json(inMemoryEmployeeStatuses);
   });
 
-  app.post('/api/employee-statuses', requireAuth, async (req, res) => {
+  app.post('/api/employee-statuses', requireAuth, requireWriter, async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) {
       return res.status(400).json({ error: 'اسم حالة الموظف مطلوب' });
@@ -7091,7 +7091,7 @@ async function startServer() {
     }));
   });
 
-  app.post('/api/qualifications', requireAuth, async (req, res) => {
+  app.post('/api/qualifications', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -7174,7 +7174,7 @@ async function startServer() {
     res.status(201).json(recordMapped);
   });
 
-  app.put('/api/qualifications/:id', requireAuth, async (req, res) => {
+  app.put('/api/qualifications/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
@@ -7253,7 +7253,7 @@ async function startServer() {
     });
   });
 
-  app.patch('/api/qualifications/:id/toggle', requireAuth, async (req, res) => {
+  app.patch('/api/qualifications/:id/toggle', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
 
@@ -7315,7 +7315,7 @@ async function startServer() {
     res.status(404).json({ error: 'Qualification not found' });
   });
 
-  app.delete('/api/qualifications/:id', requireAuth, async (req, res) => {
+  app.delete('/api/qualifications/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     let empId: number = 0;
@@ -7364,7 +7364,7 @@ async function startServer() {
     res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/job-assignments', requireAuth, async (req, res) => {
+  app.post('/api/job-assignments', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -7426,7 +7426,7 @@ async function startServer() {
     res.status(201).json(mapKeys(record || memItem, camelToSnake));
   });
 
-  app.put('/api/job-assignments/:id', requireAuth, async (req, res) => {
+  app.put('/api/job-assignments/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
@@ -7444,7 +7444,7 @@ async function startServer() {
     res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
-  app.delete('/api/job-assignments/:id', requireAuth, async (req, res) => {
+  app.delete('/api/job-assignments/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     try {
@@ -7476,7 +7476,7 @@ async function startServer() {
     res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/promotions', requireAuth, async (req, res) => {
+  app.post('/api/promotions', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -7545,7 +7545,7 @@ async function startServer() {
     res.status(201).json(mapKeys(record || memItem, camelToSnake));
   });
 
-  app.put('/api/promotions/:id', requireAuth, async (req, res) => {
+  app.put('/api/promotions/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
@@ -7563,7 +7563,7 @@ async function startServer() {
     res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
-  app.delete('/api/promotions/:id', requireAuth, async (req, res) => {
+  app.delete('/api/promotions/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     try {
@@ -7602,7 +7602,7 @@ async function startServer() {
     res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/salary-allowances', requireAuth, async (req, res) => {
+  app.post('/api/salary-allowances', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -7645,7 +7645,7 @@ async function startServer() {
     res.status(201).json(mapKeys(record || memItem, camelToSnake));
   });
 
-  app.put('/api/salary-allowances/:id', requireAuth, async (req, res) => {
+  app.put('/api/salary-allowances/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
@@ -7663,7 +7663,7 @@ async function startServer() {
     res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
-  app.delete('/api/salary-allowances/:id', requireAuth, async (req, res) => {
+  app.delete('/api/salary-allowances/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     try {
@@ -7695,7 +7695,7 @@ async function startServer() {
     res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/annual-evaluations', requireAuth, async (req, res) => {
+  app.post('/api/annual-evaluations', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -7726,7 +7726,7 @@ async function startServer() {
     res.status(201).json(mapKeys(record || memItem, camelToSnake));
   });
 
-  app.put('/api/annual-evaluations/:id', requireAuth, async (req, res) => {
+  app.put('/api/annual-evaluations/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
@@ -7744,7 +7744,7 @@ async function startServer() {
     res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
-  app.delete('/api/annual-evaluations/:id', requireAuth, async (req, res) => {
+  app.delete('/api/annual-evaluations/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     try {
@@ -7776,7 +7776,7 @@ async function startServer() {
     res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/training-courses', requireAuth, async (req, res) => {
+  app.post('/api/training-courses', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -7809,7 +7809,7 @@ async function startServer() {
     res.status(201).json(mapKeys(record || memItem, camelToSnake));
   });
 
-  app.put('/api/training-courses/:id', requireAuth, async (req, res) => {
+  app.put('/api/training-courses/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
@@ -7827,7 +7827,7 @@ async function startServer() {
     res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
-  app.delete('/api/training-courses/:id', requireAuth, async (req, res) => {
+  app.delete('/api/training-courses/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     try {
@@ -7859,7 +7859,7 @@ async function startServer() {
     res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/transfers', requireAuth, async (req, res) => {
+  app.post('/api/transfers', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -7897,7 +7897,7 @@ async function startServer() {
     res.status(201).json(mapKeys(record || memItem, camelToSnake));
   });
 
-  app.put('/api/transfers/:id', requireAuth, async (req, res) => {
+  app.put('/api/transfers/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
@@ -7915,7 +7915,7 @@ async function startServer() {
     res.json(mapKeys(updatedRec || memItem, camelToSnake));
   });
 
-  app.delete('/api/transfers/:id', requireAuth, async (req, res) => {
+  app.delete('/api/transfers/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     try {
@@ -7947,7 +7947,7 @@ async function startServer() {
     res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/retirements', requireAuth, async (req, res) => {
+  app.post('/api/retirements', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -7992,7 +7992,7 @@ async function startServer() {
     res.json(mapKeys(record || memItem, camelToSnake));
   });
 
-  app.delete('/api/retirements/:id', requireAuth, async (req, res) => {
+  app.delete('/api/retirements/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     try {
@@ -8024,7 +8024,7 @@ async function startServer() {
     res.json(list.map((r: any) => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/documents', requireAuth, async (req, res) => {
+  app.post('/api/documents', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -8050,7 +8050,7 @@ async function startServer() {
     res.status(201).json(mapKeys(record || memItem, camelToSnake));
   });
 
-  app.delete('/api/documents/:id', requireAuth, async (req, res) => {
+  app.delete('/api/documents/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     try {
@@ -8090,7 +8090,7 @@ async function startServer() {
     res.json(list);
   });
 
-  app.post('/api/service-records', requireAuth, async (req, res) => {
+  app.post('/api/service-records', requireAuth, requireWriter, async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -8174,7 +8174,7 @@ async function startServer() {
     res.json(formatted);
   });
 
-  app.put('/api/service-records/:id', requireAuth, async (req, res) => {
+  app.put('/api/service-records/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
@@ -8232,7 +8232,7 @@ async function startServer() {
     res.json(formatted);
   });
 
-  app.delete('/api/service-records/:id', requireAuth, async (req, res) => {
+  app.delete('/api/service-records/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     
@@ -8894,7 +8894,7 @@ async function startServer() {
     return res.json(inMemoryEmployeeAssignments);
   });
 
-  app.post('/api/governing-courses/employee-assignments', requireAuth, async (req, res) => {
+  app.post('/api/governing-courses/employee-assignments', requireAuth, requireWriter, async (req, res) => {
     const { employeeId, status, exemptionReason, exemptionOrderNumber, exemptionOrderDate, assignedCourses, courseProgress, notes } = req.body;
     if (!employeeId) return res.status(400).json({ error: 'Employee ID is required' });
 
@@ -9642,7 +9642,7 @@ async function startServer() {
       res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
     });
 
-    app.post(`/api/${endpoint}`, requireAuth, async (req, res) => {
+    app.post(`/api/${endpoint}`, requireAuth, requireWriter, async (req, res) => {
       const data = mapKeys(req.body, snakeToCamel);
       let insertedRecord: any = null;
       try {
@@ -9716,7 +9716,7 @@ async function startServer() {
     });
     }
 
-    app.put(`/api/${endpoint}/:id`, requireAuth, async (req, res) => {
+    app.put(`/api/${endpoint}/:id`, requireAuth, requireWriter, async (req, res) => {
       const id = parseInt(req.params.id);
       const data = mapKeys(req.body, snakeToCamel);
       let updatedRecord: any = null;
@@ -9816,7 +9816,7 @@ async function startServer() {
     });
 
     if (!putOnlyNeeded.has(endpoint)) {
-    app.delete(`/api/${endpoint}/:id`, requireAuth, async (req, res) => {
+    app.delete(`/api/${endpoint}/:id`, requireAuth, requireWriter, async (req, res) => {
       const id = parseInt(req.params.id);
       const deletedRecord = (genericMemoryStores[endpoint] || []).find(r => String(r.id) === String(id));
       try {
@@ -9883,7 +9883,7 @@ async function startServer() {
   // --- Degree Recognition Track API (Phase 2b) ---
 
   // 1. Initiate Degree Recognition for In-Service Qualification
-  app.post('/api/qualifications/:id/initiate-degree-recognition', requireAuth, async (req, res) => {
+  app.post('/api/qualifications/:id/initiate-degree-recognition', requireAuth, requireWriter, async (req, res) => {
     try {
       const qualId = parseInt(req.params.id);
       if (isNaN(qualId)) return res.status(400).json({ error: 'معرّف الشهادة غير صالح' });
@@ -10905,7 +10905,7 @@ async function startServer() {
   });
 
   // 2. Toggle or set isHidden for a delay reason
-  app.patch('/api/promotion-delay-reasons/:id/hide', requireAuth, async (req, res) => {
+  app.patch('/api/promotion-delay-reasons/:id/hide', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'معرّف السجل غير صالح' });
@@ -10939,7 +10939,7 @@ async function startServer() {
   });
 
   // 3. Update reminderDate manually
-  app.patch('/api/promotion-delay-reasons/:id/reminder', requireAuth, async (req, res) => {
+  app.patch('/api/promotion-delay-reasons/:id/reminder', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'معرّف السجل غير صالح' });

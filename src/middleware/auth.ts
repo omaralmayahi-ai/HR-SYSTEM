@@ -16,9 +16,9 @@ export interface AuthRequest extends Request {
   };
 }
 
-/** الأدوار المعتمدة. 'admin' مدير النظام؛ 'hr' موظف موارد بشرية؛ 'user' مستخدم عادي؛ 'employee' موظف يرى ملفه فقط. */
+/** الأدوار المعتمدة: 'admin' مدير النظام؛ 'user' مستخدم إدخال وتعديل (موظفو الموارد البشرية)؛ 'employee' اطلاع فقط. */
 export const ADMIN_ROLES = ['admin'];
-export const WRITE_ROLES = ['admin', 'hr'];
+export const WRITE_ROLES = ['admin', 'user', 'hr'];
 
 let cachedSecret: string | null = null;
 
@@ -82,5 +82,5 @@ export const requireRole = (...roles: string[]) =>
 /** مدير النظام فقط. */
 export const requireAdmin = requireRole(...ADMIN_ROLES);
 
-/** مدير النظام أو موظف الموارد البشرية: لكل عمليات الكتابة على البيانات. */
+/** كل الأدوار عدا 'employee': لعمليات الكتابة على البيانات. */
 export const requireWriter = requireRole(...WRITE_ROLES);
