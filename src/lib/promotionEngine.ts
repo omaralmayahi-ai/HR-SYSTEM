@@ -620,10 +620,21 @@ export function collectCycleServiceCredits(
   let years = 0, months = 0, days = 0;
   let latestOrderDate: string | null = null;
   const missingOrderDate: ServiceCreditRecord[] = [];
+  const seen = new Set<string>();
   (credits || []).forEach(sc => {
     if (!serviceCreditAppliesTo(sc, target)) return;
     const od = sc.orderDate || sc.order_date;
     if (!od) { missingOrderDate.push(sc); return; }
+    // السجل نفسه قد يرد من service_records و service_credits معاً: يُحتسب مرة واحدة
+    const on = String(sc.orderNumber || sc.order_number || '').trim();
+    if (on) {
+      const key = [on, formatDateString(od),
+        creditPart(sc, 'calculatedYears', 'calculated_years', 'years'),
+        creditPart(sc, 'calculatedMonths', 'calculated_months', 'months'),
+        creditPart(sc, 'calculatedDays', 'calculated_days', 'days')].join('|');
+      if (seen.has(key)) return;
+      seen.add(key);
+    }
     if (!isDateOnOrAfter(od, anchorDate) || formatDateString(od) === formatDateString(anchorDate)) return;
     years += creditPart(sc, 'calculatedYears', 'calculated_years', 'years');
     months += creditPart(sc, 'calculatedMonths', 'calculated_months', 'months');

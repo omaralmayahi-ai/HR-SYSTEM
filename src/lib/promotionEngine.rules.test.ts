@@ -48,6 +48,15 @@ describe('الخدمة المحتسبة تُطبَّق مرة واحدة (R2 #1)
     expect(r.deferredItems.some(d => d.type === 'service_credit' && d.status === 'بيانات_ناقصة')).toBe(true);
   });
 
+  it('السجل المكرر في service_records و service_credits يُحتسب مرة واحدة', () => {
+    const emp = { id: 1, grade: 6, step: 2, lastIncrementDate: '2025-01-01' };
+    const rec = { years: 0, months: 3, days: 0, order_number: '55', order_date: '2025-02-01', purpose: 'promotion_allowance_pension' };
+    const mirror = { calculated_years: 0, calculated_months: 3, calculated_days: 0, order_number: '55', order_date: '2025-02-01', purpose: 'علاوة_وترفيع' };
+    const r = calculateIncrementEligibility(emp, { serviceCredits: [rec, mirror], today: '2025-03-01' });
+    expect(r.modifiers?.serviceCreditMonths).toBe(3);
+    expect(r.nextIncrementDueDate).toBe('2025-10-01');
+  });
+
   it('الغرض «علاوة_فقط» لا يُحتسب للترفيع', () => {
     const emp = { id: 1, grade: 7, step: 2, lastPromotionDate: '2022-01-01', lastIncrementDate: '2025-01-01' };
     const r = calculatePromotionEligibility(emp, { ...okGate, serviceCredits: [{ calculatedMonths: 6, purpose: 'علاوة_فقط', orderDate: '2023-01-01' }], today: '2025-01-01' });
