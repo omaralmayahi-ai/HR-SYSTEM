@@ -3,7 +3,7 @@ import { apiClient } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { FileText, Printer, Users, Wallet, CalendarDays, Star, GraduationCap } from 'lucide-react';
-import { formatCurrency, calculateSalary } from '@/lib/salaryTable';
+import { formatCurrency, calculateSalary, loadPayrollSettings, isPayrollActiveEmployee } from '@/lib/salaryTable';
 
 const REPORT_TYPES = [
   { id: 'employee_summary', label: 'خلاصة خدمة موظف', icon: Users },
@@ -20,15 +20,22 @@ export default function Reports() {
   const [selectedEmployee, setSelectedEmployee] = useState('all');
   const [reportData, setReportData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [reportError, setReportError] = useState('');
 
   useEffect(() => {
-    apiClient.entities.Employee.list().then(setEmployees);
+    apiClient.entities.Employee.list()
+      .then(setEmployees)
+      .catch(err => setReportError(`تعذّر تحميل الموظفين: ${err?.message || err}`));
   }, []);
 
   const generateReport = async () => {
     setLoading(true);
+    setReportError('');
     try {
-      if (selectedReport === 'employee_summary' && selectedEmployee !== 'all') {
+      if (selectedReport === 'salary_slip') {
+        // تقرير قسيمة الراتب غير منفذ بعد
+        setReportData({ type: 'not_available' });
+      } else if (selectedReport === 'employee_summary' && selectedEmployee !== 'all') {
         const [emp, career, leaves, penalties, evals] = await Promise.all([
           apiClient.entities.Employee.get(selectedEmployee),
           apiClient.entities.CareerHistory.filter({ employee_id: selectedEmployee }, '-movement_date'),
@@ -38,8 +45,18 @@ export default function Reports() {
         ]);
         setReportData({ type: 'employee_summary', emp, career, leaves, penalties, evals });
       } else if (selectedReport === 'salary_sheet') {
-        const emps = await apiClient.entities.Employee.filter({ status: 'فعال' });
-        setReportData({ type: 'salary_sheet', employees: emps });
+        // نفس سلم الرواتب وإعدادات الاحتساب المستخدمة في شاشة الرواتب
+        const [allEmps, { options, errors }] = await Promise.all([
+          apiClient.entities.Employee.list(),
+          loadPayrollSettings(apiClient),
+        ]);
+        const now = new Date();
+        const emps = (Array.isArray(allEmps) ? allEmps : []).filter(isPayrollActiveEmployee);
+        const rows = emps.map(emp => ({
+          emp,
+          calc: calculateSalary(emp, { ...options, targetMonth: now.getMonth() + 1, targetYear: now.getFullYear() })
+        }));
+        setReportData({ type: 'salary_sheet', rows, settingsErrors: errors });
       } else if (selectedReport === 'performance_report') {
         const evals = await apiClient.entities.PerformanceEvaluation.list('-year');
         setReportData({ type: 'performance_report', evals, employees });
@@ -52,6 +69,9 @@ export default function Reports() {
         const leaves = await apiClient.entities.LeaveRequest.filter(query);
         setReportData({ type: 'leave_report', leaves, employees });
       }
+    } catch (err) {
+      setReportData(null);
+      setReportError(`تعذّر توليد التقرير: ${err?.message || err}`);
     } finally {
       setLoading(false);
     }
@@ -107,6 +127,10 @@ export default function Reports() {
           </Button>
         )}
       </div>
+
+      {reportError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 text-sm">{reportError}</div>
+      )}
 
       {/* Report Output */}
       {reportData && (
@@ -194,10 +218,23 @@ export default function Reports() {
               </div>
             )}
 
+            {/* Not yet available */}
+            {reportData.type === 'not_available' && (
+              <div className="py-10 text-center text-slate-500">
+                <p className="font-bold text-[#1B3A6B] mb-2">غير متاح بعد</p>
+                <p className="text-sm">تقرير قسيمة الراتب الشهرية لم يُنفَّذ بعد. يمكن الاطلاع على رواتب الشهر من شاشة إدارة الرواتب.</p>
+              </div>
+            )}
+
             {/* Salary Sheet */}
             {reportData.type === 'salary_sheet' && (
               <div>
                 <h3 className="font-bold text-[#1B3A6B] mb-4">كشف رواتب الموظفين الفعالين</h3>
+                {reportData.settingsErrors?.length > 0 && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm mb-4 space-y-1">
+                    {reportData.settingsErrors.map((e, i) => <div key={i}>{e}</div>)}
+                  </div>
+                )}
                 <table className="w-full text-sm border border-slate-200">
                   <thead><tr className="bg-[#1B3A6B] text-white">
                     <th className="text-right px-3 py-2">#</th>
@@ -209,8 +246,17 @@ export default function Reports() {
                     <th className="text-right px-3 py-2">الصافي</th>
                   </tr></thead>
                   <tbody>
-                    {reportData.employees.map((emp, i) => {
-                      const calc = calculateSalary(emp);
+                    {reportData.rows.map(({ emp, calc }, i) => {
+                      if (calc.status === 'missing_data') {
+                        return (
+                          <tr key={emp.id} className="border-t border-slate-100 bg-amber-50">
+                            <td className="px-3 py-2 text-slate-400">{i+1}</td>
+                            <td className="px-3 py-2 font-medium">{emp.full_name}</td>
+                            <td className="px-3 py-2">{emp.grade ?? '—'}/{emp.step ?? '—'}</td>
+                            <td colSpan={4} className="px-3 py-2 text-amber-800">بيانات ناقصة — {calc.reason}</td>
+                          </tr>
+                        );
+                      }
                       return (
                         <tr key={emp.id} className="border-t border-slate-100">
                           <td className="px-3 py-2 text-slate-400">{i+1}</td>
@@ -227,7 +273,7 @@ export default function Reports() {
                   <tfoot>
                     <tr className="bg-[#1B3A6B]/5 font-bold">
                       <td colSpan={6} className="px-3 py-2 text-right text-[#1B3A6B]">إجمالي كتلة الرواتب:</td>
-                      <td className="px-3 py-2 text-[#1B3A6B] text-lg">{formatCurrency(reportData.employees.reduce((s, e) => s + calculateSalary(e).net_salary, 0))}</td>
+                      <td className="px-3 py-2 text-[#1B3A6B] text-lg">{formatCurrency(reportData.rows.reduce((s, r) => s + (r.calc.status === 'missing_data' ? 0 : r.calc.net_salary), 0))}</td>
                     </tr>
                   </tfoot>
                 </table>

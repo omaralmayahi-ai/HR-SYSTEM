@@ -10,6 +10,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
+import {
+  normalizeCourseStatus,
+  toDbCourseStatus,
+  normalizeEnrollmentResult,
+  isPassingResult,
+  resolveCoursePassingScore,
+  computeEnrollmentGrade,
+  nextCertificateNumber,
+} from '@/lib/governingCoursesEngine';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import {
   GraduationCap,
@@ -66,7 +75,14 @@ const TRACK_SUMMER = 'تدريب صيفي';
 const CATEGORIES = ['إدارية', 'حاسوب', 'HSE', 'اختصاص'];
 const COURSE_TYPES = ['حضوري', 'إلكتروني'];
 const LOCATION_TYPES = ['إلكتروني', 'موقعي', 'خارجي', 'دولي'];
+// تسميات الواجهة؛ القيم المخزنة في قاعدة البيانات: مخطط / جاري / منتهي / ملغى (راجع governingCoursesEngine)
 const COURSE_STATUSES = ['غير منفذة', 'منفذة', 'ملغاة'];
+const uiCourseStatusLabel = (status) => {
+  const db = normalizeCourseStatus(status);
+  if (db === 'منتهي' || db === 'جاري') return 'منفذة';
+  if (db === 'ملغى') return 'ملغاة';
+  return 'غير منفذة';
+};
 
 const IRAQ_MONTHS = [
   { value: '1', label: '1 - كانون الثاني' },
@@ -226,6 +242,7 @@ export default function Training() {
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [showEnrollModal, setShowEnrollModal] = useState(false);
   const [selectedCourseForEnroll, setSelectedCourseForEnroll] = useState(null);
+  const [governingCoursesList, setGoverningCoursesList] = useState([]);
   const [enrollEmpSearchQuery, setEnrollEmpSearchQuery] = useState('');
 
   const [showCertModal, setShowCertModal] = useState(false);
@@ -477,24 +494,19 @@ export default function Training() {
 
   // Grade Rating calculation helper:
   // 90 to 100: ممتاز | 80 to 89: جيد جداً | 70 to 79: جيد | 60 to 69: متوسط | 50 to 59: مقبول | < 50: ضعيف
-  const computeGradeRating = (scoreInput) => {
-    if (scoreInput === null || scoreInput === undefined || String(scoreInput).trim() === '') {
-      return { rating: '—', result: '-' };
-    }
-    const num = parseFloat(scoreInput);
-    if (isNaN(num)) {
-      if (typeof scoreInput === 'string' && scoreInput.trim().length > 0) {
-        return { rating: scoreInput.trim(), result: 'ناجح' };
-      }
-      return { rating: '—', result: '-' };
-    }
-    if (num >= 90 && num <= 100) return { rating: 'ممتاز', result: 'ناجح' };
-    if (num >= 80 && num < 90) return { rating: 'جيد جداً', result: 'ناجح' };
-    if (num >= 70 && num < 80) return { rating: 'جيد', result: 'ناجح' };
-    if (num >= 60 && num < 70) return { rating: 'متوسط', result: 'ناجح' };
-    if (num >= 50 && num < 60) return { rating: 'مقبول', result: 'ناجح' };
-    if (num < 50 && num >= 0) return { rating: 'ضعيف', result: 'راسب' };
-    return { rating: '—', result: '-' };
+  // النتيجة (اجتاز / لم يجتز) حسب درجة النجاح: min_passing_score للدورة الحاكمة المطابقة، وإلا 60
+  const computeGradeRating = (scoreInput, course = selectedCourseForEnroll) => {
+    return computeEnrollmentGrade(scoreInput, resolveCoursePassingScore(course, governingCoursesList));
+  };
+
+  // رقم شهادة بتسلسل سنوي (CERT-السنة-0001) بدل رقم عشوائي
+  const courseCertYear = (course) => {
+    const y = parseInt(course?.year) || parseInt(String(course?.start_date || '').substring(0, 4));
+    return y || new Date().getFullYear();
+  };
+  const generateCertificateNumber = (course, extraUsed = []) => {
+    const used = [...enrollments.map(e => e.certificate_number), ...extraUsed];
+    return nextCertificateNumber(used, courseCertYear(course));
   };
 
   // Helper to compare Employee Job Grade with Course Target Audience / Target Grades
@@ -663,16 +675,23 @@ export default function Training() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [trList, enList, trnrs, plans, emps] = await Promise.all([
+      const [trList, enList, trnrs, plans, emps, govList] = await Promise.all([
         apiClient.entities.Training.list('-start_date', 500),
         apiClient.entities.TrainingEnrollment.list(),
         apiClient.entities.Trainer.list(),
         apiClient.entities.AnnualPlan.list(),
-        apiClient.entities.Employee.list()
+        apiClient.entities.Employee.list(),
+        apiClient.entities.GoverningCourse.list().catch(err => {
+          console.error('Error loading governing courses:', err);
+          toast({ title: 'تعذر تحميل الدورات الحاكمة', description: 'تُعتمد درجة النجاح الافتراضية (60) لحين توفرها', variant: 'destructive' });
+          return [];
+        })
       ]);
 
-      setCourses(trList || []);
-      setEnrollments(enList || []);
+      // توحيد المفردات مع قاعدة البيانات (مخطط/جاري/منتهي/ملغى، اجتاز/لم يجتز) مع تحويل القيم القديمة
+      setCourses((trList || []).map(c => ({ ...c, status: normalizeCourseStatus(c.status) })));
+      setEnrollments((enList || []).map(e => ({ ...e, result: normalizeEnrollmentResult(e.result) })));
+      setGoverningCoursesList(govList || []);
       setTrainers(trnrs || []);
       setAnnualPlans(plans || []);
       setEmployees(emps || []);
@@ -840,7 +859,8 @@ export default function Training() {
   // Quick Status Update for Course Execution
   const handleUpdateStatus = async (course, newStatus) => {
     try {
-      await apiClient.entities.Training.update(course.id, { status: newStatus });
+      const dbStatus = toDbCourseStatus(newStatus, course.status);
+      await apiClient.entities.Training.update(course.id, { status: dbStatus });
       toast({
         title: newStatus === 'منفذة'
           ? 'تم تحديث حالة الدورة إلى (منفذة)'
@@ -848,7 +868,7 @@ export default function Training() {
           ? 'تم إلغاء الدورة التدريبية'
           : 'تم تغيير حالة الدورة'
       });
-      setCourses(prev => prev.map(c => c.id === course.id ? { ...c, status: newStatus } : c));
+      setCourses(prev => prev.map(c => c.id === course.id ? { ...c, status: dbStatus } : c));
     } catch (err) {
       console.error(err);
       toast({ title: 'فشل تحديث حالة الدورة', variant: 'destructive' });
@@ -1097,7 +1117,7 @@ export default function Training() {
       outside_plan_reason: course.outside_plan_reason || course.outsidePlanReason || '',
       order_number: course.order_number || '',
       description: course.description || '',
-      status: course.status || 'غير منفذة'
+      status: uiCourseStatusLabel(course.status)
     });
 
     setTimeout(() => {
@@ -1143,7 +1163,8 @@ export default function Training() {
         hours: parseInt(courseForm.hours) || 0,
         is_outside_plan: Boolean(courseForm.is_outside_plan),
         outside_plan_reason: courseForm.is_outside_plan ? (courseForm.outside_plan_reason || '') : '',
-        target_audience: courseForm.target_audience || 'كافة الدرجات والكوادر الوظيفية'
+        target_audience: courseForm.target_audience || 'كافة الدرجات والكوادر الوظيفية',
+        status: toDbCourseStatus(courseForm.status, editingCourse?.status)
       };
 
       if (editingCourse) {
@@ -1475,7 +1496,7 @@ export default function Training() {
       result: 'قيد التقييم',
       score: '',
       grade: '',
-      certificate_number: `CERT-${course.id}-${Math.floor(1000 + Math.random() * 9000)}`,
+      certificate_number: generateCertificateNumber(course),
       notes: ''
     });
     setShowEnrollModal(true);
@@ -1525,7 +1546,7 @@ export default function Training() {
         result: calc.result !== '-' ? calc.result : (enrollForm.result || 'قيد التقييم'),
         score: enrollForm.score || '',
         grade: calc.rating !== '—' ? calc.rating : (enrollForm.grade || ''),
-        certificate_number: enrollForm.certificate_number || `CERT-${selectedCourseForEnroll.id}-${Math.floor(1000 + Math.random() * 9000)}`,
+        certificate_number: enrollForm.certificate_number || generateCertificateNumber(selectedCourseForEnroll),
         notes: enrollForm.notes,
         enrollment_date: new Date().toISOString().split('T')[0]
       };
@@ -1543,7 +1564,7 @@ export default function Training() {
         external_participant_phone: '',
         score: '',
         grade: '',
-        certificate_number: `CERT-${selectedCourseForEnroll.id}-${Math.floor(1000 + Math.random() * 9000)}`
+        certificate_number: generateCertificateNumber(selectedCourseForEnroll, [payload.certificate_number])
       }));
 
       loadData();
@@ -1560,12 +1581,12 @@ export default function Training() {
 
   const handleSaveSingleGrade = async () => {
     if (!singleGradeTarget) return;
-    const calc = computeGradeRating(singleGradeScore);
+    const calc = computeGradeRating(singleGradeScore, courses.find(c => c.id === singleGradeTarget.training_id) || selectedCourseForEnroll);
     try {
       await apiClient.entities.TrainingEnrollment.update(singleGradeTarget.id, {
         score: singleGradeScore,
         grade: calc.rating !== '—' ? calc.rating : '',
-        result: calc.result !== '-' ? calc.result : (singleGradeScore ? 'ناجح' : 'قيد التقييم')
+        result: calc.result !== '-' ? calc.result : 'قيد التقييم'
       });
       toast({ title: 'تم حفظ النتيجة والتقدير بنجاح' });
       setSingleGradeTarget(null);
@@ -1589,7 +1610,7 @@ export default function Training() {
     try {
       const updates = currentCourseEnrollments.map(en => {
         const scoreVal = batchGradeData[en.id] ?? en.score ?? '';
-        const calc = computeGradeRating(scoreVal);
+        const calc = computeGradeRating(scoreVal, courses.find(c => c.id === en.training_id) || selectedCourseForEnroll);
         return apiClient.entities.TrainingEnrollment.update(en.id, {
           score: scoreVal,
           grade: calc.rating !== '—' ? calc.rating : '',
@@ -1779,9 +1800,12 @@ export default function Training() {
     setIsMigratingExcel(true);
     try {
       const courseId = selectedCourseForEnroll.id;
+      const issuedCertNumbers = [];
 
       await Promise.all(
         excelImportResult.validRows.map(item => {
+          const certNo = generateCertificateNumber(selectedCourseForEnroll, issuedCertNumbers);
+          issuedCertNumbers.push(certNo);
           const payload = {
             training_id: courseId,
             employee_id: item.employee_id,
@@ -1793,7 +1817,7 @@ export default function Training() {
             result: item.result || 'قيد التقييم',
             score: item.score || '',
             grade: item.rating || '',
-            certificate_number: `CERT-${courseId}-${Math.floor(10000 + Math.random() * 90000)}`,
+            certificate_number: certNo,
             notes: item.notes || 'مستورد عبر ملف Excel',
             enrollment_date: new Date().toISOString().split('T')[0]
           };
@@ -1833,7 +1857,7 @@ export default function Training() {
       participantCode = emp ? (emp.company_number || emp.employee_number || emp.job_number || emp.employee_code || emp.id) : '—';
     }
 
-    const calc = computeGradeRating(enrollment.score || enrollment.grade);
+    const calc = computeGradeRating(enrollment.score || enrollment.grade, course);
     const hasValidScore = (calc.rating !== '—' && calc.rating !== '') || (enrollment.score !== null && enrollment.score !== undefined && String(enrollment.score).trim() !== '');
 
     return {
@@ -1849,8 +1873,8 @@ export default function Training() {
       participantCode,
       hasValidScore,
       score: enrollment.score || '',
-      result: calc.result !== '-' ? calc.result : (enrollment.result || 'اجتاز'),
-      grade: calc.rating !== '—' ? calc.rating : (enrollment.grade || enrollment.score || 'ممتاز'),
+      result: calc.result !== '-' ? calc.result : (normalizeEnrollmentResult(enrollment.result) || '—'),
+      grade: calc.rating !== '—' ? calc.rating : (enrollment.grade || enrollment.score || '—'),
       certNo: enrollment.certificate_number || `CERT-${course.id}-${enrollment.id}`,
       issueDate: new Date().toLocaleDateString('ar-IQ'),
       certType: certType, // 'PARTICIPATION' | 'COMPLETION'
@@ -4131,7 +4155,7 @@ export default function Training() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 text-right" dir="rtl">
               {filteredCourses.map(course => {
                 const courseEnrollments = enrollments.filter(e => e.training_id === course.id);
-                const passedCount = courseEnrollments.filter(e => e.status === 'ناجح' || e.result === 'ناجح').length;
+                const passedCount = courseEnrollments.filter(e => isPassingResult(e.result) || isPassingResult(e.status)).length;
                 const yr = getCourseYear(course);
                 const isOutside = Boolean(course.is_outside_plan || course.isOutsidePlan);
 

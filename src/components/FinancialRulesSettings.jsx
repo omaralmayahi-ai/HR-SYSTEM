@@ -3,7 +3,6 @@ import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { 
   ShieldAlert, 
-  Settings2, 
   Save, 
   Clock, 
   UserPlus, 

@@ -3,9 +3,9 @@ import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { 
   Plus, Trash2, Edit2, Check, X, RefreshCw, Play, Pause, 
-  CalendarDays, ShieldCheck, Sparkles, AlertCircle, Clock,
-  Save, CheckCircle2, History, ArrowUpRight, Award, TrendingUp,
-  Banknote, AlertTriangle, CheckSquare, Square
+  CalendarDays, ShieldCheck, Sparkles, Clock,
+  Save, CheckCircle2, History, Award, TrendingUp,
+  Banknote, AlertTriangle
 } from 'lucide-react';
 
 export default function LeaveTypesSettings() {
@@ -45,9 +45,11 @@ export default function LeaveTypesSettings() {
   const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, id: null, name: '' });
 
   // Monthly Accrual Rules & Status State
-  const [monthlyRegularDays, setMonthlyRegularDays] = useState('2.5');
+  // قانون الخدمة المدنية 24/1960: الاعتيادية يوم عن كل 10 أيام خدمة (3 أيام/شهر) وتتراكم حتى 180 يوماً؛
+  // المرضية 30 يوماً براتب تام (2.5/شهر) و45 يوماً بنصف راتب لكل سنة خدمة
+  const [monthlyRegularDays, setMonthlyRegularDays] = useState('3');
   const [monthlySickDays, setMonthlySickDays] = useState('2.5');
-  const [maxRegularCap, setMaxRegularCap] = useState('10000');
+  const [maxRegularCap, setMaxRegularCap] = useState('180');
   const [maxSickCap, setMaxSickCap] = useState('10000');
   const [autoAccrualEnabled, setAutoAccrualEnabled] = useState(true);
 
@@ -82,9 +84,9 @@ export default function LeaveTypesSettings() {
       const statusData = await apiClient.leaveAccrual.getStatus();
       if (statusData) {
         setAccrualStatus(statusData);
-        setMonthlyRegularDays(String(statusData.monthlyRegularLeaveDays ?? '2.5'));
+        setMonthlyRegularDays(String(statusData.monthlyRegularLeaveDays ?? '3'));
         setMonthlySickDays(String(statusData.monthlySickLeaveDays ?? '2.5'));
-        setMaxRegularCap(String(statusData.maxRegularLeaveAccumulation ?? '10000'));
+        setMaxRegularCap(String(statusData.maxRegularLeaveAccumulation ?? '180'));
         setMaxSickCap(String(statusData.maxSickLeaveAccumulation ?? '10000'));
         setAutoAccrualEnabled(statusData.autoMonthlyLeaveAccrual !== false);
         setAccrualLogs(statusData.logs || []);
@@ -101,7 +103,7 @@ export default function LeaveTypesSettings() {
       const payload = {
         monthlyRegularLeaveDays: parseFloat(monthlyRegularDays) || 0,
         monthlySickLeaveDays: parseFloat(monthlySickDays) || 0,
-        maxRegularLeaveAccumulation: parseInt(maxRegularCap) || 10000,
+        maxRegularLeaveAccumulation: parseInt(maxRegularCap) || 180,
         maxSickLeaveAccumulation: parseInt(maxSickCap) || 10000,
         autoMonthlyLeaveAccrual: autoAccrualEnabled
       };
@@ -406,24 +408,35 @@ export default function LeaveTypesSettings() {
       const presets = [
         { 
           name: 'إجازة اعتيادية براتب تام', 
-          maxDays: 30, 
-          affectsIncrement: false,
-          affectsPromotion: false,
-          affectsCommendations: false,
-          salaryPaymentType: 'منح_الراتب_كامل',
-          financialDeductionPercentage: 0,
-          description: 'تُمنح للموظف براتب تام بمعدل يومين ونصف عن كل شهر خدمة فعلي متراكم.', 
-          status: 'فعال' 
-        },
-        { 
-          name: 'إجازة مرضية براتب تام', 
           maxDays: 120, 
           affectsIncrement: false,
           affectsPromotion: false,
           affectsCommendations: false,
           salaryPaymentType: 'منح_الراتب_كامل',
           financialDeductionPercentage: 0,
-          description: 'تُمنح للموظف بناءً على قرار من اللجان الطبية الرسمية بحد أقصى 120 يوماً.', 
+          description: 'تُمنح براتب تام بمعدل يوم عن كل عشرة أيام خدمة (3 أيام شهرياً)، تتراكم بحد أقصى 180 يوماً، ولا تتجاوز الإجازة الواحدة 120 يوماً.', 
+          status: 'فعال' 
+        },
+        { 
+          name: 'إجازة مرضية براتب تام', 
+          maxDays: 30, 
+          affectsIncrement: false,
+          affectsPromotion: false,
+          affectsCommendations: false,
+          salaryPaymentType: 'منح_الراتب_كامل',
+          financialDeductionPercentage: 0,
+          description: 'تُمنح بتقرير طبي رسمي: 30 يوماً براتب تام عن كل سنة خدمة.', 
+          status: 'فعال' 
+        },
+        { 
+          name: 'إجازة مرضية بنصف راتب', 
+          maxDays: 45, 
+          affectsIncrement: false,
+          affectsPromotion: false,
+          affectsCommendations: false,
+          salaryPaymentType: 'استقطاع_جزئي',
+          financialDeductionPercentage: 50,
+          description: 'تُمنح بتقرير طبي رسمي: 45 يوماً بنصف راتب عن كل سنة خدمة بعد استنفاد الرصيد التام.', 
           status: 'فعال' 
         },
         { 
@@ -561,11 +574,11 @@ export default function LeaveTypesSettings() {
                   value={monthlyRegularDays}
                   onChange={(e) => setMonthlyRegularDays(e.target.value)}
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-[#1B3A6B] focus:ring-2 focus:ring-[#1B3A6B]/20"
-                  placeholder="2.5"
+                  placeholder="3"
                 />
                 <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم / شهر</span>
               </div>
-              <p className="text-[10px] text-slate-400">القانون العراقي: يومين ونصف (2.5) شهرياً</p>
+              <p className="text-[10px] text-slate-400">قانون الخدمة المدنية: يوم عن كل 10 أيام خدمة (3 أيام شهرياً)</p>
             </div>
 
             {/* الحقل 2: الإجازة المرضية المضافة شهرياً */}
@@ -586,7 +599,7 @@ export default function LeaveTypesSettings() {
                 />
                 <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم / شهر</span>
               </div>
-              <p className="text-[10px] text-slate-400">تضاف للرصيد المرضي المعتمد براتب تام</p>
+              <p className="text-[10px] text-slate-400">تضاف للرصيد المرضي براتب تام (30 يوماً تاماً + 45 بنصف راتب لكل سنة خدمة)</p>
             </div>
 
             {/* الحقل 3: الحد الأقصى لتراكم الإجازة الاعتيادية */}
@@ -602,11 +615,11 @@ export default function LeaveTypesSettings() {
                   value={maxRegularCap}
                   onChange={(e) => setMaxRegularCap(e.target.value)}
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-[#1B3A6B]/20"
-                  placeholder="10000"
+                  placeholder="180"
                 />
                 <span className="absolute left-3 top-2.5 text-[11px] text-slate-400 font-bold">يوم كحد أقصى</span>
               </div>
-              <p className="text-[10px] text-slate-400">إدخال يدوي (الافتراضي 10,000 يوم)</p>
+              <p className="text-[10px] text-slate-400">قانون الخدمة المدنية: سقف التراكم 180 يوماً</p>
             </div>
 
             {/* الحقل 4: الحد الأقصى لتراكم الإجازة المرضية */}

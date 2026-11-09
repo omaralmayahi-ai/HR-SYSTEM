@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  TrendingUp, Award, Clock, Save, Plus, Edit2, Trash2, CheckCircle2, 
-  RotateCcw, Sparkles, AlertCircle, Check, X, Layers, ShieldCheck,
-  Bell, Calendar
+  TrendingUp, Award, Clock, Save, Plus, Edit2, Trash2, 
+  RotateCcw, AlertCircle, ShieldCheck,
+  Bell
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

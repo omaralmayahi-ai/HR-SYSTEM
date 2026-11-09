@@ -78,64 +78,86 @@ export function backfillEmployeeDates<T extends Record<string, any>>(emp: T): T 
   };
 }
 
+/** تصنيف الحركة حسب أثرها على القِدم */
+export type MovementKind = 'promotion' | 'increment' | 'degree_settlement' | 'demotion' | 'non_financial';
+
+export function classifyMovement(rawType: string | undefined | null): MovementKind {
+  const t = String(rawType || '').trim();
+  // «تسوية شهادة» يجب أن تُفحص قبل «ترفيع» لأن بعض التسميات تحتوي الكلمتين
+  if (t.includes('تسوية')) return 'degree_settlement';
+  if (t.includes('تنزيل')) return 'demotion';
+  if (t.includes('ترفيع')) return 'promotion';
+  if (t.includes('علاوة')) return 'increment';
+  // نقل، تكليف، انتداب، تغيير عنوان... حركات غير مالية لا تمس القِدم
+  return 'non_financial';
+}
+
 /**
- * تطبيق حركة ترقية (ترفيع درجة أو علاوة سنوية) على قيد الموظف
- * يفصل تماماً بين تاريخ آخر ترفيع وتاريخ آخر علاوة مع الحفاظ على تاريخ الدرجة للتوافق العكسي
+ * تطبيق حركة (ترفيع درجة، علاوة سنوية، تسوية شهادة، ...) على قيد الموظف
+ * - تاريخ النفاذ = تاريخ الاستحقاق (م7 من قانون 22/2008)، ولا يُستعمل تاريخ الأمر إلا إذا غاب تاريخ الاستحقاق.
+ * - الحركات غير المالية (نقل، تكليف...) لا تُغيّر تواريخ القِدم ولا الدرجة/المرحلة.
+ * - «تسوية شهادة» حدث تثبيت: تُحدّث last_promotion_date فقط ولا تُغيّر الدرجة ولا المرحلة.
+ * - لا يُختلق تاريخ: عند غياب التاريخين تُعاد الحالة «بيانات_ناقصة» دون أي تعديل.
  */
 export function applyMovementToEmployee(
   employee: EmployeeDatesRecord,
   movement: MovementPayload
-): { updatedEmployee: EmployeeDatesRecord; changedFields: Record<string, any> } {
+): { updatedEmployee: EmployeeDatesRecord; changedFields: Record<string, any>; status?: 'بيانات_ناقصة'; kind: MovementKind } {
   const movementType = (movement.movement_type || movement.movementType || '').trim();
-  const actionDate = movement.order_date || movement.orderDate || movement.due_date || movement.dueDate || new Date().toISOString().split('T')[0];
+  const kind = classifyMovement(movementType);
+  const effectiveDate = movement.due_date || movement.dueDate || movement.order_date || movement.orderDate || null;
 
   const updated: EmployeeDatesRecord = { ...employee };
   const changedFields: Record<string, any> = {};
 
-  if (movement.grade_after !== undefined || movement.gradeAfter !== undefined) {
-    const g = movement.grade_after || movement.gradeAfter;
-    updated.grade = g;
-    changedFields.grade = g;
+  if (kind === 'non_financial') {
+    return { updatedEmployee: updated, changedFields, kind };
   }
 
-  if (movement.step_after !== undefined || movement.stepAfter !== undefined) {
-    const s = parseInt(String(movement.step_after || movement.stepAfter));
-    updated.step = s;
-    changedFields.step = s;
+  if (!effectiveDate) {
+    return { updatedEmployee: updated, changedFields, status: 'بيانات_ناقصة', kind };
   }
 
-  // تحديث تاريخ الحركة الأساسي gradeDate دائماً للتوافق
-  if (actionDate) {
-    updated.gradeDate = actionDate;
-    updated.grade_date = actionDate;
-    changedFields.gradeDate = actionDate;
-    changedFields.grade_date = actionDate;
+  const setField = (camel: keyof EmployeeDatesRecord, snake: keyof EmployeeDatesRecord, value: any) => {
+    (updated as any)[camel] = value;
+    (updated as any)[snake] = value;
+    changedFields[camel as string] = value;
+    changedFields[snake as string] = value;
+  };
+
+  if (kind === 'degree_settlement') {
+    // تثبيت فقط: لا تغيير في الدرجة أو المرحلة أو تاريخ العلاوة
+    setField('lastPromotionDate', 'last_promotion_date', effectiveDate);
+    return { updatedEmployee: updated, changedFields, kind };
   }
 
-  // التوجيه الدقيق للتواريخ:
-  // ترفيع درجة -> يحدّث last_promotion_date ويحتفظ بـ last_increment_date
-  // علاوة سنوية -> يحدّث last_increment_date ويحتفظ بـ last_promotion_date دون مساس
-  if (movementType.includes('ترفيع')) {
-    updated.lastPromotionDate = actionDate;
-    updated.last_promotion_date = actionDate;
-    changedFields.lastPromotionDate = actionDate;
-    changedFields.last_promotion_date = actionDate;
-  } else if (movementType.includes('علاوة')) {
-    updated.lastIncrementDate = actionDate;
-    updated.last_increment_date = actionDate;
-    changedFields.lastIncrementDate = actionDate;
-    changedFields.last_increment_date = actionDate;
-  } else {
-    // حركة عامة أخرى
-    updated.lastPromotionDate = actionDate;
-    updated.last_promotion_date = actionDate;
-    updated.lastIncrementDate = actionDate;
-    updated.last_increment_date = actionDate;
-    changedFields.lastPromotionDate = actionDate;
-    changedFields.last_promotion_date = actionDate;
-    changedFields.lastIncrementDate = actionDate;
-    changedFields.last_increment_date = actionDate;
+  const gAfter = movement.grade_after ?? movement.gradeAfter;
+  if (gAfter !== undefined && gAfter !== null && gAfter !== '') {
+    updated.grade = gAfter;
+    changedFields.grade = gAfter;
   }
 
-  return { updatedEmployee: updated, changedFields };
+  const sAfter = movement.step_after ?? movement.stepAfter;
+  if (sAfter !== undefined && sAfter !== null && sAfter !== '') {
+    const s = parseInt(String(sAfter), 10);
+    if (!Number.isNaN(s)) {
+      updated.step = s;
+      changedFields.step = s;
+    }
+  }
+
+  // تاريخ الدرجة/المرحلة يتبع الحركة المالية التي غيّرتها
+  updated.gradeDate = effectiveDate;
+  updated.grade_date = effectiveDate;
+  changedFields.gradeDate = effectiveDate;
+  changedFields.grade_date = effectiveDate;
+
+  if (kind === 'promotion') {
+    setField('lastPromotionDate', 'last_promotion_date', effectiveDate);
+  } else if (kind === 'increment') {
+    setField('lastIncrementDate', 'last_increment_date', effectiveDate);
+  }
+  // demotion (تنزيل الدرجة بعقوبة): تتغير الدرجة/المرحلة فقط، ولا يُعاد ضبط القِدم هنا
+
+  return { updatedEmployee: updated, changedFields, kind };
 }

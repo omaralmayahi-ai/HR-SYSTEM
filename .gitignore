@@ -39,3 +39,10 @@ dist-ssr
 scratch/
 .antigravity/
 
+
+# Real payroll/HR data exports must never be committed
+temp/
+*.accdb
+*.mdb
+*.xlsx
+!public/**/*.xlsx

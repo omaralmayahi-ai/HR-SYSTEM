@@ -88,3 +88,18 @@ export function decryptData(cipherPayload: string, keyBuffer?: Buffer): string {
 
   return decrypted;
 }
+
+/**
+ * يتحقق من إعداد مفتاح تشفير التخزين المحلي عند الإقلاع.
+ * في الإنتاج يجب أن يكون LOCAL_DB_ENCRYPTION_KEY مضبوطاً بقيمة hex من 64 حرفاً،
+ * لأن المفتاح الاحتياطي الثابت معروف لكل من يقرأ الكود.
+ */
+export function validateEncryptionKeyConfig(): void {
+  const raw = (process.env.LOCAL_DB_ENCRYPTION_KEY || '').trim();
+  const valid = raw.length === 64 && /^[0-9a-fA-F]+$/.test(raw);
+  if (valid) return;
+  // لا يُرفض التشغيل هنا: ملف data/local_storage.json القائم قد يكون مشفراً بالمفتاح الاحتياطي،
+  // وتوليد مفتاح جديد يجعله غير مقروء. لوحة التحكم تولّد المفتاح عند غياب الملف.
+  const where = process.env.NODE_ENV === 'production' ? 'في الإنتاج' : 'في التطوير';
+  console.warn(`[SECURITY] LOCAL_DB_ENCRYPTION_KEY غير مضبوط أو غير صالح ${where}: يُستخدم المفتاح الاحتياطي الثابت المعروف. اضبطه من لوحة التحكم.`);
+}

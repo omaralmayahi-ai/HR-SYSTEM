@@ -7,30 +7,93 @@ const { Pool } = pkg;
 
 // Function to create a new connection pool.
 export const createPool = () => {
-  return new Pool({
+  const p = new Pool({
     host: process.env.SQL_HOST,
     port: process.env.SQL_PORT ? Number(process.env.SQL_PORT) : undefined,
     user: process.env.SQL_USER,
     password: process.env.SQL_PASSWORD,
     database: process.env.SQL_DB_NAME,
-    connectionTimeoutMillis: 15000,
+    connectionTimeoutMillis: 4000,
     idleTimeoutMillis: 30000,
     max: 20,
     keepAlive: true,
   });
+  p.on('error', (err) => {
+    console.warn('[PG-POOL] Idle client error (will reconnect automatically):', err?.message);
+  });
+  return p;
 };
 
 // Create a pool instance.
 export const pool = createPool();
 
+// --- Schema bootstrap health (exposed to admins via GET /api/admin/schema-health) ---
+export interface SchemaDdlError {
+  statement: string;
+  code: string | null;
+  message: string;
+  at: string;
+}
+
+// Postgres codes that only mean "this object already exists" — expected on every restart for
+// idempotent ADD CONSTRAINT / CREATE INDEX statements, so they are not reported as failures.
+const BENIGN_DDL_CODES = new Set(['42710', '42P07', '42701', '42P16']);
+const CONNECTION_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'EAI_AGAIN', 'ECONNRESET', 'ENETUNREACH', '08000', '08001', '08003', '08004', '08006', '57P01', '57P03', '28000', '28P01', '3D000']);
+
+const schemaHealth = {
+  status: 'not_run' as 'not_run' | 'ok' | 'errors' | 'offline',
+  startedAt: null as string | null,
+  finishedAt: null as string | null,
+  executed: 0,
+  benignSkipped: 0,
+  errors: [] as SchemaDdlError[],
+};
+
+export function getSchemaHealth() {
+  return { ...schemaHealth, errors: [...schemaHealth.errors], errorCount: schemaHealth.errors.length };
+}
+
+class SchemaOfflineError extends Error {}
+
+function isConnectionError(err: any): boolean {
+  if (!err) return false;
+  if (err.code && CONNECTION_CODES.has(String(err.code))) return true;
+  if (Array.isArray(err.errors) && err.errors.some((e: any) => e?.code && CONNECTION_CODES.has(String(e.code)))) return true;
+  const msg = String(err.message || '').toLowerCase();
+  return msg.includes('connection terminated') || msg.includes('timeout exceeded when trying to connect') || msg.includes('connect econnrefused');
+}
+
+function compactSql(q: string): string {
+  return q.replace(/\s+/g, ' ').trim().slice(0, 300);
+}
+
 // Ensure database schema columns exist
 export async function ensureSchema() {
+  schemaHealth.status = 'not_run';
+  schemaHealth.startedAt = new Date().toISOString();
+  schemaHealth.finishedAt = null;
+  schemaHealth.executed = 0;
+  schemaHealth.benignSkipped = 0;
+  schemaHealth.errors = [];
+
+  // DDL errors are no longer swallowed silently: each failure is logged with its statement and kept
+  // in schemaHealth.errors. Startup is not aborted (a missing permission must not take the system down).
   const safeQuery = async (queryText: string) => {
     try {
       const res = await pool.query(queryText);
+      schemaHealth.executed++;
       return res;
     } catch (err: any) {
-      // Ignore schema permission or table ownership warnings
+      if (isConnectionError(err)) throw new SchemaOfflineError(err?.message || 'database offline');
+      const code = err?.code ? String(err.code) : null;
+      if (code && BENIGN_DDL_CODES.has(code)) {
+        schemaHealth.benignSkipped++;
+        return undefined;
+      }
+      const entry: SchemaDdlError = { statement: compactSql(queryText), code, message: String(err?.message || err), at: new Date().toISOString() };
+      schemaHealth.errors.push(entry);
+      console.error(`[SCHEMA] فشل أمر DDL (code=${code || '-'}): ${entry.message}\n[SCHEMA]   ↳ ${entry.statement}`);
+      return undefined;
     }
   };
 
@@ -177,13 +240,8 @@ export async function ensureSchema() {
       await safeQuery(q);
     }
 
-    // Backfill existing employee records: copy grade_date to last_promotion_date and last_increment_date as best baseline estimate
-    await safeQuery(`
-      UPDATE employees 
-      SET last_promotion_date = COALESCE(last_promotion_date, grade_date, current_appointment_date, first_appointment_date, appointment_date),
-          last_increment_date = COALESCE(last_increment_date, grade_date, current_appointment_date, first_appointment_date, appointment_date)
-      WHERE last_promotion_date IS NULL OR last_increment_date IS NULL;
-    `);
+    // ملاحظة: أُزيلت تعبئة last_promotion_date/last_increment_date من grade_date أو تواريخ التعيين عند
+    // الإقلاع؛ كانت تثبّت قيماً مخمَّنة كأنها حقيقية. القيمة غير المسجلة تبقى NULL («غير معروف»).
 
     // رقم الشركة هو المعرّف الفريد الأساسي للموظف: يمنع تكرار نفس الرقم بين موظفين.
     // ملاحظة: إن وُجدت بيانات قديمة متكررة فعلياً، سيفشل هذا القيد بصمت (نمط safeQuery)
@@ -216,22 +274,34 @@ export async function ensureSchema() {
         name TEXT NOT NULL,
         type TEXT NOT NULL,
         calc_type TEXT NOT NULL,
-        value INTEGER NOT NULL,
+        calculation_base TEXT DEFAULT 'nominal',
+        value NUMERIC(14,4) NOT NULL,
+        category TEXT,
         status TEXT DEFAULT 'فعال',
+        deactivated_at TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await safeQuery(`ALTER TABLE allowances_deductions ADD COLUMN IF NOT EXISTS calculation_base TEXT DEFAULT 'nominal';`);
+    await safeQuery(`ALTER TABLE allowances_deductions ADD COLUMN IF NOT EXISTS deactivated_at TEXT;`);
+    // value: exact decimal (numeric) instead of REAL/INTEGER; category: explicit item category sent by the salary engine
+    await safeQuery(`ALTER TABLE allowances_deductions ALTER COLUMN value TYPE NUMERIC(14,4) USING value::numeric;`);
+    await safeQuery(`ALTER TABLE allowances_deductions ADD COLUMN IF NOT EXISTS category TEXT;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS work_locations (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
-        allowance_amount INTEGER DEFAULT 0,
+        allowance_amount REAL DEFAULT 0,
         work_start_hour TEXT DEFAULT '08:00',
         work_end_hour TEXT DEFAULT '15:00',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await safeQuery(`ALTER TABLE work_locations ALTER COLUMN allowance_amount TYPE REAL;`);
+    // (type fixes for education_degrees / responsibility_allowances moved after their CREATE TABLE)
+    await safeQuery(`ALTER TABLE employees ALTER COLUMN initial_regular_leave_balance TYPE REAL;`);
+    await safeQuery(`ALTER TABLE employees ALTER COLUMN initial_sick_leave_balance TYPE REAL;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS education_degrees (
@@ -256,6 +326,9 @@ export async function ensureSchema() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await safeQuery(`ALTER TABLE education_degrees ALTER COLUMN allowance_rate TYPE REAL;`);
+    await safeQuery(`ALTER TABLE education_degrees ALTER COLUMN higher_allowance_rate TYPE REAL;`);
+    await safeQuery(`ALTER TABLE responsibility_allowances ALTER COLUMN allowance_rate TYPE REAL;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS shift_systems (
@@ -460,6 +533,8 @@ export async function ensureSchema() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    // عدد أيام القطع لعقوبة قطع الراتب (يقرؤه محرك الترفيع لحساب مدة التأخير)
+    await safeQuery(`ALTER TABLE penalties ADD COLUMN IF NOT EXISTS days_count INTEGER;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS appreciations (
@@ -499,6 +574,27 @@ export async function ensureSchema() {
     `);
 
     await safeQuery(`ALTER TABLE performance_evaluations ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'مرفوع للاعتماد';`);
+    // Fix: align legacy performance_evaluations tables with the columns the code writes, and drop the
+    // payroll columns (total_deductions / net_salary NOT NULL) that were copied by mistake from
+    // salary_records in an earlier schema version and made every insert fail.
+    for (const col of [
+      `form_id INTEGER`, `form_title TEXT`, `scores_json TEXT`, `evaluator TEXT`, `evaluation_order TEXT`,
+      `evaluation_date TEXT`, `weaknesses TEXT`, `strengths TEXT`, `training_needs TEXT`,
+      `employee_opinion TEXT`, `notes TEXT`, `total_score INTEGER DEFAULT 0`, `grade TEXT DEFAULT 'بانتظار التقييم'`
+    ]) {
+      await safeQuery(`ALTER TABLE performance_evaluations ADD COLUMN IF NOT EXISTS ${col};`);
+    }
+    await safeQuery(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_evaluations' AND column_name = 'total_deductions') THEN
+          ALTER TABLE performance_evaluations ALTER COLUMN total_deductions DROP NOT NULL;
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_evaluations' AND column_name = 'net_salary') THEN
+          ALTER TABLE performance_evaluations ALTER COLUMN net_salary DROP NOT NULL;
+        END IF;
+      END $$;
+    `);
     // Fix: same class of bug as salary_records/leave_requests — this column was added to the CREATE TABLE
     // definition after the table already existed on deployed databases, so legacy installs never got it.
 
@@ -533,10 +629,14 @@ export async function ensureSchema() {
         status TEXT NOT NULL,
         check_in TEXT,
         check_out TEXT,
+        late_minutes INTEGER DEFAULT 0,
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    // Fix: the Drizzle schema declares late_minutes but the bootstrap table never had it, so every
+    // select/insert on attendance failed and the module never persisted to PostgreSQL.
+    await safeQuery(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS late_minutes INTEGER DEFAULT 0;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS org_units (
@@ -961,7 +1061,6 @@ export async function ensureSchema() {
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_leave INTEGER DEFAULT 30;`);
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_evaluation INTEGER DEFAULT 30;`);
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_absence INTEGER DEFAULT 10;`);
-    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
     // System Settings Table
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS system_settings (
@@ -984,6 +1083,33 @@ export async function ensureSchema() {
         retirement_notification_days INTEGER DEFAULT 90,
         degree_track_auto_settlement BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    // On a fresh database the ALTERs above ran before this CREATE and failed; re-apply them now (idempotent).
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS monthly_regular_leave_days REAL DEFAULT 3;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS monthly_sick_leave_days REAL DEFAULT 2.5;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS max_regular_leave_accumulation REAL DEFAULT 180;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS max_sick_leave_accumulation REAL DEFAULT 180;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_monthly_leave_accrual BOOLEAN DEFAULT TRUE;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS last_leave_accrual_month TEXT DEFAULT '';`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS last_leave_accrual_date TEXT DEFAULT '';`);
+    // Legal values (art. 43): ordinary leave 1 day / 10 days of service = 3 days per month, cap 180 days.
+    // Replace only the old wrong defaults (2.5 days, 10000 cap); a deliberately different value is kept.
+    await safeQuery(`ALTER TABLE system_settings ALTER COLUMN monthly_regular_leave_days SET DEFAULT 3;`);
+    await safeQuery(`UPDATE system_settings SET monthly_regular_leave_days = 3 WHERE monthly_regular_leave_days IS NULL OR monthly_regular_leave_days = 2.5;`);
+    await safeQuery(`UPDATE system_settings SET max_regular_leave_accumulation = 180 WHERE max_regular_leave_accumulation IS NULL OR max_regular_leave_accumulation > 180;`);
+
+    // Monthly leave accrual ledger: one row per month makes the accrual idempotent in the database
+    // itself (the month key used to live only in memory / data/local_storage.json).
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS leave_accrual_runs (
+        month TEXT PRIMARY KEY,
+        executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        employees_count INTEGER DEFAULT 0,
+        regular_days_added REAL NOT NULL,
+        sick_days_added REAL NOT NULL,
+        triggered_by TEXT
       );
     `);
 
@@ -1088,6 +1214,9 @@ export async function ensureSchema() {
     await safeQuery(`ALTER TABLE training_courses ADD COLUMN IF NOT EXISTS location TEXT;`);
     await safeQuery(`ALTER TABLE training_courses ADD COLUMN IF NOT EXISTS average TEXT;`);
     await safeQuery(`ALTER TABLE training_courses ADD COLUMN IF NOT EXISTS rank TEXT;`);
+    // مزامنة نتيجة التسجيل في موديول التدريب إلى سجل دورات الموظف: سجل واحد لكل (موظف، دورة)
+    await safeQuery(`ALTER TABLE training_courses ADD COLUMN IF NOT EXISTS source_training_id INTEGER;`);
+    await safeQuery(`CREATE UNIQUE INDEX IF NOT EXISTS training_courses_emp_source_training_uq ON training_courses (employee_id, source_training_id) WHERE source_training_id IS NOT NULL;`);
 
     // Transfers Table
     await safeQuery(`
@@ -1207,9 +1336,68 @@ export async function ensureSchema() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-  } catch (err) {
-    console.error('Migration execution notice:', err);
+
+    // Schema alignment: columns declared in schema.ts (and written by the routes) that the bootstrap
+    // tables above never had. Without them every SELECT/INSERT on these tables failed (42703) and the
+    // old code silently fell back to the in-memory store. Found by comparing schema.ts with a fresh DB.
+    const alignmentColumns = [
+      `ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_type TEXT`,
+      `ALTER TABLE documents ADD COLUMN IF NOT EXISTS entry_date TEXT`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS category TEXT`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS target_grades TEXT`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS applicable_responsibilities TEXT`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS applicable_qualifications TEXT`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS passing_score INTEGER DEFAULT 50`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS description TEXT`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS sections TEXT`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS enable_weaknesses BOOLEAN DEFAULT false`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS enable_strengths BOOLEAN DEFAULT false`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS enable_training_needs BOOLEAN DEFAULT false`,
+      `ALTER TABLE evaluation_forms ADD COLUMN IF NOT EXISTS enable_employee_opinion BOOLEAN DEFAULT false`,
+      `ALTER TABLE retirements ADD COLUMN IF NOT EXISTS retirement_date TEXT`,
+      `ALTER TABLE retirements ADD COLUMN IF NOT EXISTS reason TEXT`,
+      `ALTER TABLE retirements ADD COLUMN IF NOT EXISTS service_duration TEXT`,
+      `ALTER TABLE retirements ADD COLUMN IF NOT EXISTS pension_amount TEXT`,
+      `ALTER TABLE retirements ADD COLUMN IF NOT EXISTS pension_order_number TEXT`,
+      `ALTER TABLE retirements ADD COLUMN IF NOT EXISTS pension_order_date TEXT`,
+      `ALTER TABLE training_enrollments ADD COLUMN IF NOT EXISTS certificate_type TEXT`,
+      `ALTER TABLE training_enrollments ADD COLUMN IF NOT EXISTS certificate_issue_date TEXT`,
+      `ALTER TABLE training_enrollments ADD COLUMN IF NOT EXISTS trainer_rating TEXT`,
+      `ALTER TABLE training_enrollments ADD COLUMN IF NOT EXISTS course_feedback TEXT`,
+      `ALTER TABLE trainings ADD COLUMN IF NOT EXISTS course_code TEXT`,
+      `ALTER TABLE trainings ADD COLUMN IF NOT EXISTS is_outside_plan BOOLEAN DEFAULT false`,
+      `ALTER TABLE trainings ADD COLUMN IF NOT EXISTS target_audience TEXT`,
+      `ALTER TABLE trainings ADD COLUMN IF NOT EXISTS duration_value INTEGER DEFAULT 1`,
+      `ALTER TABLE trainings ADD COLUMN IF NOT EXISTS duration_unit TEXT DEFAULT 'بالأيام'`,
+      `ALTER TABLE trainings ADD COLUMN IF NOT EXISTS outside_plan_reason TEXT`,
+      `ALTER TABLE trainings ADD COLUMN IF NOT EXISTS trainer_rating TEXT`,
+      `ALTER TABLE trainings ADD COLUMN IF NOT EXISTS course_feedback TEXT`,
+      `ALTER TABLE transfers ADD COLUMN IF NOT EXISTS from_entity TEXT`,
+      `ALTER TABLE transfers ADD COLUMN IF NOT EXISTS to_entity TEXT`,
+      `ALTER TABLE transfers ADD COLUMN IF NOT EXISTS start_date TEXT`,
+      `ALTER TABLE transfers ADD COLUMN IF NOT EXISTS end_date TEXT`
+    ];
+    for (const q of alignmentColumns) {
+      await safeQuery(q);
+    }
+  } catch (err: any) {
+    if (err instanceof SchemaOfflineError) {
+      schemaHealth.status = 'offline';
+      schemaHealth.finishedAt = new Date().toISOString();
+      console.warn('[SCHEMA] قاعدة البيانات غير متاحة؛ لم يُنفَّذ تجهيز المخطط:', err.message);
+      return getSchemaHealth();
+    }
+    schemaHealth.errors.push({ statement: '(ensureSchema)', code: err?.code || null, message: String(err?.message || err), at: new Date().toISOString() });
+    console.error('[SCHEMA] خطأ غير متوقع أثناء تجهيز المخطط:', err);
   }
+  schemaHealth.status = schemaHealth.errors.length > 0 ? 'errors' : 'ok';
+  schemaHealth.finishedAt = new Date().toISOString();
+  if (schemaHealth.errors.length > 0) {
+    console.error(`[SCHEMA] انتهى تجهيز المخطط مع ${schemaHealth.errors.length} خطأ DDL (راجع GET /api/admin/schema-health)`);
+  } else {
+    console.log(`[SCHEMA] تم تجهيز المخطط بنجاح (${schemaHealth.executed} أمر)`);
+  }
+  return getSchemaHealth();
 }
 
 // Prevent unhandled pool-level errors from crashing the application

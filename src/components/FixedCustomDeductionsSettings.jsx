@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { fetchEducationDegreesSorted, fetchResponsibilityAllowancesSorted, subscribeToSettingsUpdates, notifySettingsChanged } from '@/lib/settingsUtils';
 import { useToast } from '@/components/ui/use-toast';
-import { doesEmployeeMatchCriteria } from '@/lib/salaryTable';
+import { doesEmployeeMatchCriteria, getItemCategory, ITEM_CATEGORIES, RETIREMENT_RATE } from '@/lib/salaryTable';
 import { 
   Plus, 
   Trash2, 
@@ -109,7 +109,7 @@ export default function FixedCustomDeductionsSettings() {
       const payload = {
         name: tempName,
         calcType: tempCalcType,
-        value: parseInt(tempValue),
+        value: parseFloat(tempValue),
       };
 
       await apiClient.entities.AllowanceDeduction.update(editingTempRecord.id, payload);
@@ -183,7 +183,7 @@ export default function FixedCustomDeductionsSettings() {
         name: tempName,
         type: 'deduction',
         calcType: tempCalcType,
-        value: parseInt(tempValue),
+        value: parseFloat(tempValue),
         status: 'فعال',
       };
 
@@ -253,7 +253,7 @@ export default function FixedCustomDeductionsSettings() {
   };
   
   // 1. Fixed Deductions State
-  const [retirementRate, setRetirementRate] = useState(5); // as percentage (5%)
+  const [retirementRate, setRetirementRate] = useState(RETIREMENT_RATE * 100); // 10% — قانون التقاعد الموحد 9 لسنة 2014
   const [retirementStatus, setRetirementStatus] = useState('فعال');
   const [savingFixed, setSavingFixed] = useState(false);
 
@@ -468,7 +468,9 @@ export default function FixedCustomDeductionsSettings() {
   const fetchFixedSettings = async () => {
     if (typeof window !== 'undefined') {
       const savedRetirement = localStorage.getItem('RETIREMENT_RATE');
-      if (savedRetirement) setRetirementRate((parseFloat(savedRetirement) || 0.05) * 100);
+      if (savedRetirement !== null && savedRetirement !== '' && Number.isFinite(parseFloat(savedRetirement))) {
+        setRetirementRate(parseFloat(savedRetirement) * 100);
+      }
 
       const savedRetStatus = localStorage.getItem('RETIREMENT_STATUS');
       if (savedRetStatus) setRetirementStatus(savedRetStatus);
@@ -477,14 +479,19 @@ export default function FixedCustomDeductionsSettings() {
     try {
       const allAllowances = await apiClient.entities.AllowanceDeduction.list();
       if (Array.isArray(allAllowances) && allAllowances.length > 0) {
-        const retRec = allAllowances.find(a => a.type === 'deduction' && (String(a.name).includes('تقاعد') || String(a.name).includes('التقاعد')));
+        const retRec = allAllowances.find(a => a.type === 'deduction' && getItemCategory(a) === ITEM_CATEGORIES.RETIREMENT);
         if (retRec) {
-          setRetirementRate(retRec.value !== undefined ? retRec.value : 10);
+          setRetirementRate(retRec.value !== undefined && retRec.value !== null ? retRec.value : RETIREMENT_RATE * 100);
           setRetirementStatus(retRec.status || 'فعال');
         }
       }
     } catch (e) {
-      console.warn('Fallback loading fixed deduction settings');
+      console.warn('Fallback loading fixed deduction settings', e);
+      toast({
+        title: 'تعذّر تحميل الاستقطاعات الثابتة من الخادم',
+        description: (e && e.message) || 'تُعرض القيم المحفوظة محلياً',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -500,13 +507,11 @@ export default function FixedCustomDeductionsSettings() {
       }
 
       // Synchronize with database allowances_deductions table for retirement
-      let allAllowances = [];
-      try {
-        allAllowances = await apiClient.entities.AllowanceDeduction.list();
-      } catch (err) {}
+      // أي خطأ هنا يُعرض للمستخدم (لا يُبلَّغ بنجاح الحفظ إذا فشل الحفظ في قاعدة البيانات)
+      const allAllowances = await apiClient.entities.AllowanceDeduction.list();
 
       if (Array.isArray(allAllowances)) {
-        const retRec = allAllowances.find(a => a.type === 'deduction' && (String(a.name).includes('تقاعد') || String(a.name).includes('التقاعد')));
+        const retRec = allAllowances.find(a => a.type === 'deduction' && getItemCategory(a) === ITEM_CATEGORIES.RETIREMENT);
         if (retRec) {
           await apiClient.entities.AllowanceDeduction.update(retRec.id, {
             name: retRec.name,
@@ -514,15 +519,16 @@ export default function FixedCustomDeductionsSettings() {
             calcType: 'percentage',
             value: finalRetRate,
             status: retirementStatus
-          }).catch(() => {});
+          });
         } else {
           await apiClient.entities.AllowanceDeduction.create({
             name: 'استقطاع توفير التقاعد الوطني',
+            category: ITEM_CATEGORIES.RETIREMENT,
             type: 'deduction',
             calcType: 'percentage',
             value: finalRetRate,
             status: retirementStatus
-          }).catch(() => {});
+          });
         }
       }
 
@@ -567,7 +573,7 @@ export default function FixedCustomDeductionsSettings() {
         name: record.name,
         type: record.type || 'deduction',
         calcType: record.calcType || record.calc_type || 'flat',
-        value: parseInt(record.value || 0),
+        value: parseFloat(record.value || 0),
         status: newStatus,
       };
 
@@ -619,8 +625,8 @@ export default function FixedCustomDeductionsSettings() {
       // Filter only deductions (not allowances) and exclude standard retirement and temporary ones
       const customOnly = data.filter(item => {
         if (!item) return false;
-        const name = String(item.name || '');
-        const isRetirement = (name.includes('تقاعد') || name.includes('التقاعد'));
+        // التقاعد يُعرَّف بالفئة الصريحة (أو بالاسم الكامل المعروف)، لا بكلمة داخل الاسم
+        const isRetirement = getItemCategory(item) === ITEM_CATEGORIES.RETIREMENT;
         
         let isTemp = false;
         try {
@@ -726,7 +732,7 @@ export default function FixedCustomDeductionsSettings() {
         name: newName,
         type: 'deduction',
         calcType: newCalcType,
-        value: parseInt(newValue),
+        value: parseFloat(newValue),
         status: newStatus,
       };
 
@@ -781,7 +787,7 @@ export default function FixedCustomDeductionsSettings() {
         name: editName,
         type: 'deduction',
         calcType: editCalcType,
-        value: parseInt(editValue),
+        value: parseFloat(editValue),
         status: editStatus,
       };
 
@@ -1056,6 +1062,7 @@ export default function FixedCustomDeductionsSettings() {
                 <div className="relative">
                   <input
                     type="number"
+                    step="any"
                     value={newValue}
                     onChange={(e) => setNewValue(e.target.value)}
                     className="w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#1B3A6B]"
@@ -1217,6 +1224,7 @@ export default function FixedCustomDeductionsSettings() {
                             {isEditing ? (
                               <input
                                 type="number"
+                                step="any"
                                 value={editValue}
                                 onChange={(e) => setEditValue(e.target.value)}
                                 className="px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-center focus:ring-1 focus:ring-[#1B3A6B] w-24"
@@ -2112,6 +2120,7 @@ export default function FixedCustomDeductionsSettings() {
                       <label className="text-xs font-bold text-slate-700">القيمة *</label>
                       <input
                         type="number"
+                        step="any"
                         value={tempValue}
                         onChange={(e) => setTempValue(e.target.value)}
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#1B3A6B]"

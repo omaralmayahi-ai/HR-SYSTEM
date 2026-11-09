@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { calculateSalary, formatCurrency, SALARY_TABLE, PROMOTION_YEARS, ANNUAL_INCREMENTS } from '@/lib/salaryTable';
-import { Plus, CheckCircle } from 'lucide-react';
+import { calculateSalary, formatCurrency, SALARY_TABLE, PROMOTION_YEARS, ANNUAL_INCREMENTS, loadPayrollSettings, isPayrollActiveEmployee } from '@/lib/salaryTable';
+import { Plus, CheckCircle, AlertTriangle } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
@@ -17,34 +17,27 @@ export default function Salaries() {
   const [year, setYear] = useState(currentYear);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [dbSalaryScale, setDbSalaryScale] = useState(null);
+  const [payrollOptions, setPayrollOptions] = useState(null);
+  const [loadErrors, setLoadErrors] = useState([]);
   const { toast } = useToast();
+  const dbSalaryScale = payrollOptions?.customSalaryTable || null;
 
   useEffect(() => {
-    apiClient.entities.Employee.filter({ status: 'فعال' }).then(setEmployees);
+    setLoadErrors([]);
+    // الموظفون المستمرون فعلاً (الحالة الافتراضية "مستمر")
+    apiClient.entities.Employee.list()
+      .then(list => setEmployees((Array.isArray(list) ? list : []).filter(isPayrollActiveEmployee)))
+      .catch(err => setLoadErrors(prev => [...prev, `تعذّر تحميل الموظفين: ${err?.message || err}`]));
     loadSalaries();
-    
-    // Load dynamic salary scale from DB
-    apiClient.entities.SalaryScale.list().then(records => {
-      if (records && records.length > 0) {
-        const scaleMap = {};
-        records.forEach(r => {
-          if (!scaleMap[r.grade]) scaleMap[r.grade] = {};
-          scaleMap[r.grade][r.step] = r.amount;
-        });
-        setDbSalaryScale(scaleMap);
-      }
-    }).catch(err => {
-      console.error("Error fetching db salary scale:", err);
-    });
 
-    // Sync custom allowances/deductions to presets cache
-    apiClient.entities.AllowanceDeduction.list().then(records => {
-      if (records) {
-        localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(records));
+    // إعدادات الاحتساب (السلم، البنود، الشهادات، المسؤوليات...) من قاعدة البيانات
+    loadPayrollSettings(apiClient).then(({ options, errors }) => {
+      setPayrollOptions(options);
+      if (errors.length > 0) setLoadErrors(prev => [...prev, ...errors]);
+      if (Array.isArray(options.allowancesDeductions)) {
+        // نسخة مخبأة تقرؤها شاشات قديمة (مثل تفاصيل الموظف)
+        localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(options.allowancesDeductions));
       }
-    }).catch(err => {
-      console.error("Error syncing custom allowances/deductions:", err);
     });
   }, [month, year]);
 
@@ -53,77 +46,74 @@ export default function Salaries() {
     apiClient.entities.SalaryRecord.filter({ month, year }).then(data => {
       setSalaries(data);
       setLoading(false);
+    }).catch(err => {
+      setLoadErrors(prev => [...prev, `تعذّر تحميل سجلات الرواتب: ${err?.message || err}`]);
+      setLoading(false);
     });
   };
 
+  const calcFor = (emp) => calculateSalary(emp, { ...(payrollOptions || {}), targetMonth: month, targetYear: year });
+
+  // الموظفون الذين لا يمكن احتساب رواتبهم لنقص بياناتهم (لا تُولَّد لهم قسيمة)
+  const incompleteEmployees = useMemo(() => {
+    if (!payrollOptions) return [];
+    return employees
+      .map(emp => ({ emp, calc: calcFor(emp) }))
+      .filter(x => x.calc.status === 'missing_data');
+  }, [employees, payrollOptions, month, year]);
+
   const generateSalaries = async () => {
+    if (!payrollOptions || loadErrors.length > 0) {
+      toast({ title: 'لا يمكن توليد الرواتب', description: 'تعذّر تحميل إعدادات الاحتساب كاملة من قاعدة البيانات. راجع رسائل الخطأ أعلى الصفحة.', variant: 'destructive' });
+      return;
+    }
     setGenerating(true);
-    
-    // Auto expiration check for temporary allowances/deductions
     try {
-      const presetsStr = localStorage.getItem('ALLOWANCES_DEDUCTIONS_PRESETS');
-      if (presetsStr) {
-        const presets = JSON.parse(presetsStr);
-        let updated = false;
-        const nextPresets = presets.map(p => {
-          let isTemp = false;
-          let meta = null;
-          try {
-            const metaStr = localStorage.getItem(`TEMPORARY_META_${p.id}`);
-            if (metaStr) {
-              meta = JSON.parse(metaStr);
-              isTemp = meta.isTemporary;
-            }
-          } catch (e) {}
-
-          if (isTemp && meta && p.status === 'فعال') {
-            let expired = false;
-            if (meta.timingType === 'single') {
-              if (meta.paymentYear < year || (meta.paymentYear === year && meta.paymentMonth < month)) {
-                expired = true;
-              }
-            } else if (meta.timingType === 'range') {
-              if (meta.endYear < year || (meta.endYear === year && meta.endMonth < month)) {
-                expired = true;
-              }
-            }
-
-            if (expired) {
-              updated = true;
-              return { ...p, status: 'موقوف' };
-            }
+      const existing = await apiClient.entities.SalaryRecord.filter({ month, year });
+      const existingIds = new Set(existing.map(s => s.employee_id));
+      let skippedIncomplete = 0;
+      const toCreate = [];
+      employees
+        .filter(e => !existingIds.has(e.id))
+        .forEach(emp => {
+          const calc = calcFor(emp);
+          if (calc.status === 'missing_data') {
+            skippedIncomplete++;
+            return;
           }
-          return p;
+          toCreate.push({
+            employee_id: emp.id,
+            month,
+            year,
+            base_salary: calc.base_salary,
+            total_allowances: calc.total_allowances,
+            total_deductions: calc.total_deductions,
+            net_salary: calc.net_salary,
+            status: 'مسودة'
+          });
         });
-
-        if (updated) {
-          localStorage.setItem('ALLOWANCES_DEDUCTIONS_PRESETS', JSON.stringify(nextPresets));
-          console.log('Expired temporary allowances/deductions have been automatically stopped.');
-        }
+      if (toCreate.length > 0) {
+        await apiClient.entities.SalaryRecord.bulkCreate(toCreate);
       }
-    } catch (errExpire) {
-      console.error('Error in automatic expiration logic:', errExpire);
-    }
-
-    const existing = await apiClient.entities.SalaryRecord.filter({ month, year });
-    const existingIds = new Set(existing.map(s => s.employee_id));
-    const toCreate = employees
-      .filter(e => !existingIds.has(e.id))
-      .map(emp => {
-        const calc = calculateSalary(emp, 0, 0, 0, 0, 0, dbSalaryScale, null, null, null, null, month, year);
-        return { employee_id: emp.id, month, year, ...calc, status: 'مسودة' };
+      toast({
+        title: `تم توليد ${toCreate.length} قسيمة راتب`,
+        description: skippedIncomplete > 0 ? `لم تُولَّد ${skippedIncomplete} قسيمة لموظفين بيانات ناقصة` : undefined
       });
-    if (toCreate.length > 0) {
-      await apiClient.entities.SalaryRecord.bulkCreate(toCreate);
+      loadSalaries();
+    } catch (err) {
+      toast({ title: 'فشل توليد الرواتب', description: err?.message || String(err), variant: 'destructive' });
+    } finally {
+      setGenerating(false);
     }
-    toast({ title: `تم توليد ${toCreate.length} قسيمة راتب` });
-    loadSalaries();
-    setGenerating(false);
   };
 
   const approveSalary = async (salaryId) => {
-    await apiClient.entities.SalaryRecord.update(salaryId, { status: 'معتمد' });
-    loadSalaries();
+    try {
+      await apiClient.entities.SalaryRecord.update(salaryId, { status: 'معتمد' });
+      loadSalaries();
+    } catch (err) {
+      toast({ title: 'فشل اعتماد الراتب', description: err?.message || String(err), variant: 'destructive' });
+    }
   };
 
   const employeeMap = Object.fromEntries(employees.map(e => [e.id, e]));
@@ -159,6 +149,29 @@ export default function Salaries() {
           <span className="font-bold text-[#1B3A6B]">{formatCurrency(totalNet)}</span>
         </div>
       </div>
+
+      {loadErrors.length > 0 && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 text-sm space-y-1">
+          {loadErrors.map((e, i) => <div key={i}>{e}</div>)}
+        </div>
+      )}
+
+      {incompleteEmployees.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+          <div className="flex items-center gap-2 font-bold text-amber-800 mb-2">
+            <AlertTriangle size={16} /> بيانات ناقصة — لا تُولَّد قسيمة راتب ({incompleteEmployees.length})
+          </div>
+          <ul className="text-sm text-amber-900 space-y-1 max-h-48 overflow-y-auto">
+            {incompleteEmployees.map(({ emp, calc }) => (
+              <li key={emp.id}>
+                <span className="font-medium">{emp.full_name || emp.id}</span>
+                <span className="mx-2 px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-800">بيانات ناقصة</span>
+                <span className="text-amber-700">{calc.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Salary Table */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">

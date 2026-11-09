@@ -116,7 +116,7 @@ export default function ResponsibilitySettings() {
     try {
       const payload = {
         name: newName,
-        allowance_rate: parseInt(newAllowanceRate) || 0,
+        allowance_rate: parseFloat(newAllowanceRate) || 0,
       };
       await apiClient.entities.ResponsibilityAllowance.create(payload);
       toast({
@@ -163,7 +163,7 @@ export default function ResponsibilitySettings() {
     try {
       const payload = {
         name: editName,
-        allowance_rate: parseInt(editAllowanceRate) || 0,
+        allowance_rate: parseFloat(editAllowanceRate) || 0,
       };
       await apiClient.entities.ResponsibilityAllowance.update(id, payload);
       toast({
@@ -266,11 +266,12 @@ export default function ResponsibilitySettings() {
               <label className="text-xs font-bold text-slate-700 block">نسبة مخصص المنصب والمسؤولية (%) *</label>
               <input
                 type="number"
+                step="any"
                 required
                 min="0"
                 max="150"
                 value={newAllowanceRate}
-                onChange={(e) => setNewAllowanceRate(parseInt(e.target.value) || 0)}
+                onChange={(e) => setNewAllowanceRate(e.target.value)}
                 placeholder="مثال: 25 تعني 25%"
                 className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs focus:ring-2 focus:ring-[#1B3A6B]/20 text-slate-800 font-bold"
               />
@@ -362,10 +363,11 @@ export default function ResponsibilitySettings() {
                           <div className="flex items-center gap-1.5">
                             <input
                               type="number"
+                              step="any"
                               min="0"
                               max="150"
                               value={editAllowanceRate}
-                              onChange={(e) => setEditAllowanceRate(parseInt(e.target.value) || 0)}
+                              onChange={(e) => setEditAllowanceRate(e.target.value)}
                               className="w-24 bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-[#1B3A6B]/20"
                             />
                             <span className="font-bold text-slate-500">%</span>

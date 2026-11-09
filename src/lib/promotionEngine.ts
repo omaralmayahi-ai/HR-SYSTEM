@@ -13,6 +13,8 @@
  * 6. الشروط الحاكمة (Gate Conditions): الدورات الحتمية، تقييم الأداء (لا مقبول/ضعيف)، الإجازات الموقفة.
  */
 
+import { calculateDegreeTrackSimulation } from './degreeTrackEngine';
+
 export interface EmployeeEntity {
   id: number | string;
   fullName?: string;
@@ -187,7 +189,7 @@ export interface GradePromotionRuleRecord {
 export interface EngineContextData {
   commendations?: CommendationRecord[];
   penalties?: PenaltyRecord[];
-  penaltyTypes?: Record<string, number>; // e.g. { 'إنذار': 3, 'توبيخ': 6 }
+  penaltyTypes?: PenaltyTypesInput; // خريطة { 'إنذار': 6 } أو سجلات penalty_types من الإعدادات
   attendances?: AttendanceRecord[];
   evaluations?: EvaluationRecord[];
   leaves?: LeaveRecord[];
@@ -225,7 +227,7 @@ export interface IncrementEligibilityResult {
   nextIncrementDueDate: string | null;
   baseDueDate: string | null;
   lastIncrementDate: string | null;
-  eligibilityStatus: 'مستحق_للعلاوة' | 'مؤهل' | 'غير_مستحق_حاليا' | 'متوقف_بعقوبة' | 'غير_مدعوم_حاليا' | 'نهاية_المرحلة';
+  eligibilityStatus: 'مستحق_للعلاوة' | 'مؤهل' | 'غير_مستحق_حاليا' | 'متوقف_بعقوبة' | 'موقوف_بإجازة' | 'غير_مدعوم_حاليا' | 'نهاية_المرحلة' | 'بيانات_ناقصة';
   isIncrementEligible?: boolean;
   commendationMonthsDeducted: number;
   penaltyMonthsAdded: number;
@@ -245,6 +247,7 @@ export interface IncrementEligibilityResult {
   isSupported: boolean;
   statusReason?: string;
   unsupportedReason?: string;
+  blockingLeaveDaysAdded?: number;
   appliedCommendationsCount: number;
   appliedPenaltiesCount: number;
   appliedAbsenceDays: number;
@@ -278,7 +281,8 @@ export interface PromotionEligibilityResult {
     | 'متوقف_بسبب_التقييم'
     | 'موقوف_بإجازة'
     | 'نهاية_السلم_الوظيفي'
-    | 'غير_مدعوم_حاليا';
+    | 'غير_مدعوم_حاليا'
+    | 'بيانات_ناقصة';
   isPromotionEligible?: boolean;
   statusReason?: string;
   unsupportedReason?: string;
@@ -298,6 +302,7 @@ export interface PromotionEligibilityResult {
     serviceCreditMonths: number;
   };
   gateCheckResults: PromotionGateCheckResults;
+  blockingLeaveDaysAdded?: number;
   gateChecks?: {
     governingCoursesSatisfied: boolean;
     evaluationsSatisfied: boolean;
@@ -312,8 +317,8 @@ export interface PromotionEligibilityResult {
 export interface FullEligibilityResponse {
   employeeId: number | string;
   employeeName: string;
-  grade: number;
-  step: number;
+  grade: number | null;
+  step: number | null;
   isSupported: boolean;
   unsupportedReason?: string;
   increment: IncrementEligibilityResult;
@@ -426,6 +431,241 @@ export const DEFAULT_PENALTY_DELAYS: Record<string, number> = {
 };
 
 // ============================================================================
+// Shared rule helpers (العقوبات، الإجازات، الخدمة المحتسبة)
+// ============================================================================
+
+export interface PenaltyTypeSetting {
+  id?: number | string;
+  name: string;
+  delayMonths?: number | null;
+  delay_months?: number | null;
+  salaryDeductionDays?: number | null;
+  salary_deduction_days?: number | null;
+  status?: string;
+  [key: string]: any;
+}
+
+/** يقبل خريطة {الاسم: أشهر التأخير} أو مصفوفة سجلات penalty_types من قاعدة البيانات */
+export type PenaltyTypesInput = Record<string, number> | PenaltyTypeSetting[] | undefined | null;
+
+function normalizePenaltyName(name: string): string {
+  return String(name || '')
+    .replace(/\(.*?\)/g, '')
+    .replace(/[إأآ]/g, 'ا')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^ال/, '');
+}
+
+export function isSalaryCutPenalty(name: string): boolean {
+  return normalizePenaltyName(name).startsWith('قطع') && normalizePenaltyName(name).includes('راتب');
+}
+
+export function isDemotionPenalty(name: string): boolean {
+  return normalizePenaltyName(name).startsWith('تنزيل');
+}
+
+/** حد أدنى لتأخير قطع الراتب (5 أشهر حتى 5 أيام قطع) */
+export const SALARY_CUT_BASE_DELAY_MONTHS = 5;
+export const SALARY_CUT_BASE_DAYS = 5;
+
+/**
+ * تأخير عقوبة قطع الراتب حسب عدد أيام القطع — قانون انضباط موظفي الدولة 14/1991 م8/ثالثاً:
+ * 5 أشهر إن لم يتجاوز القطع 5 أيام، ويُزاد شهر عن كل يوم يتجاوز الخمسة.
+ * أي: التأخير = 5 + max(0, الأيام − 5).
+ * «يُتحقق»: المعادلة مأخوذة من مصدر ثانوي (محاماة نت، مراجعة R2/R3) ولم يُطابق النص الرسمي في الوقائع العراقية.
+ */
+export function salaryCutDelayMonths(days: number | null | undefined): number {
+  const d = Number(days);
+  if (!Number.isFinite(d) || d <= 0) return SALARY_CUT_BASE_DELAY_MONTHS;
+  return SALARY_CUT_BASE_DELAY_MONTHS + Math.max(0, Math.ceil(d) - SALARY_CUT_BASE_DAYS);
+}
+
+function lookupPenaltyType(pType: string, penaltyTypes: PenaltyTypesInput): { delayMonths?: number; deductionDays?: number } | null {
+  const target = normalizePenaltyName(pType);
+  if (!target) return null;
+  if (Array.isArray(penaltyTypes)) {
+    const found = penaltyTypes.find(t => normalizePenaltyName(t?.name) === target);
+    if (!found) return null;
+    const dm = found.delayMonths ?? found.delay_months;
+    const dd = found.salaryDeductionDays ?? found.salary_deduction_days;
+    return {
+      delayMonths: dm === null || dm === undefined ? undefined : Number(dm),
+      deductionDays: dd === null || dd === undefined ? undefined : Number(dd),
+    };
+  }
+  const map = penaltyTypes || DEFAULT_PENALTY_DELAYS;
+  if (map[pType] !== undefined) return { delayMonths: Number(map[pType]) };
+  const key = Object.keys(map).find(k => normalizePenaltyName(k) === target);
+  return key !== undefined ? { delayMonths: Number(map[key]) } : null;
+}
+
+/** هل العقوبة نافذة الأثر؟ (نافذ، ولم يُقبل الطعن بها) */
+export function isPenaltyInEffect(p: PenaltyRecord): boolean {
+  const status = String(p.status || 'نافذ').trim();
+  if (status !== 'نافذ' && status !== 'active') return false;
+  const appeal = String(p.appealStatus || p.appeal_status || '').trim();
+  if (appeal && appeal.includes('مقبول') && !appeal.includes('غير')) return false;
+  if (appeal === 'accepted') return false;
+  return true;
+}
+
+/**
+ * أشهر التأخير التي ترتبها العقوبة على العلاوة/الترفيع.
+ * - تنزيل الدرجة: ليس تأخيراً (يُنفَّذ كحركة تُنزل الراتب) ⇒ 0 هنا.
+ * - قطع الراتب: يتدرج بعدد أيام القطع (م8/ثالثاً).
+ * - غير ذلك: قيمة السجل نفسه إن وُجدت، ثم إعدادات أنواع العقوبات، ثم الجدول الافتراضي.
+ */
+export function resolvePenaltyDelayMonths(p: PenaltyRecord, penaltyTypes?: PenaltyTypesInput): number {
+  const pType = String(p.penaltyType || p.penalty_type || '');
+  if (isDemotionPenalty(pType)) return 0;
+
+  const setting = lookupPenaltyType(pType, penaltyTypes) || (Array.isArray(penaltyTypes) ? lookupPenaltyType(pType, DEFAULT_PENALTY_DELAYS) : null);
+
+  if (isSalaryCutPenalty(pType)) {
+    const recDays = p.salaryDeductionDays ?? p.salary_deduction_days ?? p.daysCount ?? p.days_count ?? p.deductionDays ?? p.deduction_days;
+    const days = recDays !== undefined && recDays !== null && Number(recDays) > 0 ? Number(recDays) : setting?.deductionDays;
+    return salaryCutDelayMonths(days);
+  }
+
+  const own = p.delayMonths !== undefined && p.delayMonths !== null ? p.delayMonths : p.delay_months;
+  if (own !== undefined && own !== null && !Number.isNaN(Number(own))) return Number(own);
+  return setting?.delayMonths && setting.delayMonths > 0 ? setting.delayMonths : 0;
+}
+
+/** حالات الإجازة المعتمدة (توحيد المفردات: الواجهة «معتمد»، الخادم «مقبولة»، قديماً «موافق_عليها») */
+export function isApprovedLeaveStatus(status: any): boolean {
+  const s = String(status ?? '').trim();
+  if (!s) return true;
+  return ['معتمد', 'معتمدة', 'مقبولة', 'مقبول', 'موافق_عليها', 'موافق عليها', 'ساري', 'نشط', 'approved'].includes(s);
+}
+
+function isUnpaidLeave(lv: LeaveRecord): boolean {
+  const pay = String(lv.salaryPaymentType || lv.salary_payment_type || lv.financialEffect || lv.financial_effect || '');
+  const name = String(lv.leaveType || lv.leave_type || '');
+  return pay === 'بدون_راتب' || name.includes('بدون راتب');
+}
+
+export function isLeaveBlocking(lv: LeaveRecord, target: 'increment' | 'promotion'): boolean {
+  const adminEffect = String(lv.administrativeEffect || lv.administrative_effect || '');
+  if (isUnpaidLeave(lv)) return true;
+  if (Boolean(lv.affectsPromotion ?? lv.affects_promotion)) return true;
+  if (adminEffect === 'يوقف_الترفيع' || adminEffect === 'pause_promotion' || adminEffect.includes('الترفيع')) return true;
+  if (target === 'increment') {
+    if (Boolean(lv.affectsIncrement ?? lv.affects_increment)) return true;
+    if (adminEffect === 'يوقف_العلاوة_والترفيع' || adminEffect.includes('العلاوة')) return true;
+  }
+  return false;
+}
+
+function daysInclusive(startStr: string, endStr: string): number {
+  const ms = parseDateString(endStr).getTime() - parseDateString(startStr).getTime();
+  return Math.floor(ms / 86400000) + 1;
+}
+
+/**
+ * أيام الإجازات الموقفة (بدون راتب أو ذات أثر يوقف العلاوة/الترفيع) الواقعة بعد بداية الدورة:
+ * لا تُحسب خدمةً، فتُضاف إلى تاريخ الاستحقاق بعدد أيامها (R2 #6، R3 #9).
+ * الإجازة التي تبدأ بعد تاريخ القطع (cutoff) تؤجل للدورة التالية.
+ */
+export function computeBlockingLeaveExtension(
+  leaves: LeaveRecord[],
+  anchorDate: string,
+  target: 'increment' | 'promotion',
+  cutoffDate?: string
+): { days: number; leaves: Array<{ id?: any; leaveType: string; startDate: string; endDate: string; days: number }> } {
+  let total = 0;
+  const applied: Array<{ id?: any; leaveType: string; startDate: string; endDate: string; days: number }> = [];
+  (leaves || []).forEach(lv => {
+    if (!isLeaveBlocking(lv, target) || !isApprovedLeaveStatus(lv.status)) return;
+    const sDate = lv.startDate || lv.start_date || '';
+    const eDate = lv.endDate || lv.end_date || '';
+    if (!sDate || !eDate) return;
+    if (!isDateOnOrAfter(eDate, anchorDate)) return; // انتهت قبل بداية الدورة
+    if (cutoffDate && isDateOnOrAfter(sDate, cutoffDate)) return; // مؤجلة للدورة التالية
+    const from = isDateOnOrAfter(sDate, anchorDate) ? sDate : anchorDate;
+    const d = daysInclusive(from, eDate);
+    if (d <= 0) return;
+    total += d;
+    applied.push({ id: lv.id, leaveType: String(lv.leaveType || lv.leave_type || 'إجازة موقفة'), startDate: sDate, endDate: eDate, days: d });
+  });
+  return { days: total, leaves: applied };
+}
+
+function creditPart(sc: ServiceCreditRecord, camel: 'calculatedYears' | 'calculatedMonths' | 'calculatedDays', snake: string, plain: string): number {
+  const v = sc[camel] !== undefined && sc[camel] !== null ? sc[camel] : (sc[snake] !== undefined && sc[snake] !== null ? sc[snake] : sc[plain]);
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function serviceCreditAppliesTo(sc: ServiceCreditRecord, target: 'increment' | 'promotion'): boolean {
+  if (sc.isCountedForPromotion === false || sc.is_counted_for_promotion === false) return false;
+  const purpose = String(sc.purpose || '').trim();
+  if (purpose === 'تقاعد_فقط' || purpose === 'pension_only') return false;
+  if (target === 'increment' && (purpose === 'ترفيع_فقط' || purpose === 'promotion_only')) return false;
+  if (target === 'promotion' && (purpose === 'علاوة_فقط' || purpose === 'increment_only' || purpose === 'allowance_only')) return false;
+  return true;
+}
+
+/**
+ * الخدمة المحتسبة تُطبَّق مرة واحدة فقط: على الدورة التي يقع فيها تاريخ أمرها
+ * (تاريخ الأمر بعد تاريخ بداية الدورة). السجل الذي يسبق أمره بداية الدورة استُهلك في دورة سابقة.
+ * السجل بلا تاريخ أمر لا يمكن نسبته إلى دورة فلا يُطبَّق (ويُعاد ضمن missingOrderDate).
+ */
+export function collectCycleServiceCredits(
+  credits: ServiceCreditRecord[],
+  anchorDate: string,
+  target: 'increment' | 'promotion'
+): { years: number; months: number; days: number; latestOrderDate: string | null; missingOrderDate: ServiceCreditRecord[] } {
+  let years = 0, months = 0, days = 0;
+  let latestOrderDate: string | null = null;
+  const missingOrderDate: ServiceCreditRecord[] = [];
+  const seen = new Set<string>();
+  (credits || []).forEach(sc => {
+    if (!serviceCreditAppliesTo(sc, target)) return;
+    const od = sc.orderDate || sc.order_date;
+    if (!od) { missingOrderDate.push(sc); return; }
+    // السجل نفسه قد يرد من service_records و service_credits معاً: يُحتسب مرة واحدة
+    const on = String(sc.orderNumber || sc.order_number || '').trim();
+    if (on) {
+      const key = [on, formatDateString(od),
+        creditPart(sc, 'calculatedYears', 'calculated_years', 'years'),
+        creditPart(sc, 'calculatedMonths', 'calculated_months', 'months'),
+        creditPart(sc, 'calculatedDays', 'calculated_days', 'days')].join('|');
+      if (seen.has(key)) return;
+      seen.add(key);
+    }
+    if (!isDateOnOrAfter(od, anchorDate) || formatDateString(od) === formatDateString(anchorDate)) return;
+    years += creditPart(sc, 'calculatedYears', 'calculated_years', 'years');
+    months += creditPart(sc, 'calculatedMonths', 'calculated_months', 'months');
+    days += creditPart(sc, 'calculatedDays', 'calculated_days', 'days');
+    if (!latestOrderDate || isDateOnOrAfter(od, latestOrderDate)) latestOrderDate = formatDateString(od);
+  });
+  return { years, months, days, latestOrderDate, missingOrderDate };
+}
+
+export function parseGradeValue(v: any): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = parseInt(String(v), 10);
+  return Number.isFinite(n) && n >= 1 && n <= 13 ? n : null;
+}
+
+export function parseStepValue(v: any): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = parseInt(String(v), 10);
+  return Number.isFinite(n) && n >= 1 ? n : null;
+}
+
+/** الغياب غير المبرر الذي يؤخر الاستحقاق (يشمل مفردة الواجهة «غائب بدون إذن») */
+export function isUnexcusedAbsenceStatus(status: string): boolean {
+  const s = String(status || '').trim();
+  return ['غائب', 'غياب', 'غياب_بدون_عذر', 'غياب بدون عذر', 'غائب بدون إذن', 'غائب بدون اذن', 'غائب_بدون_إذن', 'absence'].includes(s);
+}
+
+/** آخر مرحلة في الدرجة (سلم 22/2008: 11 مرحلة لكل درجة) */
+export const MAX_STEP_PER_GRADE = 11;
+
+// ============================================================================
 // Gate Conditions Checker
 // ============================================================================
 
@@ -436,7 +676,7 @@ export function checkGateConditions(
   outDeferredItems?: DeferredImpactItem[]
 ): PromotionGateCheckResults {
   const today = context.today || formatDateString(new Date());
-  const gradeNum = parseInt(String(employee.grade)) || 10;
+  const gradeNum = parseGradeValue(employee.grade);
 
   // A. Governing Courses Gate (الدورات الحاكمة)
   const governingCourses = (context.governingCourses || []).filter(
@@ -548,16 +788,10 @@ export function checkGateConditions(
   let pausingLeaveDetails: PromotionGateCheckResults['pausingLeaveDetails'] = null;
 
   leaves.forEach(lv => {
-    const adminEffect = lv.administrativeEffect || lv.administrative_effect || '';
-    const isPausing = Boolean(lv.affectsPromotion ?? lv.affects_promotion) || 
-                      adminEffect === 'يوقف_الترفيع' || 
-                      adminEffect === 'pause_promotion' || 
-                      adminEffect.includes('الترفيع');
-    if (!isPausing) return;
+    if (!isLeaveBlocking(lv, 'promotion')) return;
     const sDate = lv.startDate || lv.start_date || '';
     const eDate = lv.endDate || lv.end_date || '';
-    const isApproved = lv.status === 'موافق_عليها' || lv.status === 'ساري' || lv.status === 'نشط' || lv.status === 'approved' || !lv.status;
-    if (!isApproved) return;
+    if (!isApprovedLeaveStatus(lv.status)) return;
 
     const isAfterCutoff = cutoffDate && sDate ? isDateOnOrAfter(sDate, cutoffDate) : false;
     if (isAfterCutoff) {
@@ -603,47 +837,36 @@ export function checkGateConditions(
 // Main Calculation Logic: Increment Eligibility (العلاوة السنوية)
 // ============================================================================
 
-export function calculateIncrementEligibility(
-  employee: EmployeeEntity,
-  context: EngineContextData = {}
+function emptyIncrementResult(
+  status: IncrementEligibilityResult['eligibilityStatus'],
+  reason: string,
+  lastIncr: string | null,
+  extra: Partial<IncrementEligibilityResult> = {}
 ): IncrementEligibilityResult {
-  const today = context.today || formatDateString(new Date());
+  return {
+    nextIncrementDueDate: null,
+    baseDueDate: null,
+    lastIncrementDate: lastIncr,
+    eligibilityStatus: status,
+    isIncrementEligible: false,
+    commendationMonthsDeducted: 0,
+    penaltyMonthsAdded: 0,
+    absenceDaysAdded: 0,
+    serviceCreditDurationDeducted: { years: 0, months: 0, days: 0 },
+    modifiers: { commendationMonths: 0, penaltyDelayMonths: 0, absenceDays: 0, serviceCreditMonths: 0 },
+    deferredItems: [],
+    isSupported: true,
+    statusReason: reason,
+    blockingLeaveDaysAdded: 0,
+    appliedCommendationsCount: 0,
+    appliedPenaltiesCount: 0,
+    appliedAbsenceDays: 0,
+    ...extra,
+  };
+}
 
-  // 1. Check in-service qualification boundary (المسار الاعتيادي فقط)
-  const quals = context.qualifications || [];
-  const hasInServiceDegree = quals.some(
-    q => (q.qualificationType === 'أثناء الخدمة' || q.qualification_type === 'أثناء الخدمة') && (q.isActive !== false && q.is_active !== false)
-  );
-
-  if (hasInServiceDegree) {
-    return {
-      nextIncrementDueDate: null,
-      baseDueDate: null,
-      lastIncrementDate: employee.lastIncrementDate || employee.last_increment_date || null,
-      eligibilityStatus: 'غير_مدعوم_حاليا',
-      isIncrementEligible: false,
-      commendationMonthsDeducted: 0,
-      penaltyMonthsAdded: 0,
-      absenceDaysAdded: 0,
-      serviceCreditDurationDeducted: { years: 0, months: 0, days: 0 },
-      modifiers: {
-        commendationMonths: 0,
-        penaltyDelayMonths: 0,
-        absenceDays: 0,
-        serviceCreditMonths: 0,
-      },
-      deferredItems: [],
-      isSupported: false,
-      statusReason: 'الموظف مرتبط بمسار احتساب الشهادات أثناء الخدمة — مسار احتساب الشهادات قيد التطوير في المرحلة القادمة',
-      unsupportedReason: 'الموظف مرتبط بمسار احتساب الشهادات أثناء الخدمة — مسار احتساب الشهادات قيد التطوير في المرحلة القادمة',
-      appliedCommendationsCount: 0,
-      appliedPenaltiesCount: 0,
-      appliedAbsenceDays: 0,
-    };
-  }
-
-  // 2. Determine base last increment date
-  const lastIncr =
+function resolveLastIncrementDate(employee: EmployeeEntity): string | null {
+  return (
     employee.lastIncrementDate ||
     employee.last_increment_date ||
     employee.gradeDate ||
@@ -654,35 +877,89 @@ export function calculateIncrementEligibility(
     employee.first_appointment_date ||
     employee.appointmentDate ||
     employee.appointment_date ||
-    today;
+    null
+  );
+}
+
+function resolveLastPromotionDate(employee: EmployeeEntity): string | null {
+  return (
+    employee.lastPromotionDate ||
+    employee.last_promotion_date ||
+    employee.gradeDate ||
+    employee.grade_date ||
+    employee.currentAppointmentDate ||
+    employee.current_appointment_date ||
+    employee.firstAppointmentDate ||
+    employee.first_appointment_date ||
+    employee.appointmentDate ||
+    employee.appointment_date ||
+    null
+  );
+}
+
+function isValidDateString(d: any): boolean {
+  if (!d) return false;
+  const str = String(d).trim().split('T')[0];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
+  return !isNaN(new Date(str).getTime());
+}
+
+export function calculateIncrementEligibility(
+  employee: EmployeeEntity,
+  context: EngineContextData = {}
+): IncrementEligibilityResult {
+  const today = context.today || formatDateString(new Date());
+
+  // ملاحظة: شهادة «أثناء الخدمة» لا تحجب العلاوة (مسار الشهادة يخص الترفيع فقط)
+
+  // 1. Base last increment date — لا يُختلق تاريخ (لا today)
+  const lastIncrRaw = resolveLastIncrementDate(employee);
+  const gradeNum = parseGradeValue(employee.grade);
+  const stepNum = parseStepValue(employee.step);
+  if (!lastIncrRaw || !isValidDateString(lastIncrRaw) || gradeNum === null || stepNum === null) {
+    const missing: string[] = [];
+    if (gradeNum === null) missing.push('الدرجة');
+    if (stepNum === null) missing.push('المرحلة');
+    if (!lastIncrRaw || !isValidDateString(lastIncrRaw)) missing.push('تاريخ آخر علاوة / تاريخ الدرجة أو التعيين');
+    return emptyIncrementResult('بيانات_ناقصة', `بيانات ناقصة لاحتساب العلاوة: ${missing.join('، ')}`, lastIncrRaw && isValidDateString(lastIncrRaw) ? formatDateString(lastIncrRaw) : null);
+  }
+  const lastIncr = formatDateString(lastIncrRaw);
+
+  // 1-b. نهاية الدرجة: المرحلة الأخيرة لا تمنح علاوة 11→11 بلا أثر.
+  // م9 من قانون 22/2008 (علاوة بمقدار علاوة الدرجة الأعلى خارج الجدول) غير منفذة بعد — تحتاج قرار المالك.
+  if (stepNum >= MAX_STEP_PER_GRADE) {
+    return emptyIncrementResult(
+      'نهاية_المرحلة',
+      `الموظف في المرحلة الأخيرة (${stepNum}) من الدرجة (${gradeNum}) — لا علاوة ضمن الجدول؛ تُعالَج وفق م9 من قانون الرواتب 22/2008 (غير منفذة آلياً بعد)`,
+      lastIncr
+    );
+  }
 
   // Base rule: 12 months for annual increment
   const baseTotalMonths = 12;
   const baseDueDate = addMonthsToDate(lastIncr, baseTotalMonths);
 
-  // 3. Service Credit Reduction for Increment (احتساب الخدمة المقررة للعلاوة)
-  const serviceCredits = context.serviceCredits || [];
-  let creditYears = 0;
-  let creditMonths = 0;
-  let creditDays = 0;
-
-  serviceCredits.forEach(sc => {
-    const isCounted = sc.isCountedForPromotion !== false && sc.is_counted_for_promotion !== false;
-    const purpose = sc.purpose || '';
-    const isPensionOnly = purpose === 'تقاعد_فقط' || purpose === 'pension_only';
-    const isPromotionOnly = purpose === 'ترفيع_فقط' || purpose === 'promotion_only';
-    if (isCounted && !isPensionOnly && !isPromotionOnly) {
-      creditYears += sc.calculatedYears !== undefined ? sc.calculatedYears : (sc.calculated_years !== undefined ? sc.calculated_years : (sc.years || 0));
-      creditMonths += sc.calculatedMonths !== undefined ? sc.calculatedMonths : (sc.calculated_months !== undefined ? sc.calculated_months : (sc.months || 0));
-      creditDays += sc.calculatedDays !== undefined ? sc.calculatedDays : (sc.calculated_days !== undefined ? sc.calculated_days : (sc.days || 0));
-    }
-  });
+  // 3. Service Credit (مرة واحدة: الدورة التي يقع فيها تاريخ أمر الاحتساب فقط)
+  const credit = collectCycleServiceCredits(context.serviceCredits || [], lastIncr, 'increment');
+  const creditYears = credit.years;
+  const creditMonths = credit.months;
+  const creditDays = credit.days;
 
   const totalCreditMonths = creditYears * 12 + creditMonths;
   const effectiveMonthsAfterCredit = Math.max(0, baseTotalMonths - totalCreditMonths);
   const creditAdjustedDate = addMonthsToDate(lastIncr, effectiveMonthsAfterCredit);
 
   const deferredItems: DeferredImpactItem[] = [];
+  credit.missingOrderDate.forEach(sc => {
+    deferredItems.push({
+      id: sc.id,
+      type: 'service_credit',
+      effect: 'خدمة محتسبة غير مطبقة',
+      reason: 'سجل خدمة محتسبة بلا تاريخ أمر — لا يمكن نسبته إلى دورة استحقاق (بيانات ناقصة)',
+      status: 'بيانات_ناقصة',
+      description: 'سجل خدمة محتسبة بلا تاريخ أمر — لا يمكن نسبته إلى دورة استحقاق (بيانات ناقصة)',
+    });
+  });
 
   // 4. Modifiers: Commendations since lastIncrementDate
   const commendations = context.commendations || [];
@@ -725,18 +1002,16 @@ export function calculateIncrementEligibility(
 
   // 5. Modifiers: Penalties delay since lastIncrementDate
   const penalties = context.penalties || [];
-  const penaltyTypeMap = context.penaltyTypes || DEFAULT_PENALTY_DELAYS;
   let penaltyDelayMonths = 0;
   let appliedPenaltiesCount = 0;
 
   penalties.forEach(p => {
-    const status = p.status || 'نافذ';
-    if (status !== 'نافذ' && status !== 'active') return;
+    if (!isPenaltyInEffect(p)) return;
     const pDate = p.penaltyDate || p.penalty_date || p.orderDate || p.order_date;
     if (!pDate || !isDateOnOrAfter(pDate, lastIncr)) return;
 
     const pType = p.penaltyType || p.penalty_type || '';
-    const delay = p.delayMonths !== undefined ? p.delayMonths : (p.delay_months !== undefined ? p.delay_months : (penaltyTypeMap[pType] || 0));
+    const delay = resolvePenaltyDelayMonths(p, context.penaltyTypes);
     if (delay <= 0) return;
 
     if (totalCreditMonths > 0 && isDateOnOrAfter(pDate, creditAdjustedDate)) {
@@ -762,13 +1037,7 @@ export function calculateIncrementEligibility(
 
   attendances.forEach(a => {
     const status = (a.status || '').trim();
-    const isAbsence =
-      status === 'غائب' ||
-      status === 'غياب' ||
-      status === 'غياب_بدون_عذر' ||
-      status === 'غياب بدون عذر' ||
-      status === 'absence';
-    if (!isAbsence || !a.date || !isDateOnOrAfter(a.date, lastIncr)) return;
+    if (!isUnexcusedAbsenceStatus(status) || !a.date || !isDateOnOrAfter(a.date, lastIncr)) return;
 
     const count = a.count !== undefined ? a.count : (a.days !== undefined ? a.days : (a.durationDays !== undefined ? a.durationDays : (a.duration_days !== undefined ? a.duration_days : 1)));
 
@@ -788,35 +1057,36 @@ export function calculateIncrementEligibility(
     }
   });
 
-  // 7. Calculate Final Next Increment Due Date
+  // 7. Blocking / unpaid leaves extend the due date by their days
+  const leaves = context.leaves || [];
+  const leaveExt = computeBlockingLeaveExtension(leaves, lastIncr, 'increment', totalCreditMonths > 0 ? creditAdjustedDate : undefined);
+
+  // 8. Calculate Final Next Increment Due Date
   const effectiveNetMonths = Math.max(0, baseTotalMonths - totalCreditMonths - commendationMonths + penaltyDelayMonths);
   let computedDate = addMonthsToDate(lastIncr, effectiveNetMonths);
   if (creditDays > 0) {
     computedDate = addDaysToDate(computedDate, -creditDays);
   }
+  // الخدمة المحتسبة لا تجعل الاستحقاق يسبق تاريخ أمرها (وإلا عادت فطُبقت على الدورة التالية أيضاً)
+  if (credit.latestOrderDate && !isDateOnOrAfter(computedDate, credit.latestOrderDate)) {
+    computedDate = credit.latestOrderDate;
+  }
   if (absenceDays > 0) {
     computedDate = addDaysToDate(computedDate, absenceDays);
   }
+  if (leaveExt.days > 0) {
+    computedDate = addDaysToDate(computedDate, leaveExt.days);
+  }
 
-  // 8. Determine Increment Eligibility Status
-  const leaves = context.leaves || [];
+  // 9. Determine Increment Eligibility Status
   let activePausingLeave = false;
   let pausingLeaveTitle = '';
   leaves.forEach(lv => {
-    const adminEffect = lv.administrativeEffect || lv.administrative_effect || '';
-    const isPausing = Boolean(lv.affectsIncrement ?? lv.affects_increment) ||
-                      Boolean(lv.affectsPromotion ?? lv.affects_promotion) ||
-                      adminEffect === 'يوقف_الترفيع' || 
-                      adminEffect === 'pause_promotion' || 
-                      adminEffect === 'يوقف_العلاوة_والترفيع' ||
-                      adminEffect.includes('العلاوة') ||
-                      adminEffect.includes('الترفيع');
-    if (!isPausing) return;
+    if (!isLeaveBlocking(lv, 'increment')) return;
     const sDate = lv.startDate || lv.start_date || '';
     const eDate = lv.endDate || lv.end_date || '';
-    const isApproved = lv.status === 'موافق_عليها' || lv.status === 'ساري' || lv.status === 'نشط' || lv.status === 'approved' || !lv.status;
-    const isInDateRange = sDate && eDate ? isDateBetween(today, sDate, eDate) : true;
-    if (isApproved && isInDateRange) {
+    const isInDateRange = sDate && eDate ? isDateBetween(today, sDate, eDate) : (sDate ? isDateOnOrAfter(today, sDate) : true);
+    if (isApprovedLeaveStatus(lv.status) && isInDateRange) {
       activePausingLeave = true;
       pausingLeaveTitle = lv.leaveType || lv.leave_type || 'إجازة موقفة';
     }
@@ -843,6 +1113,9 @@ export function calculateIncrementEligibility(
     statusReason = 'الموظف مستوفٍ للشروط ومؤهل لاستحقاق العلاوة بتاريخ الاستحقاق';
     isIncrementEligible = true;
   }
+  if (leaveExt.days > 0) {
+    statusReason += ` (أُضيف ${leaveExt.days} يوم إجازة موقفة/بدون راتب إلى تاريخ الاستحقاق)`;
+  }
 
   return {
     nextIncrementDueDate: computedDate,
@@ -867,6 +1140,7 @@ export function calculateIncrementEligibility(
     deferredItems,
     isSupported: true,
     statusReason,
+    blockingLeaveDaysAdded: leaveExt.days,
     appliedCommendationsCount,
     appliedPenaltiesCount,
     appliedAbsenceDays: absenceDays,
@@ -877,28 +1151,60 @@ export function calculateIncrementEligibility(
 // Main Calculation Logic: Promotion Eligibility (with Service Credit Deferral & Gates)
 // ============================================================================
 
+function emptyPromotionResult(
+  status: PromotionEligibilityResult['eligibilityStatus'],
+  reason: string,
+  lastPromo: string | null,
+  requiredYears: number | null
+): PromotionEligibilityResult {
+  return {
+    nextPromotionDueDate: null,
+    baseDueDate: null,
+    lastPromotionDate: lastPromo,
+    requiredYears,
+    eligibilityStatus: status,
+    isPromotionEligible: false,
+    statusReason: reason,
+    isSupported: true,
+    commendationMonthsDeducted: 0,
+    penaltyMonthsAdded: 0,
+    absenceDaysAdded: 0,
+    serviceCreditDurationDeducted: { years: 0, months: 0, days: 0 },
+    modifiers: { commendationMonths: 0, penaltyDelayMonths: 0, absenceDays: 0, serviceCreditMonths: 0 },
+    gateCheckResults: {
+      governingCoursesSatisfied: false,
+      missingGoverningCourses: [],
+      evaluationsSatisfied: false,
+      lastEvaluationsGrades: [],
+      activePausingLeave: false,
+      noActivePausingLeaves: true,
+      pausingLeaveDetails: null,
+    },
+    blockingLeaveDaysAdded: 0,
+    gateChecks: { governingCoursesSatisfied: false, evaluationsSatisfied: false, noActivePausingLeaves: true },
+    deferredItems: [],
+    appliedCommendationsCount: 0,
+    appliedPenaltiesCount: 0,
+    appliedAbsenceDays: 0,
+  };
+}
+
 export function calculatePromotionEligibility(
   employee: EmployeeEntity,
   context: EngineContextData = {}
 ): PromotionEligibilityResult {
   const today = context.today || formatDateString(new Date());
-  const gradeNum = parseInt(String(employee.grade)) || 10;
+  const gradeNum = parseGradeValue(employee.grade);
 
-  // 1. Check in-service qualification boundary (المسار الاعتيادي فقط)
-  const quals = context.qualifications || [];
-  const hasInServiceDegree = quals.some(
-    q => (q.qualificationType === 'أثناء الخدمة' || q.qualification_type === 'أثناء الخدمة') && (q.isActive !== false && q.is_active !== false)
-  );
-
-  // Check if active degree track snapshot exists for this employee
-  const matchingSnapshot = context.degreeTrackSnapshot ||
+  // 1. مسار احتساب الشهادة أثناء الخدمة: يُتبع فقط ما دامت لقطة المسار «نشط».
+  // بعد التسوية (مكتمل) يعود الموظف للمسار الاعتيادي (قاعدة معتمدة من المالك).
+  const isActiveSnapshot = (sn: any) => sn && (sn.status === 'نشط' || !sn.status);
+  const matchingSnapshot = (isActiveSnapshot(context.degreeTrackSnapshot) ? context.degreeTrackSnapshot : null) ||
     (context.degreeTrackSnapshots || []).find(
-      s => String(s.employeeId || s.employee_id) === String(employee.id) && (s.status === 'نشط' || !s.status)
+      s => String(s.employeeId || s.employee_id) === String(employee.id) && isActiveSnapshot(s)
     );
 
-  if (hasInServiceDegree && matchingSnapshot) {
-    // Import and execute Degree Track Recognition Engine (Phase 2b)
-    const { calculateDegreeTrackSimulation } = require('./degreeTrackEngine');
+  if (matchingSnapshot) {
     const simResult = calculateDegreeTrackSimulation(matchingSnapshot, context);
     const rt = simResult.realTimeNextPromotion;
 
@@ -942,46 +1248,8 @@ export function calculatePromotionEligibility(
     };
   }
 
-  if (hasInServiceDegree) {
-    return {
-      nextPromotionDueDate: null,
-      baseDueDate: null,
-      lastPromotionDate: employee.lastPromotionDate || employee.last_promotion_date || null,
-      requiredYears: null,
-      eligibilityStatus: 'غير_مدعوم_حاليا',
-      isPromotionEligible: false,
-      statusReason: 'الموظف مرتبط بمسار احتساب الشهادات أثناء الخدمة — مسار احتساب الشهادات قيد التطوير في المرحلة القادمة',
-      unsupportedReason: 'الموظف مرتبط بمسار احتساب الشهادات أثناء الخدمة — مسار احتساب الشهادات قيد التطوير في المرحلة القادمة',
-      isSupported: false,
-      commendationMonthsDeducted: 0,
-      penaltyMonthsAdded: 0,
-      absenceDaysAdded: 0,
-      serviceCreditDurationDeducted: { years: 0, months: 0, days: 0 },
-      modifiers: {
-        commendationMonths: 0,
-        penaltyDelayMonths: 0,
-        absenceDays: 0,
-        serviceCreditMonths: 0,
-      },
-      gateCheckResults: {
-        governingCoursesSatisfied: false,
-        missingGoverningCourses: [],
-        evaluationsSatisfied: false,
-        lastEvaluationsGrades: [],
-        activePausingLeave: false,
-        noActivePausingLeaves: false,
-        pausingLeaveDetails: null,
-      },
-      gateChecks: {
-        governingCoursesSatisfied: false,
-        evaluationsSatisfied: false,
-        noActivePausingLeaves: false,
-      },
-      deferredItems: [],
-      appliedCommendationsCount: 0,
-      appliedPenaltiesCount: 0,
-      appliedAbsenceDays: 0,
-    };
+  if (gradeNum === null) {
+    return emptyPromotionResult('بيانات_ناقصة', 'بيانات ناقصة لاحتساب الترفيع: الدرجة غير مسجلة أو غير صالحة', employee.lastPromotionDate || employee.last_promotion_date || null, null);
   }
 
   // 2. Check top of career ladder (الدرجة الأولى أو الدرجات الخاصة لا تخضع لترفيع اعتيادي أعلى)
@@ -1030,40 +1298,22 @@ export function calculatePromotionEligibility(
     };
   }
 
-  // 3. Determine base last promotion date
-  const lastPromo =
-    employee.lastPromotionDate ||
-    employee.last_promotion_date ||
-    employee.gradeDate ||
-    employee.grade_date ||
-    employee.currentAppointmentDate ||
-    employee.current_appointment_date ||
-    employee.firstAppointmentDate ||
-    employee.first_appointment_date ||
-    employee.appointmentDate ||
-    employee.appointment_date ||
-    today;
+  // 3. Determine base last promotion date — لا يُختلق تاريخ (لا today)
+  const lastPromoRaw = resolveLastPromotionDate(employee);
+  if (!lastPromoRaw || !isValidDateString(lastPromoRaw)) {
+    return emptyPromotionResult('بيانات_ناقصة', 'بيانات ناقصة لاحتساب الترفيع: تاريخ آخر ترفيع / تاريخ الدرجة أو التعيين غير مسجل', null, requiredYears);
+  }
+  const lastPromo = formatDateString(lastPromoRaw);
 
   // Base rule: last_promotion_date + (required_years * 12 months)
   const baseTotalMonths = requiredYears * 12;
   const baseDueDate = addMonthsToDate(lastPromo, baseTotalMonths);
 
-  // 4. Service Credit Reduction (احتساب الخدمة السابقة / المضافة)
-  const serviceCredits = context.serviceCredits || [];
-  let creditYears = 0;
-  let creditMonths = 0;
-  let creditDays = 0;
-
-  serviceCredits.forEach(sc => {
-    const isPromotionCounted = sc.isCountedForPromotion !== false && sc.is_counted_for_promotion !== false;
-    const purpose = sc.purpose || '';
-    const isPensionOnly = purpose === 'تقاعد_فقط' || purpose === 'pension_only';
-    if (isPromotionCounted && !isPensionOnly) {
-      creditYears += sc.calculatedYears !== undefined ? sc.calculatedYears : (sc.calculated_years !== undefined ? sc.calculated_years : (sc.years || 0));
-      creditMonths += sc.calculatedMonths !== undefined ? sc.calculatedMonths : (sc.calculated_months !== undefined ? sc.calculated_months : (sc.months || 0));
-      creditDays += sc.calculatedDays !== undefined ? sc.calculatedDays : (sc.calculated_days !== undefined ? sc.calculated_days : (sc.days || 0));
-    }
-  });
+  // 4. Service Credit (مرة واحدة: الدورة التي يقع فيها تاريخ أمر الاحتساب فقط)
+  const credit = collectCycleServiceCredits(context.serviceCredits || [], lastPromo, 'promotion');
+  const creditYears = credit.years;
+  const creditMonths = credit.months;
+  const creditDays = credit.days;
 
   const totalCreditMonths = creditYears * 12 + creditMonths;
 
@@ -1073,6 +1323,16 @@ export function calculatePromotionEligibility(
 
   // 5. Track items and deferred items for all 5 modifiers
   const deferredItems: DeferredImpactItem[] = [];
+  credit.missingOrderDate.forEach(sc => {
+    deferredItems.push({
+      id: sc.id,
+      type: 'service_credit',
+      effect: 'خدمة محتسبة غير مطبقة',
+      reason: 'سجل خدمة محتسبة بلا تاريخ أمر — لا يمكن نسبته إلى دورة استحقاق (بيانات ناقصة)',
+      status: 'بيانات_ناقصة',
+      description: 'سجل خدمة محتسبة بلا تاريخ أمر — لا يمكن نسبته إلى دورة استحقاق (بيانات ناقصة)',
+    });
+  });
 
   // 6. Evaluate Commendations for Promotion (Modifier 1)
   const commendations = context.commendations || [];
@@ -1115,18 +1375,16 @@ export function calculatePromotionEligibility(
 
   // 7. Evaluate Penalties for Promotion (Modifier 2)
   const penalties = context.penalties || [];
-  const penaltyTypeMap = context.penaltyTypes || DEFAULT_PENALTY_DELAYS;
   let penaltyDelayMonths = 0;
   let appliedPenaltiesCount = 0;
 
   penalties.forEach(p => {
-    const status = p.status || 'نافذ';
-    if (status !== 'نافذ' && status !== 'active') return;
+    if (!isPenaltyInEffect(p)) return;
     const pDate = p.penaltyDate || p.penalty_date || p.orderDate || p.order_date;
     if (!pDate || !isDateOnOrAfter(pDate, lastPromo)) return;
 
     const pType = p.penaltyType || p.penalty_type || '';
-    const delay = p.delayMonths !== undefined ? p.delayMonths : (p.delay_months !== undefined ? p.delay_months : (penaltyTypeMap[pType] || 0));
+    const delay = resolvePenaltyDelayMonths(p, context.penaltyTypes);
     if (delay <= 0) return;
 
     if (totalCreditMonths > 0 && isDateOnOrAfter(pDate, creditAdjustedDate)) {
@@ -1152,13 +1410,7 @@ export function calculatePromotionEligibility(
 
   attendances.forEach(a => {
     const status = (a.status || '').trim();
-    const isAbsence =
-      status === 'غائب' ||
-      status === 'غياب' ||
-      status === 'غياب_بدون_عذر' ||
-      status === 'غياب بدون عذر' ||
-      status === 'absence';
-    if (!isAbsence || !a.date || !isDateOnOrAfter(a.date, lastPromo)) return;
+    if (!isUnexcusedAbsenceStatus(status) || !a.date || !isDateOnOrAfter(a.date, lastPromo)) return;
 
     const count = a.count !== undefined ? a.count : (a.days !== undefined ? a.days : (a.durationDays !== undefined ? a.durationDays : (a.duration_days !== undefined ? a.duration_days : 1)));
 
@@ -1185,8 +1437,17 @@ export function calculatePromotionEligibility(
   if (creditDays > 0) {
     finalDueDate = addDaysToDate(finalDueDate, -creditDays);
   }
+  // الخدمة المحتسبة لا تجعل الاستحقاق يسبق تاريخ أمرها (ضمان التطبيق مرة واحدة)
+  if (credit.latestOrderDate && !isDateOnOrAfter(finalDueDate, credit.latestOrderDate)) {
+    finalDueDate = credit.latestOrderDate;
+  }
   if (absenceDays > 0) {
     finalDueDate = addDaysToDate(finalDueDate, absenceDays);
+  }
+  // الإجازات الموقفة/بدون راتب لا تُحسب خدمة: تمدد الاستحقاق بعدد أيامها
+  const leaveExt = computeBlockingLeaveExtension(context.leaves || [], lastPromo, 'promotion', totalCreditMonths > 0 ? creditAdjustedDate : undefined);
+  if (leaveExt.days > 0) {
+    finalDueDate = addDaysToDate(finalDueDate, leaveExt.days);
   }
 
   // 10. Gate Conditions (الشروط الحاكمة الإلزامية للترفيع) - with cutoffDate for Evaluations & Leaves (Modifiers 4 & 5)
@@ -1220,6 +1481,9 @@ export function calculatePromotionEligibility(
     statusReason = `الموظف مستوفٍ للشروط ومؤهل للترفيع بتاريخ الاستحقاق (${finalDueDate})`;
     isPromotionEligible = true;
   }
+  if (leaveExt.days > 0) {
+    statusReason += ` (أُضيف ${leaveExt.days} يوم إجازة موقفة/بدون راتب إلى تاريخ الاستحقاق)`;
+  }
 
   return {
     nextPromotionDueDate: finalDueDate,
@@ -1245,6 +1509,7 @@ export function calculatePromotionEligibility(
       serviceCreditMonths: totalCreditMonths,
     },
     gateCheckResults,
+    blockingLeaveDaysAdded: leaveExt.days,
     gateChecks: {
       governingCoursesSatisfied: gateCheckResults.governingCoursesSatisfied,
       evaluationsSatisfied: gateCheckResults.evaluationsSatisfied,
@@ -1284,8 +1549,8 @@ export function recalculateEligibilitySync(
   return {
     employeeId: employee.id,
     employeeName: employee.fullName || employee.full_name || employee.name || `موظف #${employee.id}`,
-    grade: parseInt(String(employee.grade)) || 10,
-    step: parseInt(String(employee.step)) || 1,
+    grade: parseGradeValue(employee.grade),
+    step: parseStepValue(employee.step),
     isSupported,
     unsupportedReason,
     increment: incrResult,

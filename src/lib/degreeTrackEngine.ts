@@ -22,8 +22,16 @@ import {
   formatDateString,
   isDateOnOrAfter,
   isDateBetween,
-  DEFAULT_PENALTY_DELAYS,
+  isPenaltyInEffect,
+  resolvePenaltyDelayMonths,
+  isApprovedLeaveStatus,
+  isLeaveBlocking,
+  isUnexcusedAbsenceStatus,
+  computeBlockingLeaveExtension,
+  parseGradeValue,
+  parseStepValue,
 } from './promotionEngine';
+import type { PenaltyTypesInput } from './promotionEngine';
 
 export interface DegreeTrackSnapshotEntity {
   id?: number | string;
@@ -109,6 +117,9 @@ export interface DegreeTrackSimulationResult {
   lastSimulatedPromotionDate: string;
   hasDeficit: boolean;
   deficitCycles: number;
+  /** حالة اللقطة المقترحة: نشط (يوجد عجز) أو مكتمل، أو بيانات_ناقصة عند غياب المدخلات */
+  snapshotStatus: 'نشط' | 'مكتمل' | 'بيانات_ناقصة';
+  missingFields?: string[];
   realTimeNextPromotion: {
     settlementGrade: number;
     fromGrade?: number;
@@ -207,7 +218,7 @@ export function calculateDegreeTrackSimulation(
   context: {
     specializationCredits?: SpecializationCreditEntity[];
     penalties?: any[];
-    penaltyTypes?: Record<string, number>;
+    penaltyTypes?: PenaltyTypesInput;
     attendances?: any[];
     leaves?: any[];
     evaluations?: any[];
@@ -217,12 +228,62 @@ export function calculateDegreeTrackSimulation(
   const today = context.today || formatDateString(new Date());
 
   const employeeId = snapshot.employeeId || snapshot.employee_id || 0;
-  const actualGradeBefore = snapshot.actualGradeBefore !== undefined ? snapshot.actualGradeBefore : (snapshot.actual_grade_before || 3);
-  const actualStepBefore = snapshot.actualStepBefore !== undefined ? snapshot.actualStepBefore : (snapshot.actual_step_before || 1);
-  const baselineGrade = snapshot.baselineGrade !== undefined ? snapshot.baselineGrade : (snapshot.baseline_grade || 7);
-  const baselineStep = snapshot.baselineStep !== undefined ? snapshot.baselineStep : (snapshot.baseline_step || 1);
-  const graduationDateUsed = snapshot.graduationDateUsed || snapshot.graduation_date_used || '2020-01-01';
-  const orderDate = snapshot.orderDate || snapshot.order_date || '2026-01-01';
+  // لا قيم مختلقة: أي مدخل مفقود يعيد «بيانات_ناقصة» بدل افتراض (3 / 7 / 2020-01-01 / 2026-01-01)
+  const actualGradeBefore = parseGradeValue(snapshot.actualGradeBefore ?? snapshot.actual_grade_before);
+  const actualStepBefore = parseStepValue(snapshot.actualStepBefore ?? snapshot.actual_step_before);
+  const baselineGrade = parseGradeValue(snapshot.baselineGrade ?? snapshot.baseline_grade);
+  const baselineStep = parseStepValue(snapshot.baselineStep ?? snapshot.baseline_step);
+  const graduationDateUsed = snapshot.graduationDateUsed || snapshot.graduation_date_used || '';
+  const orderDate = snapshot.orderDate || snapshot.order_date || '';
+
+  const missingFields: string[] = [];
+  if (actualGradeBefore === null) missingFields.push('الدرجة الفعلية قبل الاحتساب');
+  if (baselineGrade === null) missingFields.push('درجة الأساس للعنوان الوظيفي');
+  if (!graduationDateUsed) missingFields.push('تاريخ التخرج');
+  if (!orderDate) missingFields.push('تاريخ أمر الاحتساب');
+  if (missingFields.length > 0) {
+    const reason = `بيانات ناقصة لمحاكاة مسار الشهادة: ${missingFields.join('، ')}`;
+    return {
+      snapshotId: snapshot.id,
+      employeeId,
+      jobTitleId: snapshot.jobTitleId || snapshot.job_title_id,
+      graduationDateUsed,
+      orderDate,
+      spentPeriodMonths: 0,
+      spentPeriodYears: 0,
+      isTenYearExceptionApplied: false,
+      baselineGrade: baselineGrade as any,
+      baselineStep: baselineStep as any,
+      actualGradeBefore: actualGradeBefore as any,
+      actualStepBefore: actualStepBefore as any,
+      totalSpecializationWeeksAvailable: 0,
+      specializationWeeksConsumed: 0,
+      specializationWeeksRemaining: 0,
+      simulationSteps: [],
+      simulatedGradeReached: actualGradeBefore as any,
+      lastSimulatedPromotionDate: '',
+      hasDeficit: false,
+      deficitCycles: 0,
+      snapshotStatus: 'بيانات_ناقصة',
+      missingFields,
+      realTimeNextPromotion: {
+        settlementGrade: actualGradeBefore as any,
+        fromGrade: actualGradeBefore as any,
+        toGrade: actualGradeBefore as any,
+        anchorStartDate: '',
+        baseDurationMonths: 24,
+        nextPromotionDueDate: null as any,
+        eligibilityStatus: 'بيانات_ناقصة',
+        isEligible: false,
+        hasSpecializationPrerequisite: true,
+        specializationPrerequisiteSatisfied: false,
+        statusReason: reason,
+        penaltiesDelayMonths: 0,
+        absenceDaysAdded: 0,
+        activePausingLeave: false,
+      },
+    };
+  }
 
   // 1. Calculate spent period (الفترة المقضية)
   const spentPeriodMonths = calculateExactPeriodMonths(graduationDateUsed, orderDate);
@@ -248,7 +309,6 @@ export function calculateDegreeTrackSimulation(
   let currentDate = graduationDateUsed;
   let lastSimulatedPromotionDate = graduationDateUsed;
   const penalties = context.penalties || [];
-  const penaltyTypeMap = context.penaltyTypes || DEFAULT_PENALTY_DELAYS;
 
   for (let cycle = 1; cycle <= possibleCycles; cycle++) {
     if (currentSimGrade <= 1) break; // Reached top of scale
@@ -260,13 +320,10 @@ export function calculateDegreeTrackSimulation(
     const cycleBaseEndDate = addMonthsToDate(currentDate, 24);
 
     penalties.forEach(p => {
-      const status = p.status || 'نافذ';
-      if (status !== 'نافذ' && status !== 'active') return;
+      if (!isPenaltyInEffect(p)) return;
       const pDate = p.penaltyDate || p.penalty_date || p.orderDate || p.order_date;
       if (pDate && isDateBetween(pDate, currentDate, cycleBaseEndDate)) {
-        const pType = p.penaltyType || p.penalty_type || '';
-        const delay = p.delayMonths !== undefined ? p.delayMonths : (p.delay_months !== undefined ? p.delay_months : (penaltyTypeMap[pType] || 0));
-        cyclePenaltyDelayMonths += delay;
+        cyclePenaltyDelayMonths += resolvePenaltyDelayMonths(p, context.penaltyTypes);
       }
     });
 
@@ -350,13 +407,10 @@ export function calculateDegreeTrackSimulation(
   let penaltiesDelayMonths = 0;
 
   penalties.forEach(p => {
-    const status = p.status || 'نافذ';
-    if (status !== 'نافذ' && status !== 'active') return;
+    if (!isPenaltyInEffect(p)) return;
     const pDate = p.penaltyDate || p.penalty_date || p.orderDate || p.order_date;
     if (pDate && isDateOnOrAfter(pDate, anchorStartDate)) {
-      const pType = p.penaltyType || p.penalty_type || '';
-      const delay = p.delayMonths !== undefined ? p.delayMonths : (p.delay_months !== undefined ? p.delay_months : (penaltyTypeMap[pType] || 0));
-      penaltiesDelayMonths += delay;
+      penaltiesDelayMonths += resolvePenaltyDelayMonths(p, context.penaltyTypes);
     }
   });
 
@@ -366,13 +420,7 @@ export function calculateDegreeTrackSimulation(
 
   attendances.forEach(a => {
     const status = (a.status || '').trim();
-    const isAbsence =
-      status === 'غائب' ||
-      status === 'غياب' ||
-      status === 'غياب_بدون_عذر' ||
-      status === 'غياب بدون عذر' ||
-      status === 'absence';
-    if (isAbsence && a.date && isDateOnOrAfter(a.date, anchorStartDate)) {
+    if (isUnexcusedAbsenceStatus(status) && a.date && isDateOnOrAfter(a.date, anchorStartDate)) {
       const count = a.count !== undefined ? a.count : (a.days !== undefined ? a.days : (a.durationDays !== undefined ? a.durationDays : (a.duration_days !== undefined ? a.duration_days : 1)));
       absenceDaysAdded += count;
     }
@@ -384,15 +432,10 @@ export function calculateDegreeTrackSimulation(
   let pausingLeaveTitle = '';
 
   leaves.forEach(lv => {
-    const adminEffect = lv.administrativeEffect || lv.administrative_effect || '';
-    const isPausing = Boolean(lv.affectsPromotion ?? lv.affects_promotion) ||
-                      adminEffect === 'يوقف_الترفيع' || 
-                      adminEffect === 'pause_promotion' || 
-                      adminEffect.includes('الترفيع');
-    if (!isPausing) return;
+    if (!isLeaveBlocking(lv, 'promotion')) return;
     const sDate = lv.startDate || lv.start_date || '';
     const eDate = lv.endDate || lv.end_date || '';
-    const isApproved = lv.status === 'موافق_عليها' || lv.status === 'ساري' || lv.status === 'نشط' || lv.status === 'approved' || !lv.status;
+    const isApproved = isApprovedLeaveStatus(lv.status);
     const isInDateRange = sDate && eDate ? isDateBetween(today, sDate, eDate) : true;
 
     if (isApproved && isInDateRange) {
@@ -405,6 +448,11 @@ export function calculateDegreeTrackSimulation(
   let nextPromotionDueDate = addMonthsToDate(anchorStartDate, baseDurationMonths + penaltiesDelayMonths);
   if (absenceDaysAdded > 0) {
     nextPromotionDueDate = addDaysToDate(nextPromotionDueDate, absenceDaysAdded);
+  }
+  // الإجازة الموقفة/بدون راتب تمدد الاستحقاق بعدد أيامها
+  const leaveExt = computeBlockingLeaveExtension(leaves, anchorStartDate, 'promotion');
+  if (leaveExt.days > 0) {
+    nextPromotionDueDate = addDaysToDate(nextPromotionDueDate, leaveExt.days);
   }
 
   // E. Specialization Course Prerequisite Check for the Real-Time Promotion

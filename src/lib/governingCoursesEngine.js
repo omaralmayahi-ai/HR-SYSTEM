@@ -392,8 +392,9 @@ export function getUnifiedEmployeeCourses(emp, trainingCourses = [], trainingsLi
     const hours = parseInt(tc.hours || tc.training_hours || tc.duration_hours) || (days * 4);
     const gradeAtTime = parseInt(tc.grade_at_time || tc.gradeAtTime || tc.grade) || currentGrade;
     const category = tc.category || tc.course_category || (name.includes('إدار') ? 'إدارية' : name.includes('سلام') ? 'سلامة وبيئة (H.S.E)' : name.includes('حاس') ? 'حاسوب وتكنولوجيا' : 'اختصاص');
-    const result = tc.result || tc.status || 'اجتاز';
-    const isPassed = result === 'اجتاز' || result === 'ناجح' || result === 'مكتمل' || result === 'معفى';
+    // لا يُفترض الاجتياز عند غياب النتيجة (كان fail-open)
+    const result = tc.result || tc.status || 'غير معروف';
+    const isPassed = isPassingResult(result);
 
     const key = `tc_${tc.id || `${name}_${sDate}`}`;
     if (!seenKeys.has(key)) {
@@ -449,7 +450,7 @@ export function getUnifiedEmployeeCourses(emp, trainingCourses = [], trainingsLi
     category = category || (name.includes('إدار') ? 'إدارية' : name.includes('سلام') ? 'سلامة وبيئة (H.S.E)' : name.includes('حاس') ? 'حاسوب وتكنولوجيا' : 'اختصاص');
 
     const result = en.status || en.evaluation_result || en.result || (en.completed ? 'اجتاز' : 'مستمر');
-    const isPassed = en.completed === true || result === 'اجتاز' || result === 'ناجح' || result === 'مكتمل' || result === 'معفى';
+    const isPassed = en.completed === true || isPassingResult(result) || isPassingResult(en.result);
 
     const key = `en_${en.id || `${trainingId}_${name}_${sDate}`}`;
     if (!seenKeys.has(key)) {
@@ -671,4 +672,129 @@ export function calculateEmployeeGoverningFulfillment({
     fulfillmentStatusLabel,
     fulfillmentBadgeClass,
   };
+}
+
+// ============================================================================
+// توحيد مفردات حالة الدورة ونتيجة المتدرب مع قاعدة البيانات
+// ============================================================================
+
+/** قيم حالة الدورة في قاعدة البيانات (trainings.status) */
+export const DB_COURSE_STATUSES = ['مخطط', 'جاري', 'منتهي', 'ملغى'];
+
+const LEGACY_TO_DB_COURSE_STATUS = {
+  'غير منفذة': 'مخطط',
+  'منفذة': 'منتهي',
+  'ملغاة': 'ملغى',
+  'ملغي': 'ملغى',
+  'مخطط': 'مخطط',
+  'جاري': 'جاري',
+  'منتهي': 'منتهي',
+  'ملغى': 'ملغى',
+};
+
+/** تحويل أي قيمة (قديمة أو من الواجهة) إلى قيمة قاعدة البيانات؛ الفارغ ⇒ مخطط */
+export function normalizeCourseStatus(status) {
+  const s = String(status ?? '').trim();
+  if (!s) return 'مخطط';
+  return LEGACY_TO_DB_COURSE_STATUS[s] || s;
+}
+
+/** التسمية المعروضة في الواجهة (غير منفذة / منفذة / ملغاة) */
+export function uiCourseStatus(status) {
+  const db = normalizeCourseStatus(status);
+  if (db === 'منتهي' || db === 'جاري') return 'منفذة';
+  if (db === 'ملغى') return 'ملغاة';
+  return 'غير منفذة';
+}
+
+/**
+ * قيمة الحفظ لتسمية الواجهة. إن لم تتغير التسمية عن الحالة السابقة تُحفظ الحالة السابقة كما هي
+ * (فلا تتحول «جاري» إلى «منتهي» عند تعديل بيانات أخرى).
+ */
+export function toDbCourseStatus(uiOrDbStatus, previousStatus) {
+  if (previousStatus !== undefined && previousStatus !== null && previousStatus !== '' && uiCourseStatus(previousStatus) === uiCourseStatus(uiOrDbStatus)) {
+    return normalizeCourseStatus(previousStatus);
+  }
+  return normalizeCourseStatus(uiOrDbStatus);
+}
+
+/** قيم نتيجة المتدرب المعتمدة (training_enrollments.result) — يقرأ الخادم «اجتاز/مشارك» للمزامنة */
+export const ENROLLMENT_RESULTS = ['قيد التقييم', 'اجتاز', 'لم يجتز', 'مشارك', 'انسحب'];
+
+const LEGACY_RESULT_MAP = {
+  'ناجح': 'اجتاز',
+  'ناجحة': 'اجتاز',
+  'مجتاز': 'اجتاز',
+  'راسب': 'لم يجتز',
+  'راسبة': 'لم يجتز',
+  'غير مجتاز': 'لم يجتز',
+};
+
+export function normalizeEnrollmentResult(result) {
+  const r = String(result ?? '').trim();
+  if (!r) return r;
+  return LEGACY_RESULT_MAP[r] || r;
+}
+
+export function isPassingResult(result) {
+  const r = normalizeEnrollmentResult(result);
+  return r === 'اجتاز' || r === 'مكتمل' || r === 'معفى';
+}
+
+export const DEFAULT_MIN_PASSING_SCORE = 60;
+
+function normName(s) {
+  return String(s || '').trim().replace(/[إأآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/\s+/g, ' ');
+}
+
+/**
+ * درجة النجاح للدورة: min_passing_score للدورة الحاكمة المطابقة (بالمعرّف إن رُبطت، وإلا بالاسم)،
+ * وإلا الحد الافتراضي 60 (القيمة الافتراضية في جدول governing_courses).
+ */
+export function resolveCoursePassingScore(course, governingCourses = []) {
+  if (!course) return DEFAULT_MIN_PASSING_SCORE;
+  const own = course.min_passing_score ?? course.minPassingScore;
+  if (own !== undefined && own !== null && own !== '' && !isNaN(Number(own))) return Number(own);
+  const gid = course.governing_course_id ?? course.governingCourseId;
+  const name = normName(course.course_name || course.courseName || course.title);
+  const list = governingCourses || [];
+  const match = (gid !== undefined && gid !== null && list.find(g => String(g.id) === String(gid)))
+    || (name ? list.find(g => normName(g.course_name || g.courseName) === name) : null);
+  const v = match ? (match.min_passing_score ?? match.minPassingScore) : undefined;
+  return v !== undefined && v !== null && !isNaN(Number(v)) ? Number(v) : DEFAULT_MIN_PASSING_SCORE;
+}
+
+/**
+ * التقدير والنتيجة من الدرجة. النجاح عند الدرجة ≥ درجة النجاح (افتراضياً 60).
+ * التقديرات: 90 ممتاز، 80 جيد جداً، 70 جيد، 60 متوسط، 50 مقبول، أقل ضعيف.
+ */
+export function computeEnrollmentGrade(scoreInput, passingScore = DEFAULT_MIN_PASSING_SCORE) {
+  if (scoreInput === null || scoreInput === undefined || String(scoreInput).trim() === '') {
+    return { rating: '—', result: '-' };
+  }
+  const num = parseFloat(scoreInput);
+  if (isNaN(num)) return { rating: String(scoreInput).trim() || '—', result: '-' };
+  if (num < 0 || num > 100) return { rating: '—', result: '-' };
+  let rating = 'ضعيف';
+  if (num >= 90) rating = 'ممتاز';
+  else if (num >= 80) rating = 'جيد جداً';
+  else if (num >= 70) rating = 'جيد';
+  else if (num >= 60) rating = 'متوسط';
+  else if (num >= 50) rating = 'مقبول';
+  return { rating, result: num >= passingScore ? 'اجتاز' : 'لم يجتز' };
+}
+
+/**
+ * رقم الشهادة التالي بتسلسل سنوي: CERT-<السنة>-<تسلسل من 4 مراتب>.
+ * يُستخرج أعلى تسلسل مستخدم لنفس السنة من الأرقام الموجودة.
+ */
+export function nextCertificateNumber(existingNumbers = [], year = new Date().getFullYear()) {
+  const y = String(year);
+  const re = new RegExp(`^CERT-${y}-(\\d+)$`);
+  let max = 0;
+  (existingNumbers || []).forEach(n => {
+    const m = String(n || '').trim().match(re);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  });
+  return `CERT-${y}-${String(max + 1).padStart(4, '0')}`;
 }
