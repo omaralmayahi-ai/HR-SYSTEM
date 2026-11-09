@@ -5,8 +5,12 @@
 # =====================================================================
 #  -ScheduledBackup : يُستدعى من المهمة المجدولة HRSystemBackup لأخذ نسخة احتياطية بدون واجهة.
 #  -RestartNow      : يُعيد تشغيل الخادم مباشرة بصلاحية المدير بدون فتح الواجهة.
+#  -Action <اسم>    : وضع سطر الأوامر بدون واجهة (يستدعيه control-app.bat عند تمرير أمر):
+#                     status | start | stop | restart | build | backup | update | logs | help
+#  -Yes             : موافقة تلقائية على أسئلة التأكيد في وضع سطر الأوامر.
 # =====================================================================
-param([switch]$ScheduledBackup, [switch]$RestartNow)
+param([switch]$ScheduledBackup, [switch]$RestartNow, [string]$Action = '', [switch]$Yes)
+$script:Cli = [bool]$Action
 
 $ErrorActionPreference = 'Stop'
 
@@ -14,7 +18,13 @@ $ErrorActionPreference = 'Stop'
 # التشغيل بصلاحية المدير (مطلوبة للتشغيل الدائم وجدار الحماية)
 # ---------------------------------------------------------------------
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$script:IsAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($script:Cli -and -not $script:IsAdmin -and @('status','logs','help') -notcontains $Action.ToLower()) {
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
+    Write-Host 'هذا الأمر يحتاج صلاحية المدير: افتح موجه الأوامر بـ "Run as administrator" ثم أعد تنفيذه.' -ForegroundColor Yellow
+    exit 2
+}
+if (-not $script:IsAdmin -and -not $script:Cli) {
     if ($ScheduledBackup) { exit 1 }
     $argList = '-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' + $PSCommandPath + '"'
     if ($RestartNow) { $argList += ' -RestartNow' }
@@ -82,6 +92,7 @@ function Write-Log([string]$text) {
     foreach ($line in ($text -split "`r?`n")) {
         if ($line.Length -gt 0) {
             if ($script:LogBox) { $script:LogBox.AppendText("[$stamp] $line`r`n") }
+            if ($script:Cli) { Write-Host "[$stamp] $line" }
             Save-PanelLog ((Get-Date).ToString('yyyy-MM-dd ') + "[$stamp] $line`r`n")
         }
     }
@@ -89,16 +100,24 @@ function Write-Log([string]$text) {
 }
 
 function Show-Info([string]$text, [string]$title = 'نظام الموارد البشرية') {
+    if ($script:Cli) { Write-Host $text; return }
     $opts = [System.Windows.Forms.MessageBoxOptions]::RtlReading -bor [System.Windows.Forms.MessageBoxOptions]::RightAlign
     [System.Windows.Forms.MessageBox]::Show($text, $title, 'OK', 'Information', 'Button1', $opts) | Out-Null
 }
 
 function Show-Error([string]$text, [string]$title = 'خطأ') {
+    if ($script:Cli) { Write-Host $text -ForegroundColor Red; return }
     $opts = [System.Windows.Forms.MessageBoxOptions]::RtlReading -bor [System.Windows.Forms.MessageBoxOptions]::RightAlign
     [System.Windows.Forms.MessageBox]::Show($text, $title, 'OK', 'Error', 'Button1', $opts) | Out-Null
 }
 
 function Confirm-Action([string]$text, [string]$title = 'تأكيد') {
+    if ($script:Cli) {
+        Write-Host $text -ForegroundColor Yellow
+        if ($Yes) { Write-Host '← موافقة تلقائية (-Yes)'; return $true }
+        $ans = Read-Host 'اكتب نعم للموافقة (y/n)'
+        return (@('y','yes','نعم','ن') -contains $ans.Trim().ToLower())
+    }
     $opts = [System.Windows.Forms.MessageBoxOptions]::RtlReading -bor [System.Windows.Forms.MessageBoxOptions]::RightAlign
     $r = [System.Windows.Forms.MessageBox]::Show($text, $title, 'YesNo', 'Question', 'Button2', $opts)
     return ($r -eq [System.Windows.Forms.DialogResult]::Yes)
@@ -136,6 +155,7 @@ function Invoke-Logged([string]$file, [string]$arguments, [string]$title, [strin
                     if ($line.Trim().Length -gt 0) {
                         $script:LastOutput.Add($line)
                         if ($script:LogBox) { $script:LogBox.AppendText("   $line`r`n") }
+                        if ($script:Cli) { Write-Host "   $line" }
                         Save-PanelLog "   $line`r`n"
                     }
                 }
@@ -236,7 +256,7 @@ function Ensure-EnvFile {
     $values = @{}
     if (-not $cfg.ContainsKey('PORT')) { $values.PORT = "$($script:DefaultPort)" }
     if (-not $cfg.ContainsKey('HOST')) { $values.HOST = '0.0.0.0' }
-    if (-not $cfg['JWT_SECRET'] -or $cfg['JWT_SECRET'] -like 'your_*' -or $cfg['JWT_SECRET'].Length -lt 16) {
+    if (-not $cfg['JWT_SECRET'] -or $cfg['JWT_SECRET'] -like 'your_*' -or $cfg['JWT_SECRET'].Length -lt 32) {
         $values.JWT_SECRET = New-Secret
         Write-Log '✔ تم توليد مفتاح جلسات جديد (JWT_SECRET).'
     }
@@ -1630,6 +1650,53 @@ if ($RestartNow) {
     } catch {
         $msg = $_.Exception.Message
         Save-PanelLog ((Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' ✖ فشل إعادة التشغيل: ' + $msg + "`r`n")
+        exit 1
+    }
+}
+
+# ---------------------------------------------------------------------
+# وضع سطر الأوامر (control-app.bat <أمر>)
+# ---------------------------------------------------------------------
+if ($script:Cli) {
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
+    $act = $Action.ToLower()
+    try {
+        switch ($act) {
+            'status' {
+                $h = Get-Health
+                $task = Get-AutoStartTask
+                Write-Host ('النظام: ' + $(if ($h.Running) { 'يعمل على ' + (Get-AppUrl) } else { 'متوقف' }))
+                Write-Host ('قاعدة البيانات: ' + $(if ($h.Db) { 'متصلة' } elseif ($h.Running) { 'غير متصلة (يعمل بالتخزين الاحتياطي)' } else { 'غير معروف' }))
+                Write-Host ('التشغيل الدائم: ' + $(if ($task) { 'مفعّل (' + $task.State + ')' } else { 'غير مفعّل' }))
+                Write-Host ('الإصدار: ' + (Get-AppVersion))
+                Write-Host ('آخر نسخة احتياطية: ' + (Get-LastBackupText))
+                if ($h.Running) { exit 0 } else { exit 3 }
+            }
+            'start'   { Start-App }
+            'stop'    { Stop-App }
+            'restart' { Stop-App; Start-App }
+            'build'   { $was = Test-AppActive; if ($was) { Stop-App }; Install-Dependencies $false; Invoke-Build; if ($was) { Start-App } }
+            'backup'  { [void](New-Backup 'cli') }
+            'update'  { Invoke-UpdateFromGitHub }
+            'logs'    { if (Test-Path $script:ServerLog) { Get-Content -LiteralPath $script:ServerLog -Tail 80 -Encoding UTF8 } else { Write-Host 'لا يوجد سجل خادم بعد.' } }
+            default {
+                Write-Host 'الاستخدام: control-app.bat [أمر] [-Yes]'
+                Write-Host '  بدون أمر  فتح لوحة التحكم'
+                Write-Host '  status    حالة النظام وقاعدة البيانات والتشغيل الدائم وآخر نسخة'
+                Write-Host '  start     تشغيل النظام'
+                Write-Host '  stop      إيقاف النظام'
+                Write-Host '  restart   إعادة التشغيل'
+                Write-Host '  build     تنصيب المكتبات عند تغيّرها ثم إعادة البناء'
+                Write-Host '  backup    نسخة احتياطية الآن'
+                Write-Host '  update    التحديث من GitHub (مع نسخة احتياطية)'
+                Write-Host '  logs      آخر 80 سطراً من سجل الخادم'
+                if ($act -ne 'help') { exit 1 }
+            }
+        }
+        exit 0
+    } catch {
+        Write-Host ('✖ ' + $_.Exception.Message) -ForegroundColor Red
+        Save-PanelLog ((Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + " ✖ [$act] " + $_.Exception.Message + "`r`n")
         exit 1
     }
 }
