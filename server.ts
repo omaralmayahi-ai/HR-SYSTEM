@@ -10849,8 +10849,11 @@ async function startServer() {
             continue;
           }
           if (eligibility?.increment?.eligibilityStatus !== 'مستحق_للعلاوة' || !eligibility?.increment?.isIncrementEligible) {
+            const notYetDue = eligibility?.increment?.eligibilityStatus === 'مؤهل';
             return res.status(400).json({
-              error: `الموظف (${empName}) غير مستحق للعلاوة السنوية حالياً: ${eligibility?.increment?.statusReason || 'شروط غير مستوفاة'}`
+              error: notYetDue
+                ? `الموظف (${empName}) لم يحن تاريخ استحقاق علاوته بعد (${eligibility?.increment?.nextIncrementDueDate || 'غير معروف'})، فلا يُعتمد قبله`
+                : `الموظف (${empName}) غير مستحق للعلاوة السنوية حالياً: ${eligibility?.increment?.statusReason || 'شروط غير مستوفاة'}`
             });
           }
           const targetStep = Math.min(11, curStep + 1);
@@ -10874,8 +10877,11 @@ async function startServer() {
             continue;
           }
           if (eligibility?.promotion?.eligibilityStatus !== 'مستحق_للترفيع' || !eligibility?.promotion?.isPromotionEligible) {
+            const notYetDue = eligibility?.promotion?.eligibilityStatus === 'مؤهل';
             return res.status(400).json({
-              error: `الموظف (${empName}) غير مستحق للترفيع الوظيفي حالياً: ${eligibility?.promotion?.statusReason || 'شروط غير مستوفاة'}`
+              error: notYetDue
+                ? `الموظف (${empName}) لم يحن تاريخ استحقاق ترفيعه بعد (${eligibility?.promotion?.nextPromotionDueDate || 'غير معروف'})، فلا يُعتمد قبله`
+                : `الموظف (${empName}) غير مستحق للترفيع الوظيفي حالياً: ${eligibility?.promotion?.statusReason || 'شروط غير مستوفاة'}`
             });
           }
           const targetGrade = Math.max(1, curGrade - 1);
