@@ -16,7 +16,9 @@ import { encryptData, decryptData, validateEncryptionKeyConfig } from './src/lib
 import { recalculateEligibilitySync, EngineContextData, formatDateString, isDateOnOrAfter } from './src/lib/promotionEngine.ts';
 import { calculateDegreeTrackSimulation, processDegreeTrackSettlement, processBatchDegreeTrackAutoSettlement } from './src/lib/degreeTrackEngine.ts';
 import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src/lib/promotionDelayReasonsEngine.ts';
-import { checkReferentialUsage } from './src/lib/referentialIntegrity.ts';
+import { checkReferentialUsage, isDbConnectionFailure } from './src/lib/referentialIntegrity.ts';
+import { respondIfDbWriteError, sendRouteError, HttpError, classifyDbError } from './server/dbErrors.ts';
+import { installRouteRegistry } from './server/routeRegistry.ts';
 
 
 const currentFilename = typeof __filename !== 'undefined' ? __filename : '';
@@ -40,6 +42,8 @@ async function startServer() {
   }
   await ensureSchema().catch(() => {});
   const app = express();
+  // يمنع تسجيل نفس METHOD+PATH مرتين (النسخة الثانية تكون ميتة دائماً في Express)
+  const routeRegistry = installRouteRegistry(app);
   const PORT = Number(process.env.PORT) || 5000;
 
   app.disable('x-powered-by');
@@ -248,7 +252,7 @@ async function startServer() {
       saveLocalDb();
       res.json(systemSettingsStore);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -276,7 +280,7 @@ async function startServer() {
       const result = await executeMonthlyLeaveAccrual(month, force !== undefined ? Boolean(force) : true);
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -445,7 +449,7 @@ async function startServer() {
     try {
       res.json(req.user);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -536,7 +540,7 @@ async function startServer() {
       res.status(201).json(newMemUser);
     } catch (error: any) {
       console.error('Error creating user:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -611,7 +615,7 @@ async function startServer() {
       res.json({ id, username, name, email, role });
     } catch (error: any) {
       console.error('Error updating user:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -639,7 +643,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting user:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -720,21 +724,21 @@ async function startServer() {
     {
       id: 1,
       employee_id: 1,
-      order_number: '55212',
-      assignment_order: '55212',
-      order_date: '2026-08-26',
-      assignment_date: '2026-08-26',
+      order_number: 'TEST-0001',
+      assignment_order: 'TEST-0001',
+      order_date: '2020-01-01',
+      assignment_date: '2020-01-01',
       action_type: 'تكليف',
       assignment_type: 'تكليف',
-      primary_responsibility: 'مسؤول شعبة',
+      primary_responsibility: 'بلا مسؤولية',
       acting_responsibility: 'بلا وكالة',
       deputy_level: 'لا يوجد',
-      job_title: 'معاون رئيس مبرمجين',
-      department: 'قسم التدريب والتطوير الإداري',
-      section: 'قسم التدريب والتطوير الإداري',
+      job_title: 'مبرمج',
+      department: 'قسم تجريبي',
+      section: 'شعبة تجريبية',
       service_type: 'دائم',
-      notes: '',
-      responsibility: 'مسؤول شعبة',
+      notes: 'سجل تجريبي وهمي',
+      responsibility: 'بلا مسؤولية',
       created_at: new Date().toISOString()
     }
   ];
@@ -1166,9 +1170,10 @@ async function startServer() {
     mapped.childrenDetails = mapped.children_details;
 
     // Ensure promotion & increment date fields are preserved and synced
-    const baseGradeDate = mapped.grade_date || emp.gradeDate || emp.grade_date || mapped.current_appointment_date || emp.currentAppointmentDate || '';
-    const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || mapped.last_promotion_date || mapped.lastPromotionDate || baseGradeDate || '';
-    const lastIncr = emp.lastIncrementDate || emp.last_increment_date || mapped.last_increment_date || mapped.lastIncrementDate || baseGradeDate || '';
+    // لا تُشتق تواريخ آخر ترفيع/علاوة من تاريخ الدرجة أو التعيين: القيمة غير المسجلة تبقى null
+    // (تعرضها الواجهة «غير معروف») حتى لا يحسب محرك الاستحقاق من تاريخ مختلق.
+    const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || mapped.last_promotion_date || mapped.lastPromotionDate || null;
+    const lastIncr = emp.lastIncrementDate || emp.last_increment_date || mapped.last_increment_date || mapped.lastIncrementDate || null;
     const nextPromo = emp.nextPromotionDueDate || emp.next_promotion_due_date || mapped.next_promotion_due_date || mapped.nextPromotionDueDate || null;
     const nextIncr = emp.nextIncrementDueDate || emp.next_increment_due_date || mapped.next_increment_due_date || mapped.nextIncrementDueDate || null;
 
@@ -1245,139 +1250,122 @@ async function startServer() {
     { id: 57, name: 'معاون كاتب', category: 'إداري', min_grade: 9, minGrade: 9, min_step: 1, minStep: 1, status: 'فعال', notes: '' }
   ];
 
-  function ensureJobTitleExists(title: string, grade?: number | string, category?: string) {
-    if (!title || typeof title !== 'string' || !title.trim()) return;
-    const clean = title.trim();
-    const norm = clean.replace(/[أإآا]/g, 'ا').replace(/[ىي]/g, 'ي').replace(/[ةه]/g, 'ه').toLowerCase();
-    const exists = inMemoryJobTitles.some(t => {
-      const tNorm = (t.name || '').replace(/[أإآا]/g, 'ا').replace(/[ىي]/g, 'ي').replace(/[ةه]/g, 'ه').toLowerCase();
-      return tNorm === norm;
-    });
-    if (!exists) {
-      const targetGrade = grade ? (parseInt(String(grade)) || 7) : 7;
-      const targetCategory = category || 'أخرى';
-      const newId = inMemoryJobTitles.reduce((max, t) => Math.max(max, parseInt(t.id) || 0), 0) + 1;
-      const newTitle = {
-        id: newId,
-        name: clean,
-        category: targetCategory,
-        min_grade: targetGrade,
-        minGrade: targetGrade,
-        status: 'فعال',
-        notes: `تمت إضافته تلقائياً عند حفظ الموظف (الدرجة ${targetGrade}) - تصنيف مؤقت (أخرى)`,
-        created_at: new Date().toISOString(),
-        createdAt: new Date().toISOString()
-      };
-      inMemoryJobTitles.push(newTitle);
-      try {
-        db.insert(schema.jobTitles).values({
-          name: clean,
-          category: targetCategory,
-          minGrade: targetGrade,
-          status: 'فعال',
-          notes: `تمت إضافته تلقائياً عند حفظ الموظف (الدرجة ${targetGrade}) - تصنيف مؤقت (أخرى)`
-        }).catch(() => {});
-      } catch (e) {}
+  // العنوان الوظيفي يجب أن يكون من الدليل المعتمد (job_titles). لم يعد النظام يُنشئ عنواناً تلقائياً
+  // من أي نص حر يُكتب في استمارة الموظف؛ العنوان غير المعروف يُرفض برسالة واضحة.
+  const normalizeJobTitleName = (text: any) => String(text || '')
+    .replace(/[أإآا]/g, 'ا').replace(/[ىي]/g, 'ي').replace(/[ةه]/g, 'ه')
+    .replace(/[\u064B-\u065F]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+  async function loadJobTitleDirectory(): Promise<any[]> {
+    try {
+      const rows = await db.select().from(schema.jobTitles);
+      if (rows && rows.length > 0) return rows;
+    } catch (err) {
+      if (!isDbConnectionFailure(err)) throw err;
     }
+    return inMemoryJobTitles || [];
   }
 
+  /** يعيد رسالة خطأ إن كان العنوان غير موجود أو معطلاً في الدليل، وإلا null مع السجل المطابق. */
+  async function checkJobTitleInDirectory(rawTitle: any): Promise<{ error: string | null; match: any | null }> {
+    const clean = String(rawTitle || '').trim();
+    if (!clean) return { error: null, match: null };
+    const directory = await loadJobTitleDirectory();
+    const norm = normalizeJobTitleName(clean);
+    const match = directory.find(t => t && t.name && normalizeJobTitleName(t.name) === norm) || null;
+    if (!match) {
+      return { error: `العنوان الوظيفي «${clean}» غير موجود في دليل العناوين الوظيفية المعتمد. أضِفه أولاً من إعدادات العناوين الوظيفية ثم أعد الحفظ.`, match: null };
+    }
+    if (match.status === 'معطل' || match.status === 'غير فعال') {
+      return { error: `العنوان الوظيفي «${clean}» معطّل في دليل العناوين الوظيفية ولا يمكن إسناده.`, match };
+    }
+    return { error: null, match };
+  }
+
+  // بذرة تجريبية وهمية بالكامل (لا تمثل أي شخص حقيقي) تظهر فقط في وضع عدم الاتصال بقاعدة البيانات.
   let inMemoryEmployees: any[] = [
     {
       id: 1,
-      fullName: 'عمر محمود سلمان محيميد المياحي',
-      full_name: 'عمر محمود سلمان محيميد المياحي',
-      firstName: 'عمر',
-      first_name: 'عمر',
-      fatherName: 'محمود',
-      father_name: 'محمود',
-      grandfatherName: 'سلمان',
-      grandfather_name: 'سلمان',
-      greatGrandfatherName: 'محيميد',
-      great_grandfather_name: 'محيميد',
-      surname: 'المياحي',
-      employeeNumber: '118789',
-      employee_number: '118789',
-      companyNumber: '118789',
-      company_number: '118789',
-      civilServiceNumber: '118789',
-      civil_service_number: '118789',
+      fullName: 'موظف تجريبي أول وهمي',
+      full_name: 'موظف تجريبي أول وهمي',
+      firstName: 'موظف',
+      first_name: 'موظف',
+      fatherName: 'تجريبي',
+      father_name: 'تجريبي',
+      grandfatherName: 'أول',
+      grandfather_name: 'أول',
+      greatGrandfatherName: 'وهمي',
+      great_grandfather_name: 'وهمي',
+      surname: 'التجريبي',
+      employeeNumber: '900001',
+      employee_number: '900001',
+      companyNumber: '900001',
+      company_number: '900001',
+      civilServiceNumber: '900001',
+      civil_service_number: '900001',
       gender: 'ذكر',
-      birthDate: '1989-10-12',
-      birth_date: '1989-10-12',
-      birthPlace: 'صلاح الدين',
-      birth_place: 'صلاح الدين',
+      birthDate: '1990-01-01',
+      birth_date: '1990-01-01',
+      birthPlace: 'مدينة تجريبية',
+      birth_place: 'مدينة تجريبية',
       nationality: 'عراقي',
-      ethnicity: 'عربي/ة',
-      religion: 'مسلم',
-      maritalStatus: 'متزوج',
-      marital_status: 'متزوج',
-      spouseNames: 'زينب أحمد حسن',
-      spouse_names: 'زينب أحمد حسن',
-      spousesData: JSON.stringify([{ id: 1, name: 'زينب أحمد حسن' }]),
-      spouses_data: JSON.stringify([{ id: 1, name: 'زينب أحمد حسن' }]),
-      childrenCount: 2,
-      children_count: 2,
-      childrenDetails: JSON.stringify([
-        { id: 1, name: 'علي عمر محمود', birth_date: '2018-05-14', gender: 'ذكر' },
-        { id: 2, name: 'مريم عمر محمود', birth_date: '2021-09-20', gender: 'أنثى' }
-      ]),
-      children_details: JSON.stringify([
-        { id: 1, name: 'علي عمر محمود', birth_date: '2018-05-14', gender: 'ذكر' },
-        { id: 2, name: 'مريم عمر محمود', birth_date: '2021-09-20', gender: 'أنثى' }
-      ]),
-      nationalId: '111111',
-      national_id: '111111',
-      passportNumber: '11',
-      passport_number: '11',
-      bloodType: 'AB+',
-      blood_type: 'AB+',
-      phone: '07701784629',
-      email: 'omar.almayahi@gmail.com',
-      address: 'بغداد / كفاءات السيدية',
-      appointmentDate: '2013-03-24',
-      appointment_date: '2013-03-24',
-      firstAppointmentDate: '2013-03-24',
-      first_appointment_date: '2013-03-24',
-      currentAppointmentDate: '2018-01-11',
-      current_appointment_date: '2018-01-11',
-      oilSectorStartDate: '2013-03-24',
-      oil_sector_start_date: '2013-03-24',
-      jobTitle: 'معاون رئيس مبرمجين',
-      job_title: 'معاون رئيس مبرمجين',
-      department: 'قسم التدريب والتطوير الإداري',
-      section: 'قسم التدريب والتطوير الإداري',
+      maritalStatus: 'أعزب',
+      marital_status: 'أعزب',
+      spouseNames: '',
+      spouse_names: '',
+      spousesData: JSON.stringify([]),
+      spouses_data: JSON.stringify([]),
+      childrenCount: 0,
+      children_count: 0,
+      childrenDetails: JSON.stringify([]),
+      children_details: JSON.stringify([]),
+      nationalId: '000000000000',
+      national_id: '000000000000',
+      phone: '07000000000',
+      email: 'test.employee@example.invalid',
+      address: 'عنوان تجريبي - لا يوجد',
+      appointmentDate: '2015-01-01',
+      appointment_date: '2015-01-01',
+      firstAppointmentDate: '2015-01-01',
+      first_appointment_date: '2015-01-01',
+      currentAppointmentDate: '2015-01-01',
+      current_appointment_date: '2015-01-01',
+      jobTitle: 'مبرمج',
+      job_title: 'مبرمج',
+      department: 'قسم تجريبي',
+      section: 'شعبة تجريبية',
       serviceType: 'دائم',
       service_type: 'دائم',
-      grade: 4,
-      step: 4,
-      gradeDate: '2025-12-20',
-      grade_date: '2025-12-20',
-      lastPromotionDate: '2025-12-20',
-      last_promotion_date: '2025-12-20',
-      lastIncrementDate: '2025-12-20',
-      last_increment_date: '2025-12-20',
+      grade: 6,
+      step: 1,
+      gradeDate: '2015-01-01',
+      grade_date: '2015-01-01',
+      lastPromotionDate: null,
+      last_promotion_date: null,
+      lastIncrementDate: null,
+      last_increment_date: null,
       jobResponsibility: 'بلا مسؤولية',
       job_responsibility: 'بلا مسؤولية',
       primaryResponsibility: 'بلا مسؤولية',
       primary_responsibility: 'بلا مسؤولية',
       educationLevel: 'بكالوريوس',
       education_level: 'بكالوريوس',
-      specialization: 'علوم الحاسبات',
-      university: 'جامعة تكريت',
-      institution: 'جامعة تكريت',
+      specialization: 'تخصص تجريبي',
+      university: 'جامعة تجريبية',
+      institution: 'جامعة تجريبية',
       graduationYear: 2012,
       graduation_year: 2012,
-      workLocation: 'المقر العام - بغداد',
-      work_location: 'المقر العام - بغداد',
+      workLocation: 'موقع تجريبي',
+      work_location: 'موقع تجريبي',
       workNature: 'مكتبي',
       work_nature: 'مكتبي',
       workShiftType: 'صباحي',
       work_shift_type: 'صباحي',
       status: 'مستمر',
-      initialRegularLeaveBalance: 392,
-      initial_regular_leave_balance: 392,
-      initialSickLeaveBalance: 277,
-      initial_sick_leave_balance: 277,
+      initialRegularLeaveBalance: 0,
+      initial_regular_leave_balance: 0,
+      initialSickLeaveBalance: 0,
+      initial_sick_leave_balance: 0,
       createdAt: new Date().toISOString(),
       created_at: new Date().toISOString()
     }
@@ -1673,7 +1661,7 @@ async function startServer() {
         });
       } catch (error: any) {
         console.error('Error in paginated employees list:', error);
-        return res.status(500).json({ error: error.message });
+        return sendRouteError(res, error);
       }
     }
 
@@ -1726,13 +1714,15 @@ async function startServer() {
       const cleanData = sanitizeEmployeeData(mappedData);
 
       if (mappedData.jobTitle || data.job_title) {
-        const empGrade = mappedData.grade || data.grade || 7;
         const rawTitle = String(mappedData.jobTitle || data.job_title || '').trim();
-        ensureJobTitleExists(rawTitle, empGrade, 'أخرى');
-        const matchTitle = inMemoryJobTitles.find(t => (t.name && String(t.name).trim() === rawTitle) || (t.id && String(t.id) === String(mappedData.jobTitleId || data.job_title_id)));
-        if (matchTitle) {
-          cleanData.jobTitleId = matchTitle.id;
-          mappedData.jobTitleId = matchTitle.id;
+        const titleCheck = await checkJobTitleInDirectory(rawTitle);
+        if (titleCheck.error) {
+          return res.status(400).json({ error: titleCheck.error });
+        }
+        if (titleCheck.match) {
+          mappedData.jobTitle = titleCheck.match.name;
+          cleanData.jobTitle = titleCheck.match.name;
+          mappedData.jobTitleId = titleCheck.match.id;
         }
       }
 
@@ -1743,7 +1733,7 @@ async function startServer() {
           insertedFromDb = newEmployee;
         }
       } catch (dbErr) {
-        console.warn('Database fallback for creating employee');
+        if (respondIfDbWriteError(res, dbErr, 'إضافة الموظف')) return;
       }
 
       const newId = insertedFromDb?.id || (inMemoryEmployees.length > 0 ? Math.max(...inMemoryEmployees.map(e => parseInt(String(e.id)) || 0)) + 1 : 1);
@@ -1782,7 +1772,7 @@ async function startServer() {
       res.status(201).json(enhanceEmployeeRecord(memEmployee));
     } catch (error: any) {
       console.error('Error creating employee:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -1836,9 +1826,7 @@ async function startServer() {
         processEmployeeNameData(mappedData, true);
         processEmployeeEducationData(mappedData);
 
-        if (!mappedData.status) mappedData.status = 'مستمر بالخدمة';
-        if (!mappedData.serviceType) mappedData.serviceType = 'ملاك دائم';
-        if (!mappedData.gender) mappedData.gender = 'ذكر';
+        // لا تُختلق قيم افتراضية للحالة أو نوع الخدمة أو الجنس: الحقل الفارغ يبقى فارغاً («بيانات ناقصة»).
 
         const cleanData = sanitizeEmployeeData(mappedData);
         let handled = false;
@@ -1863,6 +1851,7 @@ async function startServer() {
               .where(eq(schema.employees.id, existingEmp.id))
               .returning();
 
+            handled = true;
             updatedCount++;
             if (updated) {
               await syncEmployeeQualificationFromEmployee(updated.id, mappedData);
@@ -1872,6 +1861,7 @@ async function startServer() {
             }
           } else {
             const [inserted] = await db.insert(schema.employees).values(cleanData).returning();
+            handled = true;
             insertedCount++;
 
             if (inserted) {
@@ -1882,7 +1872,20 @@ async function startServer() {
             }
           }
         } catch (dbErr) {
-          console.warn('Database fallback for bulk import item');
+          if (!isDbConnectionFailure(dbErr)) {
+            // خطأ بيانات حقيقي (تكرار، قيد، صيغة): يُرفض الصف ولا يُحسب ضمن المُدرَجين ولا يُكتب في الذاكرة.
+            const classified = classifyDbError(dbErr, 'حفظ الصف');
+            console.error(`[DB-ERROR] bulk import row ${rowNum}:`, (dbErr as any)?.cause?.message || (dbErr as any)?.message);
+            rejectedRows.push({
+              rowNumber: rowNum,
+              name: mappedData.fullName || mappedData.firstName || empData.full_name || empData.first_name || 'موظف',
+              companyNumber: mappedData.companyNumber || empData.company_number || '',
+              reason: classified.message,
+              errors: [classified.message]
+            });
+            continue;
+          }
+          console.warn('Database fallback (offline) for bulk import item');
         }
 
         if (!handled) {
@@ -1909,7 +1912,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Error in bulk import:', error);
-      res.status(500).json({ error: error.message || 'فشلت عملية ترحيل الموظفين' });
+      sendRouteError(res, error, 'ترحيل الموظفين');
     }
   });
 
@@ -1998,28 +2001,51 @@ async function startServer() {
     const cleanData = sanitizeEmployeeData(mappedData);
 
     if (mappedData.jobTitle || data.job_title) {
-      const empGrade = mappedData.grade || data.grade || 7;
       const rawTitle = String(mappedData.jobTitle || data.job_title || '').trim();
-      ensureJobTitleExists(rawTitle, empGrade, 'أخرى');
-      const matchTitle = inMemoryJobTitles.find(t => (t.name && String(t.name).trim() === rawTitle) || (t.id && String(t.id) === String(mappedData.jobTitleId || data.job_title_id)));
-      if (matchTitle) {
-        cleanData.jobTitleId = matchTitle.id;
-        mappedData.jobTitleId = matchTitle.id;
+      // يُفحص العنوان مقابل الدليل فقط إذا تغيّر عن العنوان المحفوظ حالياً (السجلات القديمة لا تُقفل).
+      let currentTitle = '';
+      try {
+        const [cur] = await db.select({ jobTitle: schema.employees.jobTitle }).from(schema.employees).where(eq(schema.employees.id, id));
+        currentTitle = String(cur?.jobTitle || '').trim();
+      } catch (curErr) {
+        if (!isDbConnectionFailure(curErr)) return sendRouteError(res, curErr, 'تعديل الموظف');
+        const memCur = inMemoryEmployees.find(e => parseInt(String(e.id)) === id);
+        currentTitle = String(memCur?.jobTitle || memCur?.job_title || '').trim();
+      }
+      if (normalizeJobTitleName(rawTitle) !== normalizeJobTitleName(currentTitle)) {
+        let titleCheck: { error: string | null; match: any | null };
+        try {
+          titleCheck = await checkJobTitleInDirectory(rawTitle);
+        } catch (dirErr) {
+          return sendRouteError(res, dirErr, 'التحقق من العنوان الوظيفي');
+        }
+        if (titleCheck.error) {
+          return res.status(400).json({ error: titleCheck.error });
+        }
+        if (titleCheck.match) {
+          mappedData.jobTitle = titleCheck.match.name;
+          cleanData.jobTitle = titleCheck.match.name;
+          mappedData.jobTitleId = titleCheck.match.id;
+        }
       }
     }
 
     let updatedFromDb: any = null;
+    let dbAnswered = false;
     try {
-      const [updatedEmployee] = await db.update(schema.employees)
-        .set(cleanData)
-        .where(eq(schema.employees.id, id))
-        .returning();
+      const [updatedEmployee] = Object.keys(cleanData).length > 0
+        ? await db.update(schema.employees).set(cleanData).where(eq(schema.employees.id, id)).returning()
+        : await db.select().from(schema.employees).where(eq(schema.employees.id, id));
+      dbAnswered = true;
 
       if (updatedEmployee && updatedEmployee.id) {
         updatedFromDb = updatedEmployee;
       }
     } catch (error: any) {
-      console.warn('Database fallback for update employee');
+      if (respondIfDbWriteError(res, error, 'تعديل بيانات الموظف')) return;
+    }
+    if (dbAnswered && !updatedFromDb) {
+      return res.status(404).json({ error: 'الموظف غير موجود' });
     }
 
     const idx = inMemoryEmployees.findIndex(e => parseInt(String(e.id)) === id);
@@ -2617,7 +2643,7 @@ async function startServer() {
       res.status(201).json(mapKeys(newLeave || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating leave:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2677,7 +2703,7 @@ async function startServer() {
       res.json(mapKeys(updatedLeave || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating leave request:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2694,7 +2720,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting leave:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2756,7 +2782,7 @@ async function startServer() {
       res.status(201).json(mapKeys(newPenalty || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating penalty:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2791,7 +2817,7 @@ async function startServer() {
       res.json(mapKeys(updatedPenalty || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating penalty:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2815,7 +2841,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting penalty:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2877,7 +2903,7 @@ async function startServer() {
       res.status(201).json(mapKeys(newAppreciation || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating appreciation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2912,7 +2938,7 @@ async function startServer() {
       res.json(mapKeys(updatedApprec || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating appreciation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -2936,7 +2962,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting appreciation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3020,7 +3046,7 @@ async function startServer() {
       res.status(201).json(mapKeys(newEval || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating performance evaluation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3056,7 +3082,7 @@ async function startServer() {
       res.json(mapKeys(updatedEval || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error updating performance evaluation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3075,7 +3101,7 @@ async function startServer() {
       res.json({ success: true, message: 'تم حذف التقييم بنجاح' });
     } catch (error: any) {
       console.error('Error deleting performance evaluation:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3132,7 +3158,7 @@ async function startServer() {
       res.status(201).json(mapKeys(newHistory || memRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating career history:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3149,7 +3175,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting career history:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3849,7 +3875,7 @@ async function startServer() {
       res.json(updated);
     } catch (error: any) {
       console.error('Error updating salary record:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3913,7 +3939,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Error creating attendance record:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3949,7 +3975,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Error updating attendance record:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -3963,7 +3989,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting attendance record:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -4602,7 +4628,7 @@ async function startServer() {
         return res.status(201).json(mapKeys(newRecord, camelToSnake));
       }
     } catch (error: any) {
-      console.warn('Database fallback for create job title');
+      if (respondIfDbWriteError(res, error, 'إضافة العنوان الوظيفي')) return;
     }
     const newId = inMemoryJobTitles.reduce((max, t) => Math.max(max, parseInt(t.id) || 0), 0) + 1;
     const memItem = {
@@ -4716,63 +4742,42 @@ async function startServer() {
         if (status !== undefined) updateData.status = status;
         if (notes !== undefined) updateData.notes = notes;
 
-        const [updated] = await db.update(schema.jobTitles)
-          .set(updateData)
-          .where(eq(schema.jobTitles.id, id))
-          .returning();
-
-        // If title name was updated, cascade change to all employee records and job assignments in DB
-        if (oldName && newName && oldName !== newName) {
-          try {
-            await db.update(schema.employees)
+        // تعديل العنوان + تحديث العنوان الحالي للموظفين الحاملين للاسم القديم داخل معاملة واحدة.
+        // ملاحظة: لا تُعدَّل سجلات job_assignments إطلاقاً؛ فهي أوامر تاريخية صدرت بالاسم القديم.
+        const updated = await db.transaction(async (tx) => {
+          const [row] = await tx.update(schema.jobTitles)
+            .set(updateData)
+            .where(eq(schema.jobTitles.id, id))
+            .returning();
+          if (row && oldName && newName && oldName !== newName) {
+            await tx.update(schema.employees)
               .set({ jobTitle: newName, updatedAt: new Date() })
-              .where(or(
-                eq(schema.employees.jobTitle, oldName),
-                eq(schema.employees.jobTitleId, id)
-              ));
-            await db.update(schema.jobAssignments)
-              .set({ jobTitle: newName })
-              .where(or(
-                eq(schema.jobAssignments.jobTitle, oldName),
-                eq(schema.jobAssignments.jobTitleId, id)
-              ));
-          } catch (cascErr) {
-            console.warn('Database fallback for cascading job title rename');
+              .where(eq(schema.employees.jobTitle, oldName));
           }
+          return row;
+        });
 
-          // Cascade in-memory employees and job assignments
+        if (!updated) {
+          return res.status(404).json({ error: 'العنوان الوظيفي غير موجود' });
+        }
+
+        if (oldName && newName && oldName !== newName) {
           (inMemoryEmployees || []).forEach(emp => {
             const curTitle = String(emp.jobTitle || emp.job_title || '').trim();
-            const curTitleId = parseInt(String(emp.jobTitleId || emp.job_title_id || '0'));
-            if ((oldName && curTitle === oldName) || (curTitleId && curTitleId === id)) {
+            if (curTitle === oldName) {
               emp.jobTitle = newName;
               emp.job_title = newName;
-              emp.jobTitleId = id;
-              emp.job_title_id = id;
               emp.updatedAt = new Date().toISOString();
               emp.updated_at = new Date().toISOString();
             }
           });
-
-          const jaStore = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
-          jaStore.forEach((ja: any) => {
-            const jaTitle = String(ja.jobTitle || ja.job_title || '').trim();
-            const jaTitleId = parseInt(String(ja.jobTitleId || ja.job_title_id || '0'));
-            if ((oldName && jaTitle === oldName) || (jaTitleId && jaTitleId === id)) {
-              ja.jobTitle = newName;
-              ja.job_title = newName;
-              ja.jobTitleId = id;
-              ja.job_title_id = id;
-            }
-          });
         }
-
-        if (updated) {
-          saveLocalDb();
-          return res.json(mapKeys(updated, camelToSnake));
-        }
+        const memIdx = inMemoryJobTitles.findIndex(r => parseInt(String(r.id)) === id);
+        if (memIdx !== -1) inMemoryJobTitles[memIdx] = { ...inMemoryJobTitles[memIdx], ...mapKeys(updated, camelToSnake), ...updated };
+        saveLocalDb();
+        return res.json(mapKeys(updated, camelToSnake));
       } catch (error: any) {
-        console.warn('Database fallback for update job title');
+        if (respondIfDbWriteError(res, error, 'تعديل العنوان الوظيفي')) return;
       }
 
       const idx = inMemoryJobTitles.findIndex(r => parseInt(String(r.id)) === id);
@@ -4807,18 +4812,7 @@ async function startServer() {
               emp.updated_at = new Date().toISOString();
             }
           });
-
-          const jaStore = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
-          jaStore.forEach((ja: any) => {
-            const jaTitle = String(ja.jobTitle || ja.job_title || '').trim();
-            const jaTitleId = parseInt(String(ja.jobTitleId || ja.job_title_id || '0'));
-            if ((oldName && jaTitle === oldName) || (jaTitleId && jaTitleId === id)) {
-              ja.jobTitle = newName;
-              ja.job_title = newName;
-              ja.jobTitleId = id;
-              ja.job_title_id = id;
-            }
-          });
+          // سجلات التكليف (job_assignments) تاريخية ولا تُعاد كتابتها عند إعادة تسمية العنوان.
         }
 
         saveLocalDb();
@@ -4827,7 +4821,7 @@ async function startServer() {
       res.json({ id, name: newName, category, min_grade: mGrade, min_step: mStep, next_title_id: nxtId, status, notes });
     } catch (err: any) {
       console.error('Error updating job title:', err);
-      res.status(500).json({ error: err.message || 'حدث خطأ أثناء تعديل العنوان الوظيفي' });
+      sendRouteError(res, err, 'تعديل العنوان الوظيفي');
     }
   });
 
@@ -4871,14 +4865,14 @@ async function startServer() {
       try {
         await db.delete(schema.jobTitles).where(eq(schema.jobTitles.id, id));
       } catch (error: any) {
-        console.warn('Database fallback for delete job title');
+        if (respondIfDbWriteError(res, error, 'حذف العنوان الوظيفي')) return;
       }
       inMemoryJobTitles = inMemoryJobTitles.filter(r => r.id !== id);
       saveLocalDb();
       res.json({ success: true });
     } catch (err: any) {
       console.error('Error deleting job title:', err);
-      res.status(500).json({ error: err.message || 'حدث خطأ أثناء حذف العنوان الوظيفي' });
+      sendRouteError(res, err, 'حذف العنوان الوظيفي');
     }
   });
 
@@ -5746,7 +5740,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting employee status:', error);
-      res.status(500).json({ error: error.message || 'فشل حذف حالة الموظف' });
+      sendRouteError(res, error, 'حذف حالة الموظف');
     }
   });
 
@@ -6345,7 +6339,7 @@ async function startServer() {
       res.json(mapKeys(enrichedRecords, camelToSnake));
     } catch (error: any) {
       console.error('Error resetting penalty types:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6385,7 +6379,7 @@ async function startServer() {
       res.status(201).json(mapKeys(enrichPenaltyRecord(savedRecord || memItem), camelToSnake));
     } catch (error: any) {
       console.error('Error creating penalty type:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6437,7 +6431,7 @@ async function startServer() {
       res.json(mapKeys(enrichPenaltyRecord(updatedRecord || inMemoryPenaltyTypes[idx] || { id, ...data }), camelToSnake));
     } catch (error: any) {
       console.error('Error updating penalty type:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6461,7 +6455,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting penalty type:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6660,7 +6654,7 @@ async function startServer() {
       res.json({ success: true, message: 'تم إعادة ضبط وسيد القوالب الثلاثة القياسية بنجاح', data: records.map(r => mapKeys(r, camelToSnake)) });
     } catch (error: any) {
       console.error('Error seeding canonical forms:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6705,7 +6699,7 @@ async function startServer() {
       res.status(201).json(mapKeys(newRecord, camelToSnake));
     } catch (error: any) {
       console.error('Error creating evaluation form:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6760,7 +6754,7 @@ async function startServer() {
       res.json(mapKeys(updated, camelToSnake));
     } catch (error: any) {
       console.error('Error updating evaluation form:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6778,7 +6772,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting evaluation form:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6830,7 +6824,7 @@ async function startServer() {
       res.status(201).json({ id: Date.now(), ...req.body });
     } catch (error: any) {
       console.error('Error creating shift system:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6877,7 +6871,7 @@ async function startServer() {
       res.json({ id, ...req.body });
     } catch (error: any) {
       console.error('Error updating shift system:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -6899,7 +6893,7 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting shift system:', error);
-      res.status(500).json({ error: error.message });
+      sendRouteError(res, error);
     }
   });
 
@@ -9123,9 +9117,9 @@ async function startServer() {
         }
         if (Array.isArray(state.inMemoryEmployees) && state.inMemoryEmployees.length > 0) {
           inMemoryEmployees = state.inMemoryEmployees.map((emp: any) => {
-            const baseDt = emp.gradeDate || emp.grade_date || emp.currentAppointmentDate || emp.current_appointment_date || emp.firstAppointmentDate || emp.first_appointment_date || emp.appointmentDate || emp.appointment_date || '';
-            const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || baseDt;
-            const lastIncr = emp.lastIncrementDate || emp.last_increment_date || baseDt;
+            // لا اشتقاق لتواريخ آخر ترفيع/علاوة من تواريخ أخرى (تبقى null إن لم تُسجَّل)
+            const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || null;
+            const lastIncr = emp.lastIncrementDate || emp.last_increment_date || null;
             return {
               ...emp,
               lastPromotionDate: lastPromo,
@@ -9594,30 +9588,15 @@ async function startServer() {
     return fullResult;
   }
 
-  const fullCrudAlreadyRegistered = new Set([
-    'qualifications',
-    'job-assignments',
-    'promotions',
-    'salary-allowances',
-    'annual-evaluations',
-    'training-courses',
-    'transfers',
-    'service-records',
-    'leaves',
-    'penalties',
-    'appreciations',
-    'performance'
-  ]);
-  const putOnlyNeeded = new Set(['career', 'retirements', 'documents']);
-
+  // المولّد العام: يُسجَّل فقط المسار الذي لم يُعرَّف صراحةً قبله (المسارات الصريحة تسبقه في الأسبقية،
+  // وأي نسخة مولّدة لمسار مسجّل مسبقاً ستكون ميتة؛ مسجّل المسارات يمنع التكرار عند الإقلاع).
   Object.entries(genericEntitiesMap).forEach(([endpoint, schemaKey]) => {
     genericMemoryStores[endpoint] = genericMemoryStores[endpoint] || [];
-    if (fullCrudAlreadyRegistered.has(endpoint)) {
-      return;
-    }
+    const listPath = `/api/${endpoint}`;
+    const itemPath = `/api/${endpoint}/:id`;
 
-    if (!putOnlyNeeded.has(endpoint)) {
-    app.get(`/api/${endpoint}`, requireAuth, async (req, res) => {
+    if (!routeRegistry.has('get', listPath)) {
+    app.get(listPath, requireAuth, async (req, res) => {
       const empIdParam = req.query.employeeId || req.query.employee_id;
       try {
         const targetTable = (schema as any)[schemaKey];
@@ -9627,11 +9606,10 @@ async function startServer() {
             query = query.where(eq(targetTable.employeeId, parseInt(empIdParam as string))) as any;
           }
           const records = await query;
-          if (records && records.length > 0) {
-            return res.json(records.map((r: any) => mapKeys(r, camelToSnake)));
-          }
+          return res.json(records.map((r: any) => mapKeys(r, camelToSnake)));
         }
       } catch (err: any) {
+        if (!isDbConnectionFailure(err)) return sendRouteError(res, err, 'قراءة السجلات');
         console.warn(`Database fallback for /api/${endpoint}`);
       }
       let memList = genericMemoryStores[endpoint] || [];
@@ -9642,7 +9620,10 @@ async function startServer() {
       res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
     });
 
-    app.post(`/api/${endpoint}`, requireAuth, requireWriter, async (req, res) => {
+    }
+
+    if (!routeRegistry.has('post', listPath)) {
+    app.post(listPath, requireAuth, requireWriter, async (req, res) => {
       const data = mapKeys(req.body, snakeToCamel);
       let insertedRecord: any = null;
       try {
@@ -9680,11 +9661,11 @@ async function startServer() {
           }
         }
       } catch (err: any) {
-        console.warn(`Database fallback for POST /api/${endpoint}:`, err?.message || err);
+        if (respondIfDbWriteError(res, err, 'إضافة السجل')) return;
       }
       const newId = insertedRecord?.id || (genericMemoryStores[endpoint].reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
       const cleanSnake = mapKeys(req.body, camelToSnake);
-      const memRecord = { ...cleanSnake, id: newId, created_at: new Date().toISOString() };
+      const memRecord = { ...cleanSnake, ...(insertedRecord ? mapKeys(insertedRecord, camelToSnake) : {}), id: newId, created_at: insertedRecord?.createdAt || new Date().toISOString() };
       genericMemoryStores[endpoint].push(memRecord);
 
       // If qualification was added and isActive is true, sync to central employee record!
@@ -9716,10 +9697,13 @@ async function startServer() {
     });
     }
 
-    app.put(`/api/${endpoint}/:id`, requireAuth, requireWriter, async (req, res) => {
+    if (!routeRegistry.has('put', itemPath)) {
+    app.put(itemPath, requireAuth, requireWriter, async (req, res) => {
       const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: 'معرّف السجل غير صالح' });
       const data = mapKeys(req.body, snakeToCamel);
       let updatedRecord: any = null;
+      let dbAnswered = false;
       try {
         const targetTable = (schema as any)[schemaKey];
         if (targetTable && targetTable.id) {
@@ -9750,15 +9734,19 @@ async function startServer() {
           }
 
           const [updated] = await db.update(targetTable).set(cleanData).where(eq(targetTable.id, id)).returning();
+          dbAnswered = true;
           if (updated) {
             updatedRecord = updated;
           }
         }
       } catch (err: any) {
-        console.warn(`Database fallback for PUT /api/${endpoint}:`, err?.message || err);
+        if (respondIfDbWriteError(res, err, 'تعديل السجل')) return;
+      }
+      if (dbAnswered && !updatedRecord) {
+        return res.status(404).json({ error: 'السجل المطلوب تعديله غير موجود في قاعدة البيانات' });
       }
       const idx = genericMemoryStores[endpoint].findIndex(r => String(r.id) === String(id));
-      const cleanSnake = mapKeys(req.body, camelToSnake);
+      const cleanSnake = { ...mapKeys(req.body, camelToSnake), ...(updatedRecord ? mapKeys(updatedRecord, camelToSnake) : {}) };
       let savedRecord: any;
       if (idx !== -1) {
         genericMemoryStores[endpoint][idx] = { ...genericMemoryStores[endpoint][idx], ...cleanSnake, id };
@@ -9814,18 +9802,21 @@ async function startServer() {
       saveLocalDb();
       return res.json(mapKeys(savedRecord, camelToSnake));
     });
+    }
 
-    if (!putOnlyNeeded.has(endpoint)) {
-    app.delete(`/api/${endpoint}/:id`, requireAuth, requireWriter, async (req, res) => {
+    if (!routeRegistry.has('delete', itemPath)) {
+    app.delete(itemPath, requireAuth, requireWriter, async (req, res) => {
       const id = parseInt(req.params.id);
-      const deletedRecord = (genericMemoryStores[endpoint] || []).find(r => String(r.id) === String(id));
+      if (isNaN(id)) return res.status(400).json({ error: 'معرّف السجل غير صالح' });
+      let deletedRecord: any = (genericMemoryStores[endpoint] || []).find(r => String(r.id) === String(id));
       try {
         const targetTable = (schema as any)[schemaKey];
         if (targetTable && targetTable.id) {
-          await db.delete(targetTable).where(eq(targetTable.id, id));
+          const removed = await db.delete(targetTable).where(eq(targetTable.id, id)).returning();
+          if (removed && removed[0]) deletedRecord = deletedRecord || mapKeys(removed[0], camelToSnake);
         }
       } catch (err: any) {
-        console.warn(`Database fallback for DELETE /api/${endpoint}`);
+        if (respondIfDbWriteError(res, err, 'حذف السجل')) return;
       }
       genericMemoryStores[endpoint] = (genericMemoryStores[endpoint] || []).filter(r => String(r.id) !== String(id));
 
@@ -9876,7 +9867,7 @@ async function startServer() {
       return res.json(result);
     } catch (err: any) {
       console.error('Error calculating promotion eligibility:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10037,7 +10028,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error initiating degree recognition:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10075,7 +10066,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error fetching degree track simulation:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10110,7 +10101,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error fetching employee degree track:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10678,8 +10669,7 @@ async function startServer() {
           console.error('CRITICAL: Batch promotion approval database transaction failed (Transaction Rolled Back):', dbErr);
           return res.status(500).json({
             error: 'فشلت عملية الاعتماد بالكامل في قاعدة البيانات، وتم التراجع عن كافة التغييرات (Rollback)',
-            details: dbErr?.message || String(dbErr),
-            code: dbErr?.code
+            code: dbErr?.cause?.code || dbErr?.code
           });
         }
       }
@@ -10760,7 +10750,7 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error('Error in batch promotion approval:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10855,7 +10845,7 @@ async function startServer() {
       res.json(batchResult);
     } catch (err: any) {
       console.error('Error in batch auto settlement:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10900,7 +10890,7 @@ async function startServer() {
       res.json(employeeReasons);
     } catch (err: any) {
       console.error('Error fetching employee delay reasons:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10934,7 +10924,7 @@ async function startServer() {
       res.json({ success: true, isHidden, id });
     } catch (err: any) {
       console.error('Error updating delay reason visibility:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 
@@ -10969,7 +10959,7 @@ async function startServer() {
       res.json({ success: true, reminderDate, isAutoReminder: false, id });
     } catch (err: any) {
       console.error('Error updating delay reason reminder date:', err);
-      res.status(500).json({ error: err.message });
+      sendRouteError(res, err);
     }
   });
 

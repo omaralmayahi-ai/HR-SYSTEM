@@ -20,11 +20,11 @@ export const employees = pgTable('employees', {
   companyNumber: text('company_number').unique(), // رقم الشركة - معرّف فريد إلزامي (6 أرقام، أو حروف لعقد/أجر يومي)
   civilServiceNumber: text('civil_service_number').unique(), // الرقم الوظيفي - رقم فريد أيضاً (رقم وزارة التخطيط)، لكن الاعتماد الأساسي في النظام على رقم الشركة
   fullName: text('full_name').notNull(),
-  firstName: text('first_name'), // الاسم الأول (مثل: عمر)
-  fatherName: text('father_name'), // اسم الأب (مثل: محمود)
-  grandfatherName: text('grandfather_name'), // اسم الجد (مثل: سلمان)
-  greatGrandfatherName: text('great_grandfather_name'), // اسم والد الجد / الاسم الرابع (مثل: محيميد)
-  surname: text('surname'), // اللقب (مثل: المياحي)
+  firstName: text('first_name'), // الاسم الأول
+  fatherName: text('father_name'), // اسم الأب
+  grandfatherName: text('grandfather_name'), // اسم الجد
+  greatGrandfatherName: text('great_grandfather_name'), // اسم والد الجد / الاسم الرابع
+  surname: text('surname'), // اللقب
   gender: text('gender'),
   birthDate: text('birth_date'),
   birthPlace: text('birth_place'),

@@ -181,13 +181,8 @@ export async function ensureSchema() {
       await safeQuery(q);
     }
 
-    // Backfill existing employee records: copy grade_date to last_promotion_date and last_increment_date as best baseline estimate
-    await safeQuery(`
-      UPDATE employees 
-      SET last_promotion_date = COALESCE(last_promotion_date, grade_date, current_appointment_date, first_appointment_date, appointment_date),
-          last_increment_date = COALESCE(last_increment_date, grade_date, current_appointment_date, first_appointment_date, appointment_date)
-      WHERE last_promotion_date IS NULL OR last_increment_date IS NULL;
-    `);
+    // ملاحظة: أُزيلت تعبئة last_promotion_date/last_increment_date من grade_date أو تواريخ التعيين عند
+    // الإقلاع؛ كانت تثبّت قيماً مخمَّنة كأنها حقيقية. القيمة غير المسجلة تبقى NULL («غير معروف»).
 
     // رقم الشركة هو المعرّف الفريد الأساسي للموظف: يمنع تكرار نفس الرقم بين موظفين.
     // ملاحظة: إن وُجدت بيانات قديمة متكررة فعلياً، سيفشل هذا القيد بصمت (نمط safeQuery)
