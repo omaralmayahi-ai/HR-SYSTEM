@@ -3,6 +3,7 @@ import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { Plus, Trash2, Edit2, Check, X, RefreshCw, GraduationCap, GripVertical, Download } from 'lucide-react';
 import { notifySettingsChanged } from '@/lib/settingsUtils';
+import { LEGAL_EDUCATION_DEGREES } from '@/lib/salaryTable';
 
 export default function EducationDegreesSettings() {
   const [records, setRecords] = useState([]);
@@ -124,8 +125,8 @@ export default function EducationDegreesSettings() {
     try {
       const bGrade = parseInt(newBaselineGrade) || 7;
       const bStep = parseInt(newBaselineStep) || 1;
-      const allRate = parseInt(newAllowanceRate) || 0;
-      const hAllRate = newIsHigher ? (parseInt(newHigherAllowanceRate) || 0) : 0;
+      const allRate = parseFloat(newAllowanceRate) || 0;
+      const hAllRate = newIsHigher ? (parseFloat(newHigherAllowanceRate) || 0) : 0;
 
       const payload = {
         name: newName,
@@ -186,8 +187,8 @@ export default function EducationDegreesSettings() {
     try {
       const bGrade = parseInt(editBaselineGrade) || 7;
       const bStep = parseInt(editBaselineStep) || 1;
-      const allRate = parseInt(editAllowanceRate) || 0;
-      const hAllRate = editIsHigher ? (parseInt(editHigherAllowanceRate) || 0) : 0;
+      const allRate = parseFloat(editAllowanceRate) || 0;
+      const hAllRate = editIsHigher ? (parseFloat(editHigherAllowanceRate) || 0) : 0;
 
       const payload = {
         name: editName,
@@ -257,25 +258,29 @@ export default function EducationDegreesSettings() {
     }
   };
 
-  // Seeding Standard Presets compliant with Iraq Civil Service / Salary scale 2023 norms
+  // استيراد النسب القانونية: قانون رواتب موظفي الدولة 22 لسنة 2008، المادة 11
+  // (دكتوراه 100، ماجستير 75، دبلوم عالي 55، بكالوريوس 45، دبلوم فني 35، إعدادية 25، وما دونها حرفة 15)
+  // بلا "مخصص شهادة عليا إضافي". السجلات الموجودة بالاسم نفسه تُصحَّح نسبها بدلاً من تكرارها.
   const handleLoadStandardPresets = async () => {
-    if (!window.confirm('هل تريد استيراد مخصصات الشهادات الدراسية القياسية في العراق؟ سيتم تفعيل مخصص الشهادة ومخصص الشهادة العليا وتسكين الدرجات والمراحل الأساسية تلقائياً.')) return;
+    if (!window.confirm('هل تريد استيراد مخصصات الشهادات الدراسية القياسية في العراق (المادة 11 من قانون الرواتب 22 لسنة 2008)؟ ستُصحَّح نسب الشهادات الموجودة بالاسم نفسه وتسكين الدرجات والمراحل الأساسية تلقائياً.')) return;
     setLoading(true);
     try {
-      const presets = [
-        { name: 'دكتوراه', is_higher_education: true, allowance_rate: 100, higher_allowance_rate: 100, baseline_grade: 5, baseline_step: 1 },
-        { name: 'ماجستير', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 75, baseline_grade: 6, baseline_step: 1 },
-        { name: 'دبلوم عالي', is_higher_education: true, allowance_rate: 65, higher_allowance_rate: 65, baseline_grade: 6, baseline_step: 1 },
-        { name: 'بكالوريوس', is_higher_education: false, allowance_rate: 45, higher_allowance_rate: 0, baseline_grade: 7, baseline_step: 1 },
-        { name: 'دبلوم فني', is_higher_education: false, allowance_rate: 35, higher_allowance_rate: 0, baseline_grade: 8, baseline_step: 1 },
-        { name: 'إعدادية', is_higher_education: false, allowance_rate: 25, higher_allowance_rate: 0, baseline_grade: 8, baseline_step: 1 },
-        { name: 'متوسطة', is_higher_education: false, allowance_rate: 15, higher_allowance_rate: 0, baseline_grade: 9, baseline_step: 1 },
-        { name: 'ابتدائية', is_higher_education: false, allowance_rate: 10, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1 },
-        { name: 'دون الابتدائية (يقرأ ويكتب)', is_higher_education: false, allowance_rate: 0, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1 },
-      ];
+      const existing = (await apiClient.entities.EducationDegree.list()) || [];
+      const byName = new Map(existing.map(r => [String(r.name || '').trim(), r]));
 
-      for (const item of presets) {
-        await apiClient.entities.EducationDegree.create(item);
+      for (const item of LEGAL_EDUCATION_DEGREES) {
+        const current = byName.get(item.name);
+        if (current) {
+          await apiClient.entities.EducationDegree.update(current.id, {
+            ...current,
+            allowance_rate: item.allowance_rate,
+            allowanceRate: item.allowance_rate,
+            higher_allowance_rate: 0,
+            higherAllowanceRate: 0,
+          });
+        } else {
+          await apiClient.entities.EducationDegree.create({ ...item });
+        }
       }
 
       toast({
@@ -288,7 +293,7 @@ export default function EducationDegreesSettings() {
       // Log action
       await apiClient.logs.create({
         action: 'تعبئة الشهادات الأساسية',
-        details: 'تعبئة مخصصات الشهادات والشهادات العليا ودرجات ومراحل الأساس الافتراضية وفق قانون رواتب الخدمة المدنية'
+        details: 'تعبئة/تصحيح مخصصات الشهادات ودرجات ومراحل الأساس وفق المادة 11 من قانون رواتب موظفي الدولة 22 لسنة 2008'
       }).catch(() => {});
     } catch (error) {
       toast({
@@ -361,6 +366,7 @@ export default function EducationDegreesSettings() {
               <label className="text-xs font-bold text-slate-700 block">المخصص الأساسي (%)</label>
               <input
                 type="number"
+                step="any"
                 min="0"
                 max="150"
                 value={newAllowanceRate}
@@ -419,6 +425,7 @@ export default function EducationDegreesSettings() {
                 <label className="text-xs font-bold text-violet-800 block">مخصص الشهادة العليا الإضافي (%)</label>
                 <input
                   type="number"
+                  step="any"
                   min="0"
                   max="150"
                   value={newHigherAllowanceRate}
@@ -427,7 +434,7 @@ export default function EducationDegreesSettings() {
                   className="w-full bg-white border border-violet-200 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-violet-500/20 text-slate-800 font-medium"
                 />
               </div>
-              <p className="text-[10px] text-slate-500 font-medium">يُصرف مخصص إضافي قدره {newHigherAllowanceRate || 0}% لحملة هذه الشهادة العليا.</p>
+              <p className="text-[10px] text-slate-500 font-medium">يُصرف مخصص إضافي قدره {newHigherAllowanceRate || 0}% لحملة هذه الشهادة العليا. (المادة 11 لا تنص على مخصص إضافي للشهادة العليا؛ اتركه 0 ما لم يوجد سند.)</p>
             </div>
           )}
 
@@ -597,6 +604,7 @@ export default function EducationDegreesSettings() {
                         <div className="inline-flex items-center justify-center gap-1">
                           <input
                             type="number"
+                            step="any"
                             min="0"
                             max="150"
                             value={editAllowanceRate}
@@ -617,6 +625,7 @@ export default function EducationDegreesSettings() {
                           <div className="inline-flex items-center justify-center gap-1">
                             <input
                               type="number"
+                              step="any"
                               min="0"
                               max="150"
                               value={editHigherAllowanceRate}
@@ -641,7 +650,7 @@ export default function EducationDegreesSettings() {
                     <td className="px-4 py-3 text-center font-mono font-bold text-[#1B3A6B] whitespace-nowrap">
                       {isEditing ? (
                         <span>
-                          {(parseInt(editAllowanceRate) || 0) + (editIsHigher ? (parseInt(editHigherAllowanceRate) || 0) : 0)}%
+                          {(parseFloat(editAllowanceRate) || 0) + (editIsHigher ? (parseFloat(editHigherAllowanceRate) || 0) : 0)}%
                         </span>
                       ) : (
                         <span>
