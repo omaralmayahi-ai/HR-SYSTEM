@@ -19,8 +19,12 @@ npm run dev       # التطوير (الخادم والواجهة على الم�
 npm test          # الاختبارات (vitest)
 npm run build     # بناء الواجهة والخادم إلى dist/
 npm start         # تشغيل النسخة المبنية
+npm run db:generate -- --name <وصف>   # توليد ترحيل من تعديل schema.ts
+npm run db:migrate                     # تطبيق الترحيلات المعلّقة (يحدث تلقائياً عند الإقلاع أيضاً)
+npm run db:status                      # قراءة فقط: المطبّق/المعلّق وفروقات القاعدة عن schema.ts
+npm run db:check                       # بلا قاعدة: هل تغيّر schema.ts دون ترحيل؟
 ```
-على Windows: `control-app.bat` يفتح لوحة التحكم، و`control-app.bat status|start|stop|restart|build|backup|update|logs` لسطر الأوامر.
+على Windows: `control-app.bat` يفتح لوحة التحكم، و`control-app.bat status|start|stop|restart|build|backup|update|migrate|dbstatus|logs` لسطر الأوامر.
 
 ## الوثائق
 - `docs/review/00-consolidated.md`: المراجعة الشاملة، وخطة المرحلة B، والقرارات المعلقة. **اقرأه قبل أي عمل.**
@@ -37,6 +41,13 @@ npm start         # تشغيل النسخة المبنية
 6. **تصحيحات قانونية ثابتة لا تُعكس:** تسوية الشهادة حدث تثبيت فقط (تُحدَّث `last_promotion_date` ولا تتغير الدرجة)، وبعدها يعود الموظف للمسار الاعتيادي؛ `baseline_grade` من العناوين الوظيفية؛ التقييم يحجب الترفيع لا العلاوة؛ رصيد دورات الاختصاص أسبوعي تراكمي.
 7. **لا بيانات حقيقية** في البذور أو الاختبارات أو الالتزامات. ملفات `temp/` و`*.accdb` و`*.xlsx` مستثناة في `.gitignore`.
 8. كل تغيير سلوك يصحبه اختبار، و`npm test` و`npm run build` ناجحان قبل الدمج.
+9. **تغييرات المخطط بالترحيلات فقط** (B1، `docs/designs/b1-migrations/`):
+   - `ensureSchema()` في `src/db/index.ts` مجمّد: لا DDL جديد فيه. يبقى يعمل عند الإقلاع لبذوره وإصلاحات بياناته.
+   - التسلسل: عدّل `src/db/schema.ts` ← `npm run db:generate -- --name <وصف>` ← راجع ملف SQL ← التزم بالملفين معاً. `npm run db:check` يجب أن ينجح.
+   - لا تعديل ولا حذف لترحيل مدموج، ولا إعادة توليد `0000_baseline` أبداً. التصحيح بترحيل جديد.
+   - ممنوع `drizzle-kit migrate` و`drizzle-kit push` على أي قاعدة حقيقية: التطبيق فقط عبر `npm run db:migrate` أو الإقلاع (فيهما خطوة التبنّي والقفل).
+   - كل الترحيلات المعلّقة تُطبَّق في معاملة واحدة: لا `CREATE INDEX CONCURRENTLY` ولا أوامر لا تعمل داخل معاملة.
+   - ترحيل يحذف أو يحوّل بيانات، أو يحذف عموداً ينشئه `ensureSchema` (احذف سطره هناك في نفس التغيير)، يحتاج تقرير أثر على قاعدة التشغيل قبل الدمج.
 
 ## بروتوكول إعادة التشغيل
 عند طلب **إعادة التشغيل**:

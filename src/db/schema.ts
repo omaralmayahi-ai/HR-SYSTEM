@@ -1,11 +1,11 @@
 // src/db/schema.ts
-import { relations } from 'drizzle-orm';
-import { boolean, integer, numeric, pgTable, real, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import { boolean, foreignKey, index, integer, numeric, pgTable, real, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 // 1. Users table (Custom Username and Password)
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
-  username: text('username').notNull().unique(),
+  username: text('username').notNull().unique('users_username_key'),
   password: text('password').notNull(),
   email: text('email'),
   name: text('name'),
@@ -32,7 +32,7 @@ export const employees = pgTable('employees', {
   ethnicity: text('ethnicity'), // القومية
   religion: text('religion'),
   maritalStatus: text('marital_status'),
-  childrenCount: integer('children_count'),
+  childrenCount: integer('children_count').default(0),
   nationalId: text('national_id'),
   passportNumber: text('passport_number'), // رقم الجواز
   bloodType: text('blood_type'), // فصيلة الدم
@@ -98,13 +98,34 @@ export const employees = pgTable('employees', {
   spousesData: text('spouses_data'), // بيانات الزوجات المفصلة (JSON)
   childrenDetails: text('children_details'), // بيانات وتفاصيل الأطفال (الاسم، تاريخ الميلاد، الجنس) (JSON)
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  index('idx_employees_department').on(t.department),
+  index('idx_employees_education_level').on(t.educationLevel),
+  index('idx_employees_ethnicity').on(t.ethnicity),
+  index('idx_employees_full_name').on(t.fullName),
+  index('idx_employees_gender').on(t.gender),
+  index('idx_employees_grade').on(t.grade),
+  index('idx_employees_job_title').on(t.jobTitle),
+  index('idx_employees_marital_status').on(t.maritalStatus),
+  index('idx_employees_primary_responsibility').on(t.primaryResponsibility),
+  index('idx_employees_religion').on(t.religion),
+  index('idx_employees_section').on(t.section),
+  index('idx_employees_service_type').on(t.serviceType),
+  index('idx_employees_shift_system_id').on(t.shiftSystemId),
+  index('idx_employees_status').on(t.status),
+  index('idx_employees_step').on(t.step),
+  index('idx_employees_work_location').on(t.workLocation),
+  index('idx_employees_work_shift_type').on(t.workShiftType),
+  index('idx_employees_created_at').on(t.createdAt),
+  index('idx_employees_full_name_trgm').using('gin', t.fullName.op('gin_trgm_ops')),
+  index('idx_employees_civil_service_number_trgm').using('gin', t.civilServiceNumber.op('gin_trgm_ops')),
+  index('idx_employees_service_record_number_trgm').using('gin', t.serviceRecordNumber.op('gin_trgm_ops')),
+]);
 
 // 3. Career Histories table
 export const careerHistories = pgTable('career_histories', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   orderNumber: text('order_number'),
   orderDate: text('order_date'),
@@ -117,10 +138,8 @@ export const careerHistories = pgTable('career_histories', {
 export const leaveRequests = pgTable('leave_requests', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
-  leaveTypeId: integer('leave_type_id')
-    .references(() => leaveTypes.id, { onDelete: 'set null' }),
+  leaveTypeId: integer('leave_type_id'),
   leaveType: text('leave_type').notNull(),
   startDate: text('start_date').notNull(),
   endDate: text('end_date').notNull(),
@@ -130,7 +149,9 @@ export const leaveRequests = pgTable('leave_requests', {
   orderNumber: text('order_number'), // رقم أمر الموافقة
   medicalAttachment: text('medical_attachment'), // المرفق الطبي
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  foreignKey({ name: 'leave_requests_leave_type_id_fkey', columns: [t.leaveTypeId], foreignColumns: [leaveTypes.id] }).onDelete('set null'),
+]);
 
 export const leaveRequestsRelations = relations(leaveRequests, ({ one }) => ({
   employee: one(employees, {
@@ -147,7 +168,6 @@ export const leaveRequestsRelations = relations(leaveRequests, ({ one }) => ({
 export const penalties = pgTable('penalties', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   penaltyType: text('penalty_type').notNull(),
   penaltyDate: text('penalty_date').notNull(),
@@ -168,7 +188,6 @@ export const penalties = pgTable('penalties', {
 export const appreciations = pgTable('appreciations', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   orderNumber: text('order_number').notNull(),
   orderDate: text('order_date').notNull(),
@@ -183,7 +202,6 @@ export const appreciations = pgTable('appreciations', {
 export const performanceEvaluations = pgTable('performance_evaluations', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   year: text('year').notNull(),
   totalScore: integer('total_score').default(0),
@@ -272,10 +290,8 @@ export const trainings = pgTable('trainings', {
 export const trainingEnrollments = pgTable('training_enrollments', {
   id: serial('id').primaryKey(),
   trainingId: integer('training_id')
-    .references(() => trainings.id, { onDelete: 'cascade' })
     .notNull(),
-  employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' }), // غير إجباري ليتيح تسجيل المتدربين الخارجيين والطلاب
+  employeeId: integer('employee_id'), // غير إجباري ليتيح تسجيل المتدربين الخارجيين والطلاب
   isExternalParticipant: boolean('is_external_participant').default(false), // هل المشارك خارجي / طالب؟
   externalParticipantName: text('external_participant_name'), // اسم المشارك الخارجي / الطالب
   externalParticipantEntity: text('external_participant_entity'), // الجهة الخارجية / الجامعة
@@ -297,23 +313,25 @@ export const trainingEnrollments = pgTable('training_enrollments', {
 export const salaryRecords = pgTable('salary_records', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   month: integer('month').notNull(),
   year: integer('year').notNull(),
   baseSalary: integer('base_salary').notNull(),
-  totalAllowances: integer('total_allowances').notNull(),
-  totalDeductions: integer('total_deductions').notNull(),
+  totalAllowances: integer('total_allowances').default(0),
+  totalDeductions: integer('total_deductions').default(0),
   netSalary: integer('net_salary').notNull(),
   status: text('status').default('مسودة'),
   createdAt: timestamp('created_at').defaultNow(),
+  allowancesBreakdown: text('allowances_breakdown'),
+  deductionsBreakdown: text('deductions_breakdown'),
+  paymentDate: text('payment_date'),
+  paymentStatus: text('payment_status').default('مسودة'),
 });
 
 // 9.5. Attendance table
 export const attendance = pgTable('attendance', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   date: text('date').notNull(),
   status: text('status').notNull(),
@@ -463,6 +481,8 @@ export const orgUnits = pgTable('org_units', {
   parentId: integer('parent_id'),
   managerId: integer('manager_id'),
   createdAt: timestamp('created_at').defaultNow(),
+  code: text('code'),
+  description: text('description'),
 });
 
 export const orgUnitsRelations = relations(orgUnits, ({ one }) => ({
@@ -476,14 +496,13 @@ export const orgUnitsRelations = relations(orgUnits, ({ one }) => ({
 export const qualifications = pgTable('qualifications', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   level: text('level').notNull(), // ابتدائية / متوسطة / إعدادية / دبلوم / بكالوريوس / ماجستير / دكتوراه
   specialization: text('specialization'), // التخصص العام
   subSpecialization: text('sub_specialization'), // التخصص الدقيق
   university: text('university'), // اسم الجامعة أو الكلية
   country: text('country'), // بلد الدراسة
-  graduationYear: integer('graduation_year').notNull(), // سنة التخرج
+  graduationYear: integer('graduation_year'), // سنة التخرج
   graduationDate: text('graduation_date'), // تاريخ التخرج الكامل (YYYY-MM-DD)
   qualificationType: text('qualification_type'), // نوع الشهادة: 'تعيين' أو 'أثناء الخدمة'
   average: text('average'), // المعدل
@@ -505,7 +524,6 @@ export const qualificationsRelations = relations(qualifications, ({ one }) => ({
 export const jobAssignments = pgTable('job_assignments', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   grade: text('grade'), // خاصة / الأولى ... العاشرة
   step: integer('step'), // 1 - 11
@@ -514,8 +532,8 @@ export const jobAssignments = pgTable('job_assignments', {
   department: text('department'), // القسم
   section: text('section'), // الشعبة
   confirmationDate: text('confirmation_date'), // تاريخ التثبيت
-  assignmentType: text('assignment_type'), // تكليف / إعفاء / تدوير / تعيين / نقل
-  actionType: text('action_type'), // تكليف / إعفاء / تدوير
+  assignmentType: text('assignment_type').default('تكليف'), // تكليف / إعفاء / تدوير / تعيين / نقل
+  actionType: text('action_type').default('تكليف'), // تكليف / إعفاء / تدوير
   orderNumber: text('order_number'), // رقم الأمر الإداري
   orderDate: text('order_date'), // تاريخ الأمر الإداري
   assignmentOrder: text('assignment_order'), // رقم أمر التكليف
@@ -525,7 +543,7 @@ export const jobAssignments = pgTable('job_assignments', {
   actingResponsibility: text('acting_responsibility'), // المسؤولية بالوكالة
   actingEndDate: text('acting_end_date'), // تاريخ انتهاء التكليف بالوكالة (اختياري)
   deputyLevel: text('deputy_level'), // درجة الوكيل (وكيل أول / وكيل ثاني / لا يوجد)
-  serviceType: text('service_type'), // دائم / مؤقت / عقد / إعارة
+  serviceType: text('service_type').default('دائم'), // دائم / مؤقت / عقد / إعارة
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
 });
@@ -541,7 +559,6 @@ export const jobAssignmentsRelations = relations(jobAssignments, ({ one }) => ({
 export const promotionsIncrements = pgTable('promotions_increments', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   movementType: text('movement_type').notNull(), // علاوة سنوية / ترفيع درجة
   gradeBefore: text('grade_before'),
@@ -551,14 +568,16 @@ export const promotionsIncrements = pgTable('promotions_increments', {
   dueDate: text('due_date').notNull(), // تاريخ الاستحقاق
   orderNumber: text('order_number'), // رقم الأمر الإداري
   orderDate: text('order_date'), // تاريخ الأمر الإداري
-  seniorityMonths: integer('seniority_months'), // القدم الممنوح بالأشهر (1-12)
+  seniorityMonths: integer('seniority_months').default(0), // القدم الممنوح بالأشهر (1-12)
   seniorityReason: text('seniority_reason'), // سبب القدم: كتب الشكر والتقدير / إضافة خدمة / أخرى (مع تدوين ملاحظة)
   managerRecommendation: text('manager_recommendation'), // نعم / لا
   directorApproval: text('director_approval'), // نعم / لا
   approvedBy: text('approved_by'), // جهة أو نظام الاعتماد (مثال: نظام آلي — تسوية تلقائية)
   notes: text('notes'), // ملاحظات التسوية أو الترفيع
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  foreignKey({ name: 'promotions_increments_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+]);
 
 export const promotionsIncrementsRelations = relations(promotionsIncrements, ({ one }) => ({
   employee: one(employees, {
@@ -571,7 +590,6 @@ export const promotionsIncrementsRelations = relations(promotionsIncrements, ({ 
 export const salaryAllowances = pgTable('salary_allowances', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   baseSalary: text('base_salary'), // الراتب الاسمي
   costOfLiving: text('cost_of_living'), // مخصصات غلاء المعيشة
@@ -592,7 +610,9 @@ export const salaryAllowances = pgTable('salary_allowances', {
   orderNumber: text('order_number'), // رقم الأمر الإداري بالصرف
   status: text('status'), // الحالة (مستمر / موقوف)
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  foreignKey({ name: 'salary_allowances_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+]);
 
 export const salaryAllowancesRelations = relations(salaryAllowances, ({ one }) => ({
   employee: one(employees, {
@@ -605,7 +625,6 @@ export const salaryAllowancesRelations = relations(salaryAllowances, ({ one }) =
 export const annualEvaluations = pgTable('annual_evaluations', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   year: integer('year').notNull(),
   grade: text('grade').notNull(), // كفوء جداً / كفوء / متوسط / ضعيف
@@ -616,7 +635,9 @@ export const annualEvaluations = pgTable('annual_evaluations', {
   employeeOpinion: text('employee_opinion'), // رأي الموظف
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  foreignKey({ name: 'annual_evaluations_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+]);
 
 export const annualEvaluationsRelations = relations(annualEvaluations, ({ one }) => ({
   employee: one(employees, {
@@ -629,21 +650,28 @@ export const annualEvaluationsRelations = relations(annualEvaluations, ({ one })
 export const trainingCourses = pgTable('training_courses', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   courseName: text('course_name').notNull(),
-  courseType: text('course_type').notNull(), // حضوري – الكتروني
-  provider: text('provider').notNull(), // الجهة المنظمة
-  location: text('location').notNull(), // داخل العراق / خارج العراق
+  courseType: text('course_type'), // حضوري – الكتروني
+  provider: text('provider'), // الجهة المنظمة
+  location: text('location'), // داخل العراق / خارج العراق
   startDate: text('start_date').notNull(),
   endDate: text('end_date').notNull(),
-  durationDays: integer('duration_days').notNull(),
+  durationDays: integer('duration_days').default(1),
   average: text('average'), // المعدل (0.00 – 100.00)
   grade: text('grade'), // ممتاز / جيد جدا / جيد / متوسط / مقبول / ضعيف
   rank: text('rank'), // الأول – الثاني – الثالث - مشارك
   sourceTrainingId: integer('source_training_id'), // الدورة في موديول التدريب التي وُلِّد منها السجل (للمزامنة بلا تكرار)
   createdAt: timestamp('created_at').defaultNow(),
-});
+  durationHours: integer('duration_hours').default(0),
+  isSpecialized: boolean('is_specialized').default(false),
+  trainingCenter: text('training_center'),
+  status: text('status').default('ناجح'),
+  notes: text('notes'),
+}, (t) => [
+  uniqueIndex('training_courses_emp_source_training_uq').on(t.employeeId, t.sourceTrainingId).where(sql`source_training_id IS NOT NULL`),
+  foreignKey({ name: 'training_courses_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+]);
 
 export const trainingCoursesRelations = relations(trainingCourses, ({ one }) => ({
   employee: one(employees, {
@@ -656,16 +684,24 @@ export const trainingCoursesRelations = relations(trainingCourses, ({ one }) => 
 export const transfers = pgTable('transfers', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   transferType: text('transfer_type').notNull(), // نقل داخلي / نقل خارجي / تنسيب داخلي / تنسيب خارجي
-  fromEntity: text('from_entity').notNull(),
-  toEntity: text('to_entity').notNull(),
-  startDate: text('start_date').notNull(),
+  fromEntity: text('from_entity'),
+  toEntity: text('to_entity'),
+  startDate: text('start_date'),
   endDate: text('end_date'),
-  orderNumber: text('order_number').notNull(),
+  orderNumber: text('order_number'),
   createdAt: timestamp('created_at').defaultNow(),
-});
+  fromDept: text('from_dept'),
+  toDept: text('to_dept'),
+  fromLocation: text('from_location'),
+  toLocation: text('to_location'),
+  orderDate: text('order_date'),
+  effectiveDate: text('effective_date'),
+  notes: text('notes'),
+}, (t) => [
+  foreignKey({ name: 'transfers_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+]);
 
 export const transfersRelations = relations(transfers, ({ one }) => ({
   employee: one(employees, {
@@ -678,16 +714,22 @@ export const transfersRelations = relations(transfers, ({ one }) => ({
 export const retirements = pgTable('retirements', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
-  retirementDate: text('retirement_date').notNull(),
-  reason: text('reason').notNull(), // بلوغ السن القانونية / تقاعد اختياري / عجز / وفاة
+  retirementDate: text('retirement_date'),
+  reason: text('reason'), // بلوغ السن القانونية / تقاعد اختياري / عجز / وفاة
   serviceDuration: text('service_duration'), // مدة الخدمة المحتسبة
   pensionAmount: text('pension_amount'), // الراتب التقاعدي
   pensionOrderNumber: text('pension_order_number'), // رقم كتاب دائرة التقاعد
   pensionOrderDate: text('pension_order_date'), // تاريخ كتاب دائرة التقاعد
   createdAt: timestamp('created_at').defaultNow(),
-});
+  retirementType: text('retirement_type').notNull(),
+  effectiveDate: text('effective_date'),
+  orderNumber: text('order_number'),
+  orderDate: text('order_date'),
+  notes: text('notes'),
+}, (t) => [
+  foreignKey({ name: 'retirements_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+]);
 
 export const retirementsRelations = relations(retirements, ({ one }) => ({
   employee: one(employees, {
@@ -700,13 +742,18 @@ export const retirementsRelations = relations(retirements, ({ one }) => ({
 export const documents = pgTable('documents', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
-  docType: text('doc_type').notNull(), // هوية / جواز سفر / شهادة دراسية / عقد زواج / صورة شخصية / أمر تعييني / أخرى
-  filePath: text('file_path').notNull(), // Base64 or uploaded URL
-  entryDate: text('entry_date').notNull(),
+  docType: text('doc_type'), // هوية / جواز سفر / شهادة دراسية / عقد زواج / صورة شخصية / أمر تعييني / أخرى
+  filePath: text('file_path'), // Base64 or uploaded URL
+  entryDate: text('entry_date'),
   createdAt: timestamp('created_at').defaultNow(),
-});
+  documentType: text('document_type'), // B1: موجود في القاعدة الفعلية (ensureSchema)
+  title: text('title').notNull(),
+  notes: text('notes'),
+  uploadDate: text('upload_date'),
+}, (t) => [
+  foreignKey({ name: 'documents_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+]);
 
 export const documentsRelations = relations(documents, ({ one }) => ({
   employee: one(employees, {
@@ -746,11 +793,11 @@ export const leaveTypes = pgTable('leave_types', {
   maxDays: integer('max_days'), // الحد الأقصى للأيام المسموح بها في السنة (اختياري)
   administrativeEffect: text('administrative_effect').default('لا_يؤثر'), // 'لا_يؤثر', 'يوقف_الترفيع', 'يؤخر_العلاوة'
   financialEffect: text('financial_effect').default('براتب_كامل'), // 'براتب_كامل', 'بدون_راتب', 'استقطاع_جزئي', 'براتب_ومخصصات_ثابتة'
-  financialDeductionPercentage: real('financial_deduction_percentage').default(0), // نسبة الاستقطاع في حال استقطاع جزئي (0 - 100)
+  financialDeductionPercentage: integer('financial_deduction_percentage').default(0), // نسبة الاستقطاع في حال استقطاع جزئي (0 - 100)
   affectsIncrement: boolean('affects_increment').default(false), // إيقاف / تأخير العلاوة السنوية
   affectsPromotion: boolean('affects_promotion').default(false), // إيقاف الترفيع واحتساب القدم
   affectsCommendations: boolean('affects_commendations').default(false), // توقف منح كتب الشكر والتقدير
-  salaryPaymentType: text('salary_payment_type').default('منح_الراتب_كامل'), // 'منح_الراتب_كامل', 'منح_الراتب_والمخصصات_الثابتة_فقط', 'بدون_راتب', 'استقطاع_جزئي'
+  salaryPaymentType: text('salary_payment_type').default('full'), // 'منح_الراتب_كامل', 'منح_الراتب_والمخصصات_الثابتة_فقط', 'بدون_راتب', 'استقطاع_جزئي'
   effectsOptions: text('effects_options'), // خيارات التأشير بصيغة JSON أو نصية
   description: text('description'), // وصف الإجازة أو الشروط
   status: text('status').default('فعال'), // فعال أو متوقف مؤقتاً
@@ -773,49 +820,57 @@ export const educationDegrees = pgTable('education_degrees', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم الشهادة (مثلاً: بكالوريوس، ماجستير)
   isHigherEducation: boolean('is_higher_education').default(false), // هل هي شهادة عليا؟
-  allowanceRate: real('allowance_rate').default(0), // نسبة مخصص الشهادة (مثلاً: 45 أو 45.5)
+  allowanceRate: real('allowance_rate').notNull(), // نسبة مخصص الشهادة (مثلاً: 45 أو 45.5)
   higherAllowanceRate: real('higher_allowance_rate').default(0), // نسبة مخصص الشهادة العليا الإضافي (مثلاً: 50 تعني 50%)
   baselineGrade: integer('baseline_grade').default(7), // الدرجة الأساس للتعيين/الاحتساب (دكتوراه 5، ماجستير 6، بكالوريوس 7، دبلوم 8، إعدادية 8)
   baselineStep: integer('baseline_step').default(1), // المرحلة الأساس للتعيين/الاحتساب
   createdAt: timestamp('created_at').defaultNow(),
+  notes: text('notes'),
+  status: text('status').default('فعال'),
 });
 
 // 27. Responsibility Allowances table (مخصصات المسؤولية / المناصب ونسبها المئوية)
 export const responsibilityAllowances = pgTable('responsibility_allowances', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم المسؤولية / المنصب (مثلاً: مدير عام، رئيس قسم)
-  allowanceRate: real('allowance_rate').default(0), // نسبة مخصص المنصب والمسؤولية (مثلاً: 25 تعني 25%)
+  allowanceRate: real('allowance_rate').notNull(), // نسبة مخصص المنصب والمسؤولية (مثلاً: 25 تعني 25%)
   createdAt: timestamp('created_at').defaultNow(),
+  description: text('description'),
+  status: text('status').default('فعال'),
 });
 
 // 28. Shift Systems table (أنظمة عمل المناوبة والانعكاسات الإدارية والمالية)
 export const shiftSystems = pgTable('shift_systems', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم نظام المناوبة (مثل: مناوبة 1*3، مناوبة 7*7)
-  workDays: integer('work_days').notNull().default(1),
-  restDays: integer('rest_days').notNull().default(3),
-  shiftHoursType: text('shift_hours_type').default('24h'),
-  dailyHours: integer('daily_hours').default(24),
+  workDays: integer('work_days').notNull(),
+  restDays: integer('rest_days').notNull(),
+  shiftHoursType: text('shift_hours_type'),
+  dailyHours: real('daily_hours'),
   description: text('description'),
   createdAt: timestamp('created_at').defaultNow(),
+  allowanceAmount: integer('allowance_amount').default(0),
+  status: text('status').default('فعال'),
 });
 
 // 29. Service Records table (احتساب الخدمات الإضافية وسجلات تمديد الخدمة)
 export const serviceRecords = pgTable('service_records', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
-  recordType: text('record_type').default('احتساب خدمة'), // 'احتساب خدمة' | 'تمديد خدمة'
-  orderNumber: text('order_number').notNull(),
-  orderDate: text('order_date').notNull(),
+  recordType: text('record_type').notNull(), // 'احتساب خدمة' | 'تمديد خدمة'
+  orderNumber: text('order_number'),
+  orderDate: text('order_date'),
   years: integer('years').default(0),
   months: integer('months').default(0),
   days: integer('days').default(0),
-  purpose: text('purpose').default('promotion_allowance_pension'), // 'pension_only' (لأغراض التقاعد فقط) | 'promotion_allowance_pension' (لأغراض الترقية والعلاوة والتقاعد)
+  purpose: text('purpose').default('علاوة_وترفيع'), // 'pension_only' (لأغراض التقاعد فقط) | 'promotion_allowance_pension' (لأغراض الترقية والعلاوة والتقاعد)
   reason: text('reason'), // السبب / التفاصيل
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
+  durationYears: integer('duration_years').default(0),
+  durationMonths: integer('duration_months').default(0),
+  durationDays: integer('duration_days').default(0),
 });
 
 export const serviceRecordsRelations = relations(serviceRecords, ({ one }) => ({
@@ -834,19 +889,20 @@ export const penaltyTypes = pgTable('penalty_types', {
   delayMonths: integer('delay_months').default(0), // مدة تأخير الترفيع والزيادة بالشهور (للأغراض الحسابية)
   status: text('status').default('فعال'), // فعال أو غير فعال
   createdAt: timestamp('created_at').defaultNow(),
+  salaryDeductionPercent: integer('salary_deduction_percent').default(0),
 });
 
 // 30-ب. أنواع الخدمة (نوع تعيين الموظف: دائم، عقد، أجر يومي، ...) - قائمة قابلة للتوسيع من قبل المستخدم بدون تكرار
 export const serviceTypes = pgTable('service_types', {
   id: serial('id').primaryKey(),
-  name: text('name').notNull().unique(), // اسم نوع الخدمة، يجب أن يكون فريداً
+  name: text('name').notNull().unique('service_types_name_key'), // اسم نوع الخدمة، يجب أن يكون فريداً
   createdAt: timestamp('created_at').defaultNow(),
 });
 
 // 30-ج. حالات الموظف (مستمر، منسب، مجاز، متقاعد، مستقيل، موقوف، ...) - قائمة قابلة للتوسيع من قبل المستخدم بدون تكرار
 export const employeeStatuses = pgTable('employee_statuses', {
   id: serial('id').primaryKey(),
-  name: text('name').notNull().unique(), // اسم حالة الموظف، يجب أن يكون فريداً
+  name: text('name').notNull().unique('employee_statuses_name_key'), // اسم حالة الموظف، يجب أن يكون فريداً
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -863,13 +919,16 @@ export const archivedItems = pgTable('archived_items', {
   deletedBy: text('deleted_by'), // اسم مستخدم/بريد من نفّذ عملية الحذف
   deletedByName: text('deleted_by_name'), // الاسم الظاهري لمن نفّذ عملية الحذف
   createdAt: timestamp('created_at').defaultNow(), // تاريخ ووقت نقل السجل إلى الأرشيف
-});
+}, (t) => [
+  index('idx_archived_items_created_at').on(t.createdAt.desc().nullsFirst()),
+  index('idx_archived_items_entity_type').on(t.entityType),
+]);
 
 // 31. Evaluation Forms table (استمارات تقييم الأداء والتخصيص حسب الفئات)
 export const evaluationForms = pgTable('evaluation_forms', {
   id: serial('id').primaryKey(),
   title: text('title').notNull(), // عنوان استمارة التقييم
-  category: text('category').notNull(), // الفئة الوظيفية المستهدفة (مثل: الوظائف القيادية والإشرافية)
+  category: text('category'), // الفئة الوظيفية المستهدفة (مثل: الوظائف القيادية والإشرافية)
   targetGrades: text('target_grades'), // الدرجات الوظيفية المشمولة بالاستمارة
   applicableResponsibilities: text('applicable_responsibilities'), // المسؤوليات المشمولة بهذه الاستمارة (JSON array string)
   applicableQualifications: text('applicable_qualifications'), // الشهادات الدراسية المشمولة بهذه الاستمارة (JSON array string)
@@ -883,6 +942,8 @@ export const evaluationForms = pgTable('evaluation_forms', {
   enableEmployeeOpinion: boolean('enable_employee_opinion').default(false), // تفعيل رأي الموظف
   status: text('status').default('فعال'), // فعال / غير فعال / مسودة
   createdAt: timestamp('created_at').defaultNow(),
+  elements: text('elements'),
+  targetGroup: text('target_group'),
 });
 
 // 32. Governing Training Courses table (الدورات التدريبية الحاكمة للموظفين حسب الدرجة الوظيفية للترفيع)
@@ -898,12 +959,20 @@ export const governingCourses = pgTable('governing_courses', {
   description: text('description'), // وصف وملاحظات وتفاصيل الدورة
   status: text('status').default('فعال'), // فعال / غير فعال
   createdAt: timestamp('created_at').defaultNow(),
+  // legacy: أعمدة مكررة بأسماء صغيرة من DDL قديم — تُراجع وتُحذف في B1b
+  legacyCoursename: text('coursename'),
+  legacyCoursetype: text('coursetype'),
+  legacyCreatedat: timestamp('createdat').defaultNow(),
+  legacyDurationdays: integer('durationdays'),
+  legacyDurationhours: integer('durationhours'),
+  legacyIsrequiredforpromotion: boolean('isrequiredforpromotion'),
+  legacyMinpassingscore: integer('minpassingscore'),
 });
 
 // 33. Governing Course Exemption Rules table
 export const governingCourseExemptionRules = pgTable('governing_course_exemption_rules', {
   id: serial('id').primaryKey(),
-  configKey: text('config_key').notNull().unique().default('default_exemption_rules'),
+  configKey: text('config_key').unique('governing_course_exemption_rules_config_key_key').default('default_exemption_rules'),
   rules: text('rules'), // JSON stringified rules array
   qualificationsExemptions: text('qualifications_exemptions'), // JSON stringified array
   gradeTitleExemptions: text('grade_title_exemptions'), // JSON stringified array
@@ -914,7 +983,7 @@ export const governingCourseExemptionRules = pgTable('governing_course_exemption
 // 34. Governing Course Employee Assignments table
 export const governingCourseEmployeeAssignments = pgTable('governing_course_employee_assignments', {
   id: serial('id').primaryKey(),
-  employeeId: text('employee_id').notNull().unique(),
+  employeeId: text('employee_id').notNull().unique('governing_course_employee_assignments_employee_id_key'),
   status: text('status').default('مشمول'),
   exemptionReason: text('exemption_reason'),
   exemptionOrderNumber: text('exemption_order_number'),
@@ -942,7 +1011,7 @@ export const jobTitles = pgTable('job_titles', {
 // 36. Grade Promotion Rules table (سنوات الترفيع القانونية لكل درجة وظيفية)
 export const gradePromotionRules = pgTable('grade_promotion_rules', {
   id: serial('id').primaryKey(),
-  grade: integer('grade').notNull().unique(), // الدرجة الوظيفية (1 - 10, والدرجات الخاصة 11, 12, 13)
+  grade: integer('grade').notNull().unique('grade_promotion_rules_grade_key'), // الدرجة الوظيفية (1 - 10, والدرجات الخاصة 11, 12, 13)
   promotionYears: integer('promotion_years'), // عدد سنوات الخدمة المطلوبة للترفيع للدرجة الأعلى (null يعني لا يوجد ترفيع أعلى)
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
@@ -964,10 +1033,8 @@ export const commendationTypes = pgTable('commendation_types', {
 export const employeeCommendations = pgTable('employee_commendations', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
-  commendationTypeId: integer('commendation_type_id')
-    .references(() => commendationTypes.id, { onDelete: 'set null' }),
+  commendationTypeId: integer('commendation_type_id'),
   creditMonthsSnapshot: integer('credit_months_snapshot').notNull().default(1), // لقطة جامدة لعدد شهور القدم وقت المنح
   orderNumber: text('order_number'), // رقم الأمر الإداري
   orderDate: text('order_date'), // تاريخ الأمر الإداري
@@ -992,7 +1059,7 @@ export const employeeCommendationsRelations = relations(employeeCommendations, (
 // 39. Commendation Rules Settings table (إعدادات وقيود كتب الشكر السنوية)
 export const commendationRulesSettings = pgTable('commendation_rules_settings', {
   id: serial('id').primaryKey(),
-  configKey: text('config_key').notNull().unique().default('default_commendation_rules'),
+  configKey: text('config_key').notNull().unique('commendation_rules_settings_config_key_key').default('default_commendation_rules'),
   maxPerYear: integer('max_per_year').default(3), // الحد الأقصى لعدد كتب الشكر المحتسبة سنوياً
   allowedCombinations: text('allowed_combinations'), // JSON stringified array of permitted combinations
   degreeTrackAutoSettlement: boolean('degree_track_auto_settlement').default(false), // تفعيل التسوية التلقائية لمسار احتساب الشهادات
@@ -1008,7 +1075,6 @@ export const commendationRulesSettings = pgTable('commendation_rules_settings', 
 export const serviceCredits = pgTable('service_credits', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   creditType: text('credit_type').notNull(), // خدمة_عسكرية، خدمة_عقد، ممارسة_مهنة، خدمة_خارجية، أخرى
   calculatedYears: integer('calculated_years').default(0),
@@ -1021,7 +1087,9 @@ export const serviceCredits = pgTable('service_credits', {
   isCountedForRetirement: boolean('is_counted_for_retirement').default(true),
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  foreignKey({ name: 'service_credits_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+]);
 
 export const serviceCreditsRelations = relations(serviceCredits, ({ one }) => ({
   employee: one(employees, {
@@ -1034,13 +1102,10 @@ export const serviceCreditsRelations = relations(serviceCredits, ({ one }) => ({
 export const degreeTrackSnapshots = pgTable('degree_track_snapshots', {
   id: serial('id').primaryKey(),
   qualificationId: integer('qualification_id')
-    .references(() => qualifications.id, { onDelete: 'cascade' })
     .notNull(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
-  jobTitleId: integer('job_title_id')
-    .references(() => jobTitles.id, { onDelete: 'set null' }), // العنوان الوظيفي المعتمد المقترن بالشهادة
+  jobTitleId: integer('job_title_id'), // العنوان الوظيفي المعتمد المقترن بالشهادة
   actualGradeBefore: integer('actual_grade_before').notNull(), // الدرجة الفعلية الحالية وقت بدء الاحتساب (مثال: 3)
   actualStepBefore: integer('actual_step_before').notNull(), // المرحلة الفعلية الحالية وقت بدء الاحتساب (مثال: 1)
   baselineGrade: integer('baseline_grade').notNull().default(7), // الدرجة الأساس المقررة للعنوان الوظيفي (مثال: 7)
@@ -1050,7 +1115,11 @@ export const degreeTrackSnapshots = pgTable('degree_track_snapshots', {
   status: text('status').notNull().default('نشط'), // 'نشط' | 'مكتمل'
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  foreignKey({ name: 'degree_track_snapshots_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+  foreignKey({ name: 'degree_track_snapshots_job_title_id_fkey', columns: [t.jobTitleId], foreignColumns: [jobTitles.id] }).onDelete('set null'),
+  foreignKey({ name: 'degree_track_snapshots_qualification_id_fkey', columns: [t.qualificationId], foreignColumns: [qualifications.id] }).onDelete('cascade'),
+]);
 
 export const degreeTrackSnapshotsRelations = relations(degreeTrackSnapshots, ({ one, many }) => ({
   employee: one(employees, {
@@ -1073,7 +1142,6 @@ export const degreeTrackSnapshotsRelations = relations(degreeTrackSnapshots, ({ 
 export const degreeTrackSimulationSteps = pgTable('degree_track_simulation_steps', {
   id: serial('id').primaryKey(),
   snapshotId: integer('snapshot_id')
-    .references(() => degreeTrackSnapshots.id, { onDelete: 'cascade' })
     .notNull(),
   fromGrade: integer('from_grade').notNull(),
   toGrade: integer('to_grade').notNull(),
@@ -1083,7 +1151,9 @@ export const degreeTrackSimulationSteps = pgTable('degree_track_simulation_steps
   status: text('status').notNull().default('ممنوح_بالمحاكاة'), // 'ممنوح_بالمحاكاة' | 'معلق_لعدم_استيفاء_الدورة'
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  foreignKey({ name: 'degree_track_simulation_steps_snapshot_id_fkey', columns: [t.snapshotId], foreignColumns: [degreeTrackSnapshots.id] }).onDelete('cascade'),
+]);
 
 export const degreeTrackSimulationStepsRelations = relations(degreeTrackSimulationSteps, ({ one }) => ({
   snapshot: one(degreeTrackSnapshots, {
@@ -1096,17 +1166,18 @@ export const degreeTrackSimulationStepsRelations = relations(degreeTrackSimulati
 export const specializationCourseCredits = pgTable('specialization_course_credits', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
-  snapshotId: integer('snapshot_id')
-    .references(() => degreeTrackSnapshots.id, { onDelete: 'set null' }),
+  snapshotId: integer('snapshot_id'),
   weeks: integer('weeks').notNull().default(1), // عدد أسابيع الدورة التدريبية التخصصية
   courseDate: text('course_date'), // تاريخ الدورة
   courseName: text('course_name'), // اسم الدورة التخصصية
   provider: text('provider'), // الجهة المنظمة
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
-});
+}, (t) => [
+  foreignKey({ name: 'specialization_course_credits_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+  foreignKey({ name: 'specialization_course_credits_snapshot_id_fkey', columns: [t.snapshotId], foreignColumns: [degreeTrackSnapshots.id] }).onDelete('set null'),
+]);
 
 export const specializationCourseCreditsRelations = relations(specializationCourseCredits, ({ one }) => ({
   employee: one(employees, {
@@ -1123,7 +1194,6 @@ export const specializationCourseCreditsRelations = relations(specializationCour
 export const promotionDelayReasons = pgTable('promotion_delay_reasons', {
   id: serial('id').primaryKey(),
   employeeId: integer('employee_id')
-    .references(() => employees.id, { onDelete: 'cascade' })
     .notNull(),
   reasonType: text('reason_type').notNull(), // 'دورة' | 'عقوبة' | 'اجازة' | 'تقييم' | 'غياب'
   description: text('description').notNull(), // نص توضيحي مولد من المحرك
@@ -1136,7 +1206,9 @@ export const promotionDelayReasons = pgTable('promotion_delay_reasons', {
   sourceReferenceId: text('source_reference_id'), // معرّف السجل المصدر للتتبع
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
-});
+}, (t) => [
+  foreignKey({ name: 'promotion_delay_reasons_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
+]);
 
 export const promotionDelayReasonsRelations = relations(promotionDelayReasons, ({ one }) => ({
   employee: one(employees, {

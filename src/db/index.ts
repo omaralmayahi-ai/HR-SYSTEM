@@ -68,6 +68,11 @@ function compactSql(q: string): string {
 }
 
 // Ensure database schema columns exist
+//
+// ⚠ مجمّد منذ B1 (2026-11-09): لا يُضاف هنا أي DDL جديد. كل تغيير بنيوي يأتي من ترحيل في drizzle/
+// (npm run db:generate). ما زال يُشغَّل عند كل إقلاع قبل الترحيلات لأنه يحوي إصلاحات بيانات وبذوراً
+// تعتمد عليها المسارات الحالية (مثل ربط leave_requests.leave_type_id). أي ترحيل يحذف أو يغيّر عموداً
+// يُنشئه هذا الملف يجب أن يحذف السطر المقابل هنا في نفس التغيير، وإلا أعاده الإقلاع التالي.
 export async function ensureSchema() {
   schemaHealth.status = 'not_run';
   schemaHealth.startedAt = new Date().toISOString();
@@ -889,12 +894,15 @@ export async function ensureSchema() {
     `);
 
     await safeQuery(`
+      -- لا يوجد قيد unique على name، لذلك كان ON CONFLICT لا يمنع شيئاً ويضيف 3 صفوف مكررة عند كل إقلاع.
       INSERT INTO commendation_types (name, credit_months, status, notes)
-      VALUES 
+      SELECT v.name, v.credit_months, v.status, v.notes
+      FROM (VALUES
         ('كتاب شكر وتقدير اعتيادي / مدير عام', 1, 'فعال', 'يمنح قدماً لمدة شهر واحد'),
         ('كتاب شكر وتقدير وزاري', 1, 'فعال', 'يمنح قدماً لمدة شهر واحد'),
         ('كتاب شكر وتقدير استثنائي (رئاسي / رئيس مجلس الوزراء)', 6, 'فعال', 'يمنح قدماً لمدة 6 أشهر')
-      ON CONFLICT DO NOTHING;
+      ) AS v(name, credit_months, status, notes)
+      WHERE NOT EXISTS (SELECT 1 FROM commendation_types ct WHERE TRIM(ct.name) = v.name);
     `);
 
     // أنواع الخدمة (قائمة قابلة للتوسيع من المستخدم، بلا تكرار)
