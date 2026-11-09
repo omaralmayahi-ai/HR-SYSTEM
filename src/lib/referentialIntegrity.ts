@@ -468,8 +468,17 @@ export function validateEmployeeImportRow(
  * Distinguishes between database connection/offline failures (Case A)
  * and active transaction/execution errors (Case B: constraints, invalid data, schema violations).
  */
-export function isDbConnectionFailure(err: any): boolean {
+export function isDbConnectionFailure(err: any, depth = 0): boolean {
   if (!err) return false;
+
+  // Drizzle wraps driver errors (DrizzleQueryError: "Failed query: ...") and keeps the
+  // original pg / network error in `cause`; AggregateError keeps them in `errors`.
+  if (depth < 4) {
+    if (err.cause && err.cause !== err && isDbConnectionFailure(err.cause, depth + 1)) return true;
+    if (Array.isArray(err.errors) && err.errors.some((e: any) => isDbConnectionFailure(e, depth + 1))) return true;
+  }
+  // The wrapper's own message embeds the SQL text and user-supplied params; never keyword-match on it.
+  if (err.cause && typeof err.message === 'string' && err.message.startsWith('Failed query:')) return false;
 
   // Node.js network / connection error codes
   const networkCodes = ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'EAI_AGAIN', 'ECONNRESET', 'ENETUNREACH'];
@@ -478,7 +487,9 @@ export function isDbConnectionFailure(err: any): boolean {
   }
 
   // PostgreSQL Connection Exception Class codes (Class 08 and Class 57P)
-  const pgConnectionCodes = ['08000', '08001', '08003', '08004', '08006', '08007', '57P01', '57P02', '57P03'];
+  // 28000/28P01: authentication failure, 3D000: database does not exist — the database is unreachable
+  // for this server, so they are treated like a connection failure (offline fallback), not a data error.
+  const pgConnectionCodes = ['08000', '08001', '08003', '08004', '08006', '08007', '57P01', '57P02', '57P03', '28000', '28P01', '3D000'];
   if (err.code && pgConnectionCodes.includes(err.code)) {
     return true;
   }
@@ -499,7 +510,9 @@ export function isDbConnectionFailure(err: any): boolean {
     'no pg connection',
     'connection closed',
     'database system is starting up',
-    'database system is in recovery'
+    'database system is in recovery',
+    'timeout exceeded when trying to connect',
+    'connection timeout'
   ];
 
   return connectionKeywords.some(keyword => msg.includes(keyword));
