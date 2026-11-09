@@ -119,6 +119,59 @@ describe('Gap 1 & Gap 6: Dates Foundation Test Suite (أساس التواريخ 
     });
   });
 
+  describe('2b. Effective date and movement kinds (تاريخ النفاذ وأنواع الحركات)', () => {
+    const base = {
+      id: 20, grade: 5, step: 3, gradeDate: '2021-01-01',
+      lastPromotionDate: '2019-01-01', lastIncrementDate: '2023-01-01',
+    };
+
+    it('uses the due date, not the order date, as effective date', () => {
+      const { updatedEmployee } = applyMovementToEmployee(base, {
+        movementType: 'علاوة سنوية', stepAfter: 4, dueDate: '2024-01-01', orderDate: '2024-03-15',
+      });
+      expect(updatedEmployee.lastIncrementDate).toBe('2024-01-01');
+      expect(updatedEmployee.gradeDate).toBe('2024-01-01');
+    });
+
+    it('falls back to the order date only when the due date is missing', () => {
+      const { updatedEmployee } = applyMovementToEmployee(base, {
+        movementType: 'ترفيع درجة', gradeAfter: 4, stepAfter: 1, orderDate: '2024-03-15',
+      });
+      expect(updatedEmployee.lastPromotionDate).toBe('2024-03-15');
+    });
+
+    it('returns بيانات_ناقصة and changes nothing when both dates are missing', () => {
+      const r = applyMovementToEmployee(base, { movementType: 'علاوة سنوية', stepAfter: 4 });
+      expect(r.status).toBe('بيانات_ناقصة');
+      expect(r.changedFields).toEqual({});
+      expect(r.updatedEmployee.step).toBe(3);
+    });
+
+    it('non-financial movements (transfer, assignment) never reset seniority dates', () => {
+      for (const t of ['نقل', 'تكليف', 'انتداب', 'تغيير عنوان وظيفي']) {
+        const r = applyMovementToEmployee(base, { movementType: t, gradeAfter: 9, dueDate: '2025-05-05' });
+        expect(r.kind).toBe('non_financial');
+        expect(r.changedFields).toEqual({});
+        expect(r.updatedEmployee.lastPromotionDate).toBe('2019-01-01');
+        expect(r.updatedEmployee.lastIncrementDate).toBe('2023-01-01');
+        expect(r.updatedEmployee.grade).toBe(5);
+      }
+    });
+
+    it('degree settlement (تسوية شهادة) updates last_promotion_date only and never the grade', () => {
+      const r = applyMovementToEmployee(base, {
+        movementType: 'تسوية شهادة', gradeAfter: 3, stepAfter: 1, dueDate: '2025-02-01', orderDate: '2025-04-01',
+      });
+      expect(r.kind).toBe('degree_settlement');
+      expect(r.updatedEmployee.grade).toBe(5);
+      expect(r.updatedEmployee.step).toBe(3);
+      expect(r.updatedEmployee.lastPromotionDate).toBe('2025-02-01');
+      expect(r.updatedEmployee.last_promotion_date).toBe('2025-02-01');
+      expect(r.updatedEmployee.lastIncrementDate).toBe('2023-01-01');
+      expect(r.updatedEmployee.gradeDate).toBe('2021-01-01');
+    });
+  });
+
   // 3. Schema columns verification
   describe('3. Schema Definitions Verification (التحقق من تعريفات المخطط في Drizzle)', () => {
     it('should have all 4 date columns defined on employees schema', () => {
