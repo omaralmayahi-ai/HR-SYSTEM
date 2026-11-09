@@ -105,39 +105,224 @@ export function deleteAnnualIncrement(grade) {
   }
 }
 
-// علاوات الشهادات العلمية (شهرياً بالدينار)
-export const EDUCATION_ALLOWANCES = {
-  "دكتوراه":    350000,
-  "ماجستير":    250000,
-  "بكالوريوس":  150000,
-  "دبلوم عالي": 100000,
-  "دبلوم":       75000,
-  "إعدادية":     50000,
-  "متوسطة":      35000,
-  "ابتدائية":    25000
-};
+// ============================================================================
+// القيم القانونية الافتراضية
+// ============================================================================
 
-// مخصصات المسؤولية / المنصب (كنسبة مئوية من الراتب الاسمي)
+// مخصصات الشهادة والحرفة — قانون رواتب موظفي الدولة والقطاع العام رقم 22 لسنة 2008،
+// المادة 11/أولاً (الشهادة) و11/ثانياً (الحرفة 15% لغير حملة الشهادات المذكورة).
+// النسب من الراتب الاسمي (راتب الجدول). لا يوجد في المادة 11 أي "مخصص شهادة عليا إضافي".
+export const LEGAL_EDUCATION_DEGREES = [
+  { name: 'دكتوراه', is_higher_education: true, allowance_rate: 100, higher_allowance_rate: 0, baseline_grade: 5, baseline_step: 1 },
+  { name: 'ماجستير', is_higher_education: true, allowance_rate: 75, higher_allowance_rate: 0, baseline_grade: 6, baseline_step: 1 },
+  { name: 'دبلوم عالي', is_higher_education: true, allowance_rate: 55, higher_allowance_rate: 0, baseline_grade: 6, baseline_step: 1 },
+  { name: 'بكالوريوس', is_higher_education: false, allowance_rate: 45, higher_allowance_rate: 0, baseline_grade: 7, baseline_step: 1 },
+  { name: 'دبلوم فني', is_higher_education: false, allowance_rate: 35, higher_allowance_rate: 0, baseline_grade: 8, baseline_step: 1 },
+  // "دبلوم" هو الاسم المستخدم في بيانات الموظفين للدبلوم الفني (سنتان بعد الإعدادية)
+  { name: 'دبلوم', is_higher_education: false, allowance_rate: 35, higher_allowance_rate: 0, baseline_grade: 8, baseline_step: 1 },
+  { name: 'إعدادية', is_higher_education: false, allowance_rate: 25, higher_allowance_rate: 0, baseline_grade: 8, baseline_step: 1 },
+  // ما دون الإعدادية: مخصصات حرفة 15% (المادة 11/ثانياً)
+  { name: 'متوسطة', is_higher_education: false, allowance_rate: 15, higher_allowance_rate: 0, baseline_grade: 9, baseline_step: 1 },
+  { name: 'ابتدائية', is_higher_education: false, allowance_rate: 15, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1 },
+  { name: 'يقرأ ويكتب', is_higher_education: false, allowance_rate: 15, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1 },
+  { name: 'دون الابتدائية (يقرأ ويكتب)', is_higher_education: false, allowance_rate: 15, higher_allowance_rate: 0, baseline_grade: 10, baseline_step: 1 },
+];
+
+// مخصصات المنصب (كنسبة من الراتب الاسمي) — قانون 22 لسنة 2008، المادة 10:
+// 30% معاون مدير عام؛ 25% مدير (مدير إدارة تشكيل دون مستوى دائرة)؛ 20% مدير قسم؛
+// 15% معاونو مديري التشكيلات ورؤساء/مسؤولو الشُّعب.
+// القيمة null تعني: المسمّى غير منصوص عليه في المادة 10 ونسبته **يُتحقق** منها
+// (لا تُصرف تلقائياً حتى يُعرَّف لها سند في شاشة مخصصات المسؤولية والمنصب).
 export const RESPONSIBILITY_ALLOWANCE_RATES = {
-  "مدير عام": 0.50, // 50%
-  "معاون مدير عام": 0.40, // 40%
-  "مدير هيئة": 0.35, // 35%
-  "مدير قسم مركزي": 0.30, // 30%
-  "مدير قسم": 0.25, // 25%
-  "مسؤول شعبة": 0.20, // 20%
-  "مسؤول وحدة": 0.15, // 15%
-  "مسؤول وجبة": 0.10, // 10%
+  "معاون مدير عام": 0.30,
+  "مدير": 0.25,
+  "مدير قسم": 0.20,
+  "مسؤول شعبة": 0.15,
+  "رئيس شعبة": 0.15,
+  "معاون مدير": 0.15,
+  "مدير عام": null,        // يُتحقق — غير وارد في المادة 10
+  "مدير هيئة": null,       // يُتحقق — مقابلة بفئات المادة 10 غير محسومة
+  "مدير قسم مركزي": null,  // يُتحقق
+  "مسؤول وحدة": null,      // يُتحقق
+  "مسؤول وجبة": null,      // يُتحقق
   "بلا مسؤولية": 0.00
 };
 
-// علاوة الزوجية
-export const SPOUSE_ALLOWANCE = 75000;
+// مخصص الإعالة (الزوجية) — المادة 14 من القانون 22 لسنة 2008 بنصها المعدل بالقانون 103 لسنة 2012
+export const SPOUSE_ALLOWANCE = 50000;
 
-// علاوة الأولاد (لكل ولد، بحد أقصى 4)
-export const CHILD_ALLOWANCE = 30000;
+// مخصص الأطفال لكل طفل حتى الطفل الرابع — المادة 14 المعدلة
+export const CHILD_ALLOWANCE = 10000;
+export const DEFAULT_MAX_CHILDREN = 4;
 
-// نسبة الاستقطاع التقاعدي (10% وفق قانون التقاعد الموحد رقم 9 لسنة 2014)
+// نسبة الاستقطاع التقاعدي (حصة الموظف 10% من الراتب الوظيفي دون المخصصات)
+// وفق قانون التقاعد الموحد رقم 9 لسنة 2014
 export const RETIREMENT_RATE = 0.10;
+
+// ============================================================================
+// فئات البنود (بدلاً من استنتاج النوع من كلمات في الاسم)
+// ============================================================================
+export const ITEM_CATEGORIES = {
+  SPOUSE: 'spouse',
+  CHILD: 'child',
+  RETIREMENT: 'retirement',
+  CERTIFICATE: 'certificate',
+  POSITION: 'position',
+  TAX: 'tax',
+  GENERAL: 'general',
+};
+
+const KNOWN_CATEGORIES = new Set(Object.values(ITEM_CATEGORIES));
+
+// تطبيع خفيف للمقارنة الحرفية للاسم كاملاً (ليس بحثاً عن جزء من الاسم)
+export function normalizeItemName(name) {
+  return String(name ?? '')
+    .replace(/[ً-ْـ]/g, '') // التشكيل والتطويل
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .replace(/\s*\/\s*/g, ' / ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const certificateLegacyNames = [];
+['دكتوراه', 'ماجستير', 'دبلوم عالي', 'بكالوريوس', 'دبلوم فني', 'دبلوم', 'إعدادية', 'متوسطة', 'ابتدائية'].forEach(d => {
+  certificateLegacyNames.push(`مخصصات شهادة ${d}`, `مخصص شهادة ${d}`, `مخصصات شهادة ال${d}`);
+});
+
+// أسماء البنود القديمة المعروفة (تطابق الاسم كاملاً فقط) — للتوافق مع السجلات التي أُنشئت قبل إضافة حقل الفئة
+const LEGACY_CATEGORY_NAMES = {
+  [ITEM_CATEGORIES.SPOUSE]: [
+    'مخصصات الزوجية المقطوعة', 'مخصصات الزوجية الثابتة', 'مخصصات الزوجية', 'مخصص الزوجية',
+    'المخصص الزوجي', 'المخصصات الزوجية', 'الزوجية', 'مخصصات الإعالة', 'مخصص الإعالة', 'مخصصات الزوجية والإعالة',
+  ],
+  [ITEM_CATEGORIES.CHILD]: [
+    'مخصصات الأطفال (لكل طفل)', 'مخصصات الأطفال لكل طفل', 'مخصصات الأطفال', 'مخصص الأطفال', 'مخصص الطفل',
+    'مخصصات الأولاد', 'مخصص الأولاد', 'مخصصات الأولاد (لكل ولد)', 'مخصص الأولاد (لكل ولد)', 'الأطفال', 'الأولاد',
+  ],
+  [ITEM_CATEGORIES.RETIREMENT]: [
+    'استقطاع توفير التقاعد الوطني', 'استقطاع التقاعد', 'الاستقطاع التقاعدي', 'استقطاع تقاعدي',
+    'التوقيفات التقاعدية', 'استقطاع التوقيفات التقاعدية', 'التقاعد', 'نسبة الاستقطاع التقاعدي الموحد',
+  ],
+  [ITEM_CATEGORIES.CERTIFICATE]: [
+    'مخصصات الشهادة', 'مخصص الشهادة', 'مخصصات شهادة', 'مخصصات الشهادة والحرفة', 'مخصصات الحرفة', ...certificateLegacyNames,
+  ],
+  [ITEM_CATEGORIES.POSITION]: [
+    'مخصصات منصب / إشرافية', 'مخصصات منصب', 'مخصصات المنصب', 'مخصص المنصب', 'مخصصات المسؤولية',
+    'مخصصات المسؤولية والمنصب', 'مخصصات إشرافية',
+  ],
+  [ITEM_CATEGORIES.TAX]: [
+    'استقطاع ضريبة الدخل المباشرة', 'استقطاع ضريبة الدخل', 'ضريبة الدخل',
+  ],
+};
+
+const LEGACY_NAME_TO_CATEGORY = new Map();
+Object.entries(LEGACY_CATEGORY_NAMES).forEach(([cat, names]) => {
+  names.forEach(n => LEGACY_NAME_TO_CATEGORY.set(normalizeItemName(n), cat));
+});
+
+/**
+ * يُرجع فئة البند: الحقل الصريح `category` أولاً، ثم مطابقة الاسم كاملاً مع أسماء البنود القديمة المعروفة.
+ * لا يُستخدم البحث عن كلمة داخل الاسم إطلاقاً ("مخصصات المولدات" ليست مخصص أطفال).
+ */
+export function getItemCategory(item) {
+  if (!item) return ITEM_CATEGORIES.GENERAL;
+  const explicit = item.category ?? item.item_category ?? item.itemCategory;
+  if (explicit && KNOWN_CATEGORIES.has(String(explicit))) return String(explicit);
+  const type = item.type;
+  const legacy = LEGACY_NAME_TO_CATEGORY.get(normalizeItemName(item.name));
+  if (!legacy) return ITEM_CATEGORIES.GENERAL;
+  // تحقق من اتساق الاتجاه: التقاعد والضريبة استقطاعات، والبقية مخصصات
+  const isDeductionType = type === 'deduction' || type === 'M_DEDUCTION';
+  const isDeductionCat = legacy === ITEM_CATEGORIES.RETIREMENT || legacy === ITEM_CATEGORIES.TAX;
+  if (type && isDeductionType !== isDeductionCat) return ITEM_CATEGORIES.GENERAL;
+  return legacy;
+}
+
+// ============================================================================
+// أدوات مساعدة
+// ============================================================================
+const hasBrowserStorage = () => {
+  try {
+    return typeof window !== 'undefined' && typeof localStorage !== 'undefined' && localStorage !== null;
+  } catch (e) {
+    return false;
+  }
+};
+
+function readStorage(key) {
+  if (!hasBrowserStorage()) return null;
+  try {
+    return localStorage.getItem(key);
+  } catch (e) {
+    return null;
+  }
+}
+
+function readStorageJson(key, warnings) {
+  const raw = readStorage(key);
+  if (raw === null || raw === undefined || raw === '') return null;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    if (warnings) warnings.push(`تعذّرت قراءة الإعداد المحلي ${key}`);
+    return null;
+  }
+}
+
+const toNumber = (v) => {
+  if (v === null || v === undefined || v === '') return NaN;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : NaN;
+};
+
+const ACTIVE_STATUSES = new Set(['فعال', 'active', 'نشط', 'مفعل']);
+const INACTIVE_STATUSES = new Set(['متوقف مؤقتاً', 'متوقف', 'موقوف', 'inactive', 'غير فعال', 'معطل']);
+
+function statusFlag(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === true) return true;
+  if (value === false) return false;
+  const s = String(value).trim();
+  if (ACTIVE_STATUSES.has(s)) return true;
+  if (INACTIVE_STATUSES.has(s)) return false;
+  return undefined;
+}
+
+function parseDateOnly(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function getPeriod(targetMonth, targetYear) {
+  const now = new Date();
+  const month = parseInt(targetMonth || (now.getMonth() + 1), 10);
+  const year = parseInt(targetYear || now.getFullYear(), 10);
+  const start = new Date(year, month - 1, 1);
+  const end = new Date(year, month, 0);
+  return { month, year, start, end };
+}
+
+function parseJsonArray(value) {
+  if (!value) return null;
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+// ============================================================================
+// الشروط والاستحقاق
+// ============================================================================
 
 // Helper to check if an employee matches custom allowance/deduction criteria
 export function doesEmployeeMatchCriteria(employee, rule) {
@@ -162,28 +347,28 @@ export function doesEmployeeMatchCriteria(employee, rule) {
   const matchesStatus = matchesCondition(employee.status || employee.employeeStatus, rule.employeeStatuses);
   const matchesMarital = matchesCondition(employee.marital_status || employee.maritalStatus, rule.maritalStatuses);
   const matchesServiceType = matchesCondition(employee.service_type || employee.serviceType, rule.serviceTypes);
-  
+
   const matchesGender = matchesCondition(employee.gender, rule.genders);
   const matchesEthnicity = matchesCondition(employee.ethnicity || employee.nationality, rule.ethnicities || rule.nationalities);
   const matchesReligion = matchesCondition(employee.religion, rule.religions);
   const matchesActingResponsibility = matchesCondition(employee.acting_responsibility || employee.actingResponsibility, rule.actingResponsibilities);
   const matchesDeputyLevel = matchesCondition(employee.deputy_level || employee.deputyLevel || employee.deputy_status || employee.deputyStatus, rule.deputyLevels || rule.deputyStatuses);
   const matchesWorkShiftType = matchesCondition(employee.work_shift_type || employee.workShiftType, rule.workShiftTypes);
-  
+
   const empShiftSys = String(employee.shift_system_name || employee.shiftSystemName || employee.shift_system_id || employee.shiftSystemId || '');
   const matchesShiftSystem = matchesCondition(empShiftSys, rule.shiftSystems);
 
   return (
-    matchesGrade && 
-    matchesStep && 
-    matchesEducation && 
-    matchesResponsibility && 
-    matchesLocation && 
-    matchesTitle && 
-    matchesWorkNature && 
-    matchesDept && 
-    matchesStatus && 
-    matchesMarital && 
+    matchesGrade &&
+    matchesStep &&
+    matchesEducation &&
+    matchesResponsibility &&
+    matchesLocation &&
+    matchesTitle &&
+    matchesWorkNature &&
+    matchesDept &&
+    matchesStatus &&
+    matchesMarital &&
     matchesServiceType &&
     matchesGender &&
     matchesEthnicity &&
@@ -195,345 +380,620 @@ export function doesEmployeeMatchCriteria(employee, rule) {
   );
 }
 
-// Helper to check if an employee matches custom allowance/deduction rules
-export function checkEmployeeMatchesRule(employee, allowanceId) {
-  if (typeof window === 'undefined') return true; // Server-side fallback or default
+/**
+ * تقييم قاعدة استحقاق/حجب لموظف. يفشل مغلقاً: أي خطأ في التقييم = غير مستحق + تحذير.
+ * @returns {{ matched: boolean, error: string|null }}
+ */
+export function evaluateEmployeeRule(employee, rule) {
+  if (rule === null || rule === undefined) return { matched: true, error: null }; // لا شروط = للجميع
   try {
-    const saved = localStorage.getItem(`ALLOWANCE_RULES_${allowanceId}`);
-    if (!saved) return true; // No custom rules means granted to all by default!
-    const rule = JSON.parse(saved);
+    const parsed = typeof rule === 'string' ? JSON.parse(rule) : rule;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('صيغة الشروط غير صالحة');
+    }
 
     // 1. Blocklist check (حجب)
     const empId = employee.id;
     const empNum = employee.employee_number || employee.employeeNumber || employee.civil_service_number || employee.civilServiceNumber;
-    if (rule.blockedEmployees && rule.blockedEmployees.length > 0) {
-      if (
-        rule.blockedEmployees.includes(empId) || 
-        rule.blockedEmployees.includes(String(empId)) || 
-        rule.blockedEmployees.includes(Number(empId)) || 
-        (empNum && rule.blockedEmployees.includes(empNum)) ||
-        (empNum && rule.blockedEmployees.includes(String(empNum)))
-      ) {
-        return false; // Excluded!
+    const blocked = parsed.blockedEmployees;
+    if (blocked !== undefined && blocked !== null && !Array.isArray(blocked)) {
+      throw new Error('قائمة الحجب غير صالحة');
+    }
+    if (blocked && blocked.length > 0) {
+      const blockedSet = new Set(blocked.map(String));
+      if ((empId !== undefined && empId !== null && blockedSet.has(String(empId))) || (empNum && blockedSet.has(String(empNum)))) {
+        return { matched: false, error: null };
       }
     }
 
     // 2. Evaluate criteria
-    return doesEmployeeMatchCriteria(employee, rule);
+    return { matched: doesEmployeeMatchCriteria(employee, parsed), error: null };
   } catch (e) {
-    console.error("Error evaluating custom allowance rule:", e);
-    return true; // fail-safe to grant if evaluation fails
+    return { matched: false, error: e?.message || String(e) };
   }
 }
 
-// Helper to get active rates from localStorage
-export function getActiveFinancialRates() {
+// Helper to check if an employee matches custom allowance/deduction rules.
+// `rule` يمكن تمريره صراحة؛ وإلا يُقرأ من localStorage (توافق قديم في المتصفح فقط).
+// فشل التقييم لا يمنح البند (fail closed) ويُضاف تحذير إلى `warnings` إن مُرِّرت.
+export function checkEmployeeMatchesRule(employee, allowanceId, rule = undefined, warnings = null) {
+  let effectiveRule = rule;
+  if (effectiveRule === undefined) {
+    const raw = readStorage(`ALLOWANCE_RULES_${allowanceId}`);
+    effectiveRule = raw ? raw : null;
+  }
+  const { matched, error } = evaluateEmployeeRule(employee, effectiveRule);
+  if (error) {
+    const msg = `تعذّر تقييم شروط البند ${allowanceId}: ${error} — لم يُمنح البند`;
+    if (Array.isArray(warnings)) warnings.push(msg);
+    else console.warn(msg);
+  }
+  return matched;
+}
+
+// ============================================================================
+// الإعالة والأطفال
+// ============================================================================
+
+// الحالات الاجتماعية المستحقة للإعالة: المتزوج/ة، وبنص المادة 14 المعدلة: الأرملة والمطلقة والأرمل.
+const SPOUSE_ELIGIBLE_STATUSES = new Set(['متزوج', 'متزوجة', 'أرمل', 'ارمل', 'أرملة', 'ارملة', 'مطلقة']);
+
+/**
+ * عدد الإعالات المستحقة (0 أو 1). المادة 14 تمنح مخصص إعالة واحداً للموظف بصرف النظر عن عدد الزوجات.
+ * توزيع الإعالة إذا كان الزوجان موظفين **يُتحقق** (لم يُطبق هنا).
+ */
+export function getEligibleSpouseCount(employee) {
+  const status = String(employee?.marital_status || employee?.maritalStatus || '').trim();
+  return SPOUSE_ELIGIBLE_STATUSES.has(status) ? 1 : 0;
+}
+
+const MALE_VALUES = new Set(['ذكر', 'male', 'm', 'ابن', 'ولد']);
+const FEMALE_VALUES = new Set(['أنثى', 'انثى', 'female', 'f', 'بنت', 'ابنة']);
+const MARRIED_VALUES = new Set(['متزوج', 'متزوجة', 'married']);
+const UNMARRIED_VALUES = new Set(['أعزب', 'عزباء', 'غير متزوجة', 'غير متزوج', 'single', 'مطلقة', 'أرملة', 'ارملة']);
+
+function ageInYearsAt(birth, at) {
+  let age = at.getFullYear() - birth.getFullYear();
+  const m = at.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && at.getDate() < birth.getDate())) age--;
+  return age;
+}
+
+/**
+ * استحقاق طفل لمخصص الأطفال في فترة معيّنة (المادة 14 المعدلة بالقانون 103 لسنة 2012):
+ *  - دون 18 سنة: مستحق.
+ *  - الابن: يستمر حتى 24 سنة ما دام طالباً (بأمر تمديد نافذ في الفترة)، ويتوقف عند 18 إن ترك الدراسة.
+ *  - البنت: ما دامت غير متزوجة وغير موظفة (يجب أن تكون البيانات مسجلة صراحة)، أو بأمر تمديد نافذ.
+ * @returns {{ eligible: boolean, reason: string }}
+ */
+export function evaluateChildEligibility(child, periodStart = new Date()) {
+  if (!child || typeof child !== 'object') return { eligible: false, reason: 'بيانات الطفل غير صالحة' };
+  const at = periodStart instanceof Date ? periodStart : new Date(periodStart);
+  const birth = parseDateOnly(child.birth_date || child.birthDate || child.dob);
+  if (!birth) return { eligible: false, reason: `تاريخ ميلاد الطفل ${child.name || ''} غير معروف` };
+  if (birth > at) return { eligible: false, reason: `تاريخ ميلاد الطفل ${child.name || ''} بعد فترة الراتب` };
+  if (child.is_deceased || child.isDeceased) return { eligible: false, reason: 'متوفى' };
+
+  const age = ageInYearsAt(birth, at);
+  if (age < 18) return { eligible: true, reason: 'دون 18 سنة' };
+
+  const extStart = parseDateOnly(child.extension_start_date || child.extensionStartDate);
+  const extEnd = parseDateOnly(child.extension_end_date || child.extensionEndDate);
+  const hasOrder = !!(child.extension_order_number || child.extensionOrderNumber);
+  const extensionActive = hasOrder && extStart && extEnd && extStart <= at && at <= extEnd;
+
+  const gender = String(child.gender || '').trim().toLowerCase();
+  const isFemale = FEMALE_VALUES.has(gender);
+  const isMale = MALE_VALUES.has(gender);
+
+  if (isFemale) {
+    const marital = String(child.marital_status || child.maritalStatus || '').trim();
+    const married = child.is_married === true || MARRIED_VALUES.has(marital);
+    const employedRaw = child.is_employed ?? child.isEmployed ?? child.employed;
+    const employed = employedRaw === true || employedRaw === 'نعم' || employedRaw === 'موظفة';
+    if (married) return { eligible: false, reason: 'البنت متزوجة' };
+    if (employed) return { eligible: false, reason: 'البنت موظفة' };
+    const knownUnmarried = child.is_married === false || UNMARRIED_VALUES.has(marital);
+    const knownNotEmployed = employedRaw === false || employedRaw === 'لا' || employedRaw === 'غير موظفة';
+    if (knownUnmarried && knownNotEmployed) return { eligible: true, reason: 'بنت غير متزوجة وغير موظفة' };
+    if (extensionActive) return { eligible: true, reason: 'أمر تمديد نافذ' };
+    return { eligible: false, reason: `بيانات البنت ${child.name || ''} (الزواج/التوظيف) غير مكتملة` };
+  }
+
+  // الابن (أو جنس غير معروف): يحتاج أمر تمديد نافذ للدراسة وعمراً دون 24 سنة
+  if (!extensionActive) return { eligible: false, reason: 'تجاوز 18 سنة بلا تمديد نافذ' };
+  if (age >= 24) return { eligible: false, reason: 'تجاوز 24 سنة' };
+  return { eligible: true, reason: isMale ? 'ابن طالب بأمر تمديد نافذ' : 'أمر تمديد نافذ' };
+}
+
+export function isChildEligible(child, periodStart = new Date()) {
+  return evaluateChildEligibility(child, periodStart).eligible;
+}
+
+// Helper to get active rates (legacy: localStorage in the browser, otherwise legal defaults)
+export function getActiveFinancialRates(overrides = {}) {
   let spouse = SPOUSE_ALLOWANCE;
   let child = CHILD_ALLOWANCE;
   let retirement = RETIREMENT_RATE;
-  
-  if (typeof window !== 'undefined') {
-    const savedSpouse = localStorage.getItem('SPOUSE_ALLOWANCE');
-    if (savedSpouse) spouse = parseInt(savedSpouse) || SPOUSE_ALLOWANCE;
-    
-    const savedChild = localStorage.getItem('CHILD_ALLOWANCE');
-    if (savedChild) child = parseInt(savedChild) || CHILD_ALLOWANCE;
-    
-    const savedRetirement = localStorage.getItem('RETIREMENT_RATE');
-    if (savedRetirement) retirement = parseFloat(savedRetirement) || RETIREMENT_RATE;
-  }
-  
+
+  const savedSpouse = toNumber(readStorage('SPOUSE_ALLOWANCE'));
+  if (Number.isFinite(savedSpouse) && savedSpouse >= 0) spouse = savedSpouse;
+  const savedChild = toNumber(readStorage('CHILD_ALLOWANCE'));
+  if (Number.isFinite(savedChild) && savedChild >= 0) child = savedChild;
+  const savedRetirement = toNumber(readStorage('RETIREMENT_RATE'));
+  if (Number.isFinite(savedRetirement) && savedRetirement >= 0 && savedRetirement <= 1) retirement = savedRetirement;
+
+  if (Number.isFinite(toNumber(overrides.spouse))) spouse = toNumber(overrides.spouse);
+  if (Number.isFinite(toNumber(overrides.child))) child = toNumber(overrides.child);
+  if (Number.isFinite(toNumber(overrides.retirement))) retirement = toNumber(overrides.retirement);
+
   return { spouse, child, retirement };
 }
 
-export function calculateSalary(employee, extraAllowances = 0, loanDeduction = 0, penaltyDeduction = 0, absenceDeduction = 0, otherDeductions = 0, customSalaryTable = null, customWorkLocations = null, customEducationDegrees = null, customAllowances = null, customSystemSettings = null, targetMonth = null, targetYear = null) {
-  const grade = employee.grade || 1;
-  const step = employee.step || 1;
-  const baseSalary = (customSalaryTable && (customSalaryTable[grade]?.[step] || customSalaryTable[String(grade)]?.[String(step)]))
-    || (SALARY_TABLE[grade] && SALARY_TABLE[grade][step])
-    || (SALARY_TABLE[String(grade)] && SALARY_TABLE[String(grade)][String(step)])
-    || 250000;
+// ============================================================================
+// محرك الاحتساب
+// ============================================================================
 
-  const rates = getActiveFinancialRates();
-  const activeSpouseAllowance = rates.spouse;
-  const activeChildAllowance = rates.child;
-  const activeRetirementRate = rates.retirement;
+const LEGACY_POSITIONAL_KEYS = [
+  'extraAllowances', 'loanDeduction', 'penaltyDeduction', 'absenceDeduction', 'otherDeductions',
+  'customSalaryTable', 'customWorkLocations', 'customEducationDegrees', 'allowancesDeductions',
+  'systemSettings', 'targetMonth', 'targetYear',
+];
 
-  // 1. مخصصات الشهادة ومخصصات الشهادة العليا الإضافية
+function normalizeOptions(args) {
+  const [second] = args;
+  if (second && typeof second === 'object' && !Array.isArray(second)) {
+    const o = { ...second };
+    if (o.customAllowances && !o.allowancesDeductions) o.allowancesDeductions = o.customAllowances;
+    if (o.customSystemSettings && !o.systemSettings) o.systemSettings = o.customSystemSettings;
+    if (o.educationDegrees && !o.customEducationDegrees) o.customEducationDegrees = o.educationDegrees;
+    if (o.workLocations && !o.customWorkLocations) o.customWorkLocations = o.workLocations;
+    if (o.salaryTable && !o.customSalaryTable) o.customSalaryTable = o.salaryTable;
+    return o;
+  }
+  const o = {};
+  LEGACY_POSITIONAL_KEYS.forEach((k, i) => {
+    if (args[i] !== undefined && args[i] !== null) o[k] = args[i];
+  });
+  return o;
+}
+
+function lookupScale(table, grade, step) {
+  if (!table) return undefined;
+  const row = table[grade] || table[String(grade)];
+  if (!row) return undefined;
+  const v = row[step] ?? row[String(step)];
+  const n = toNumber(v);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+const MISSING_FIELDS = [
+  'base_salary', 'degree_allowance', 'higher_degree_allowance', 'spouse_allowance', 'children_allowance',
+  'position_allowance', 'experience_allowance', 'region_allowance', 'extra_allowances', 'general_custom_allowances',
+  'general_custom_deductions', 'total_allowances', 'retirement_deduction', 'tax_deduction', 'loan_deduction',
+  'penalty_deduction', 'absence_deduction', 'other_deductions', 'total_deductions', 'net_salary',
+];
+
+function missingDataResult(reason, warnings) {
+  const res = {
+    status: 'missing_data',
+    missing_data: true,
+    reason,
+    warnings,
+    allowances_breakdown: [],
+    deductions_breakdown: [],
+  };
+  MISSING_FIELDS.forEach(f => { res[f] = null; });
+  return res;
+}
+
+function pctLabel(v) {
+  return `${Number(v)}%`;
+}
+
+const BASE_LABELS = {
+  nominal: 'من الراتب الاسمي',
+  gross: 'من الراتب الكلي قبل الاستقطاعات',
+  net: 'من صافي الراتب بعد الاستقطاعات الأخرى',
+};
+
+/**
+ * احتساب راتب موظف.
+ *
+ * التوقيع الجديد: calculateSalary(employee, options)
+ *   options: {
+ *     customSalaryTable, customEducationDegrees, responsibilityAllowances, customWorkLocations,
+ *     allowancesDeductions, systemSettings, rules: {[itemId]: rule}, temporaryMeta: {[itemId]: meta},
+ *     itemOrder: { allowances: [], deductions: [] },
+ *     spouseStatus, childStatus, retirementStatus ('active'|'inactive'|'فعال'|'متوقف مؤقتاً'),
+ *     spouseAmount, childAmount, retirementRate (كسر عشري: 0.10),
+ *     extraAllowances, loanDeduction, penaltyDeduction, absenceDeduction, otherDeductions,
+ *     targetMonth, targetYear, useBrowserStorage (افتراضي true: localStorage كمصدر احتياطي قديم في المتصفح فقط)
+ *   }
+ * التوقيع القديم الموضعي ما زال مدعوماً.
+ *
+ * إذا كانت الدرجة أو المرحلة مفقودة أو غير موجودة في السلم يُرجع { status: 'missing_data', reason } ولا يُحتسب راتب.
+ */
+export function calculateSalary(employee, ...args) {
+  const opts = normalizeOptions(args);
+  const warnings = [];
+  const useStorage = opts.useBrowserStorage !== false && hasBrowserStorage();
+  const fromStorage = (key) => (useStorage ? readStorageJson(key, warnings) : null);
+  const rawStorage = (key) => (useStorage ? readStorage(key) : null);
+
+  if (!employee || typeof employee !== 'object') {
+    return missingDataResult('بيانات الموظف غير متوفرة', warnings);
+  }
+
+  // 0. الراتب الاسمي — لا قيم افتراضية للدرجة أو المرحلة
+  const grade = toNumber(employee.grade);
+  const step = toNumber(employee.step);
+  const missing = [];
+  if (!Number.isInteger(grade) || grade <= 0) missing.push('الدرجة');
+  if (!Number.isInteger(step) || step <= 0) missing.push('المرحلة');
+  if (missing.length > 0) {
+    return missingDataResult(`بيانات ناقصة: ${missing.join(' و')} غير مسجلة للموظف`, warnings);
+  }
+  const baseSalary = lookupScale(opts.customSalaryTable, grade, step) ?? lookupScale(SALARY_TABLE, grade, step);
+  if (!baseSalary) {
+    return missingDataResult(`بيانات ناقصة: لا يوجد راتب في السلم للدرجة ${grade} المرحلة ${step}`, warnings);
+  }
+
+  const period = getPeriod(opts.targetMonth, opts.targetYear);
+  const legacyRates = getActiveFinancialRates();
+
+  const allowances_breakdown = [];
+  const deductions_breakdown = [];
+  const pushAllowance = (entry) => { if (entry.amount) allowances_breakdown.push(entry); };
+
+  // البنود (مخصصات/استقطاعات) — من المعامل أولاً، ثم من النسخة المحلية القديمة في المتصفح
+  let items = Array.isArray(opts.allowancesDeductions) ? opts.allowancesDeductions : fromStorage('ALLOWANCES_DEDUCTIONS_PRESETS');
+  if (!Array.isArray(items)) items = [];
+
+  const isItemInPeriod = (item) => {
+    const effective = parseDateOnly(item.effective_date || item.effectiveDate || item.effective_from || item.effectiveFrom);
+    if (effective && effective > period.end) return false;
+    const deactivated = parseDateOnly(item.deactivated_at || item.deactivatedAt);
+    if (deactivated) return deactivated > period.start; // يُصرف للفترات السابقة لتاريخ الإيقاف فقط
+    if (item.status === undefined || item.status === null || item.status === '') return true;
+    return statusFlag(item.status) === true; // حالة غير معروفة = غير فعال
+  };
+
+  const findCategoryItem = (category) => {
+    const matches = items.filter(i => getItemCategory(i) === category);
+    if (matches.length === 0) return null;
+    const inPeriod = matches.filter(isItemInPeriod);
+    if (matches.length > 1) warnings.push(`يوجد أكثر من بند واحد من فئة ${category}؛ اعتُمد الأول فقط`);
+    return { item: inPeriod[0] || matches[0], active: inPeriod.length > 0 };
+  };
+
+  const resolveFlag = (explicit, record, storageKey) => {
+    const e = statusFlag(explicit);
+    if (e !== undefined) return e;
+    if (record) return record.active;
+    const s = rawStorage(storageKey);
+    if (s === 'متوقف مؤقتاً') return false;
+    return true;
+  };
+
+  const itemAmount = (item, base) => {
+    const calcType = item.calcType || item.calc_type || 'flat';
+    const val = toNumber(item.value);
+    if (!Number.isFinite(val)) return 0;
+    return calcType === 'percentage' ? Math.round(base * (val / 100)) : val;
+  };
+
+  // 1. مخصصات الشهادة
   let degreeAllowance = 0;
   let higherDegreeAllowance = 0;
   const employeeEducationLevel = employee.education_level || employee.educationLevel;
-  
+  let degrees = Array.isArray(opts.customEducationDegrees) ? opts.customEducationDegrees : fromStorage('EDUCATION_DEGREES_PRESETS');
+  if (!Array.isArray(degrees) || degrees.length === 0) degrees = LEGAL_EDUCATION_DEGREES;
   if (employeeEducationLevel) {
-    let degrees = customEducationDegrees;
-    if (!degrees && isClient) {
-      try {
-        const savedDegrees = localStorage.getItem('EDUCATION_DEGREES_PRESETS');
-        if (savedDegrees) degrees = JSON.parse(savedDegrees);
-      } catch (e) {}
-    }
-    
-    if (degrees && Array.isArray(degrees) && degrees.length > 0) {
-      const matched = degrees.find(d => d.name === employeeEducationLevel);
-      if (matched) {
-        const allowanceRate = matched.allowance_rate || matched.allowanceRate || 0;
-        degreeAllowance = Math.round(baseSalary * (allowanceRate / 100));
-        
-        const isHigher = matched.is_higher_education || matched.isHigherEducation;
-        if (isHigher) {
-          const higherRate = matched.higher_allowance_rate || matched.higherAllowanceRate || 0;
-          higherDegreeAllowance = Math.round(baseSalary * (higherRate / 100));
-        }
+    const target = normalizeItemName(employeeEducationLevel);
+    const matched = degrees.find(d => normalizeItemName(d.name) === target);
+    if (matched) {
+      const rate = toNumber(matched.allowance_rate ?? matched.allowanceRate);
+      if (Number.isFinite(rate)) {
+        degreeAllowance = Math.round(baseSalary * (rate / 100));
+        pushAllowance({ id: 'certificate', category: ITEM_CATEGORIES.CERTIFICATE, name: `مخصصات الشهادة (${employeeEducationLevel})`, amount: degreeAllowance, calcType: 'percentage', calculationBase: 'nominal', baseAmount: baseSalary, details: `${pctLabel(rate)} ${BASE_LABELS.nominal}` });
       } else {
-        // Fallback to static flat rate if not matched
-        degreeAllowance = EDUCATION_ALLOWANCES[employeeEducationLevel] || 0;
+        warnings.push(`نسبة مخصص الشهادة "${employeeEducationLevel}" غير معرّفة`);
+      }
+      const isHigher = matched.is_higher_education || matched.isHigherEducation;
+      const higherRate = toNumber(matched.higher_allowance_rate ?? matched.higherAllowanceRate);
+      if (isHigher && Number.isFinite(higherRate) && higherRate > 0) {
+        // قيمة مُعرَّفة صراحة من المسؤول؛ المادة 11 لا تنص على مخصص إضافي للشهادة العليا
+        higherDegreeAllowance = Math.round(baseSalary * (higherRate / 100));
+        warnings.push(`مخصص الشهادة العليا الإضافي (${pctLabel(higherRate)}) غير منصوص عليه في المادة 11 من القانون 22 لسنة 2008 — يُتحقق`);
+        pushAllowance({ id: 'certificate_higher', category: ITEM_CATEGORIES.CERTIFICATE, name: 'مخصص الشهادة العليا الإضافي', amount: higherDegreeAllowance, calcType: 'percentage', calculationBase: 'nominal', baseAmount: baseSalary, details: `${pctLabel(higherRate)} ${BASE_LABELS.nominal}` });
       }
     } else {
-      // Fallback to static flat rate
-      degreeAllowance = EDUCATION_ALLOWANCES[employeeEducationLevel] || 0;
+      warnings.push(`الشهادة "${employeeEducationLevel}" غير معرّفة في جدول الشهادات — لم يُحتسب مخصص الشهادة`);
+    }
+  } else {
+    warnings.push('التحصيل الدراسي غير مسجل — لم يُحتسب مخصص الشهادة');
+  }
+
+  // 2. مخصص الإعالة (الزوجية)
+  const spouseRec = findCategoryItem(ITEM_CATEGORIES.SPOUSE);
+  const spouseEnabled = resolveFlag(opts.spouseStatus, spouseRec, 'SPOUSE_ALLOWANCE_STATUS');
+  let spouseUnit;
+  let spouseCalcType = 'flat';
+  let spouseValue;
+  if (Number.isFinite(toNumber(opts.spouseAmount))) {
+    spouseUnit = toNumber(opts.spouseAmount);
+  } else if (spouseRec && Number.isFinite(toNumber(spouseRec.item.value))) {
+    spouseCalcType = spouseRec.item.calcType || spouseRec.item.calc_type || 'flat';
+    spouseValue = toNumber(spouseRec.item.value);
+    spouseUnit = itemAmount(spouseRec.item, baseSalary);
+  } else {
+    spouseUnit = legacyRates.spouse;
+  }
+  const spouseCount = getEligibleSpouseCount(employee);
+  const spouseAllowance = spouseEnabled && spouseCount > 0 ? spouseUnit : 0;
+  pushAllowance({ id: spouseRec?.item?.id ?? 'spouse', category: ITEM_CATEGORIES.SPOUSE, name: 'مخصصات الزوجية (الإعالة)', amount: spouseAllowance, calcType: spouseCalcType, calculationBase: 'nominal', baseAmount: baseSalary, details: spouseCalcType === 'percentage' ? `${pctLabel(spouseValue)} ${BASE_LABELS.nominal}` : 'مبلغ مقطوع' });
+
+  // 3. مخصصات الأطفال
+  const childRec = findCategoryItem(ITEM_CATEGORIES.CHILD);
+  const childEnabled = resolveFlag(opts.childStatus, childRec, 'CHILD_ALLOWANCE_STATUS');
+  let childUnit;
+  if (Number.isFinite(toNumber(opts.childAmount))) {
+    childUnit = toNumber(opts.childAmount);
+  } else if (childRec && Number.isFinite(toNumber(childRec.item.value))) {
+    childUnit = itemAmount(childRec.item, baseSalary);
+  } else {
+    childUnit = legacyRates.child;
+  }
+
+  let maxChildren = DEFAULT_MAX_CHILDREN;
+  const settings = (opts.systemSettings && typeof opts.systemSettings === 'object') ? opts.systemSettings : fromStorage('SYSTEM_SETTINGS_PRESETS');
+  const settingsMax = toNumber(settings?.maxChildrenCount ?? settings?.max_children_count);
+  if (Number.isFinite(settingsMax) && settingsMax >= 0) maxChildren = settingsMax;
+  let childRules = childRec?.item?.rules;
+  if (typeof childRules === 'string') { try { childRules = JSON.parse(childRules); } catch (e) { childRules = null; } }
+  const ruleMax = toNumber(childRules?.maxChildrenCount);
+  if (Number.isFinite(ruleMax) && ruleMax >= 0) maxChildren = ruleMax;
+
+  let eligibleChildren = 0;
+  const details = parseJsonArray(employee.children_details ?? employee.childrenDetails);
+  if (details && details.length > 0) {
+    details.forEach(c => {
+      const r = evaluateChildEligibility(c, period.start);
+      if (r.eligible) eligibleChildren++;
+      else if (/غير معروف|غير مكتملة|غير صالحة/.test(r.reason)) warnings.push(`طفل غير محتسب: ${r.reason}`);
+    });
+  } else {
+    const count = toNumber(employee.children_count ?? employee.childrenCount);
+    if (Number.isFinite(count) && count > 0) {
+      eligibleChildren = count;
+      warnings.push('لا تتوفر تفاصيل الأطفال (تواريخ الميلاد)؛ اعتُمد العدد المسجل دون التحقق من العمر');
     }
   }
-
-  // 2. مخصصات الزوجية من جدول المخصصات والاستقطاعات
-  let localAllowances = customAllowances;
-  if (!localAllowances && isClient) {
-    try {
-      const savedAllowances = localStorage.getItem('ALLOWANCES_DEDUCTIONS_PRESETS');
-      if (savedAllowances) localAllowances = JSON.parse(savedAllowances);
-    } catch (e) {}
-  }
-
-  let spouseAllowanceEnabled = true;
-  let childAllowanceEnabled = true;
-  if (isClient) {
-    try {
-      spouseAllowanceEnabled = localStorage.getItem('SPOUSE_ALLOWANCE_STATUS') !== 'متوقف مؤقتاً';
-      childAllowanceEnabled = localStorage.getItem('CHILD_ALLOWANCE_STATUS') !== 'متوقف مؤقتاً';
-    } catch (e) {}
-  }
-
-  let finalSpouseAllowanceVal = activeSpouseAllowance; // Fallback 75000
-  if (localAllowances && Array.isArray(localAllowances)) {
-    const matchedSpouse = localAllowances.find(a => a.type === 'allowance' && a.status === 'فعال' && (a.name.includes('زوجية') || a.name.includes('الزوجية')));
-    if (matchedSpouse) {
-      if (matchedSpouse.calcType === 'percentage' || matchedSpouse.calc_type === 'percentage') {
-        finalSpouseAllowanceVal = Math.round(baseSalary * (matchedSpouse.value / 100));
-      } else {
-        finalSpouseAllowanceVal = matchedSpouse.value;
-      }
-    }
-  }
-  const spouseAllowance = (spouseAllowanceEnabled && (employee.marital_status === "متزوج" || employee.maritalStatus === "متزوج")) ? finalSpouseAllowanceVal : 0;
-
-  // 3. مخصصات الأولاد (بحد أقصى يتم الحصول عليه من إعدادات النظام المالية)
-  let maxChildren = 4; // default
-  let localSettings = customSystemSettings;
-  if (!localSettings && isClient) {
-    try {
-      const savedSettings = localStorage.getItem('SYSTEM_SETTINGS_PRESETS');
-      if (savedSettings) localSettings = JSON.parse(savedSettings);
-    } catch (e) {}
-  }
-  if (localSettings) {
-    maxChildren = localSettings.maxChildrenCount !== undefined ? localSettings.maxChildrenCount : (localSettings.max_children_count !== undefined ? localSettings.max_children_count : 4);
-  }
-
-  let finalChildAllowanceVal = activeChildAllowance; // Fallback 30000
-  if (localAllowances && Array.isArray(localAllowances)) {
-    const matchedChild = localAllowances.find(a => a.type === 'allowance' && a.status === 'فعال' && (a.name.includes('أطفال') || a.name.includes('الاطفال') || a.name.includes('أولاد') || a.name.includes('الاولاد') || a.name.includes('طفل') || a.name.includes('ولد')));
-    if (matchedChild) {
-      if (matchedChild.calcType === 'percentage' || matchedChild.calc_type === 'percentage') {
-        finalChildAllowanceVal = Math.round(baseSalary * (matchedChild.value / 100));
-      } else {
-        finalChildAllowanceVal = matchedChild.value;
-      }
-    }
-  }
-
-  const empChildrenCount = employee.children_count !== undefined ? employee.children_count : (employee.childrenCount !== undefined ? employee.childrenCount : 0);
-  const childrenCount = Math.min(empChildrenCount, maxChildren);
-  const childrenAllowance = childAllowanceEnabled ? childrenCount * finalChildAllowanceVal : 0;
+  const childrenCount = Math.min(eligibleChildren, maxChildren);
+  const childrenAllowance = childEnabled ? childrenCount * childUnit : 0;
+  pushAllowance({ id: childRec?.item?.id ?? 'children', category: ITEM_CATEGORIES.CHILD, name: `مخصصات الأطفال (${childrenCount})`, amount: childrenAllowance, calcType: 'flat', calculationBase: 'nominal', baseAmount: baseSalary, details: `${childrenCount} × ${childUnit}` });
 
   // 4. مخصصات المسؤولية / المنصب
-  const responsibilityName = employee.primary_responsibility || employee.primaryResponsibility || "بلا مسؤولية";
-  
-  let responsibilityRate = RESPONSIBILITY_ALLOWANCE_RATES[responsibilityName] !== undefined 
-    ? RESPONSIBILITY_ALLOWANCE_RATES[responsibilityName] 
-    : 0;
-
-  // Check for dynamic presets in localStorage
-  let responsibilities = null;
-  if (isClient) {
-    try {
-      const savedResps = localStorage.getItem('RESPONSIBILITY_ALLOWANCES_PRESETS');
-      if (savedResps) responsibilities = JSON.parse(savedResps);
-    } catch (e) {}
-  }
-  
-  if (responsibilities && Array.isArray(responsibilities) && responsibilities.length > 0) {
-    const matched = responsibilities.find(r => r.name === responsibilityName);
-    if (matched) {
-      const rateVal = matched.allowance_rate !== undefined ? matched.allowance_rate : (matched.allowanceRate !== undefined ? matched.allowanceRate : 0);
-      responsibilityRate = rateVal / 100;
+  const responsibilityName = employee.primary_responsibility || employee.primaryResponsibility || '';
+  let responsibilityRate = 0;
+  if (responsibilityName && responsibilityName !== 'بلا مسؤولية') {
+    const resps = Array.isArray(opts.responsibilityAllowances) ? opts.responsibilityAllowances : fromStorage('RESPONSIBILITY_ALLOWANCES_PRESETS');
+    const target = normalizeItemName(responsibilityName);
+    const matched = Array.isArray(resps) ? resps.find(r => normalizeItemName(r.name) === target) : null;
+    const matchedRate = matched ? toNumber(matched.allowance_rate ?? matched.allowanceRate) : NaN;
+    if (matched && Number.isFinite(matchedRate)) {
+      responsibilityRate = matchedRate / 100;
+    } else if (Object.prototype.hasOwnProperty.call(RESPONSIBILITY_ALLOWANCE_RATES, responsibilityName)) {
+      const legal = RESPONSIBILITY_ALLOWANCE_RATES[responsibilityName];
+      if (legal === null) {
+        warnings.push(`نسبة مخصص المسؤولية "${responsibilityName}" غير منصوص عليها في المادة 10 — يُتحقق، ولم تُحتسب`);
+      } else {
+        responsibilityRate = legal;
+      }
+    } else {
+      warnings.push(`المسؤولية "${responsibilityName}" غير معرّفة — لم يُحتسب مخصص المنصب`);
     }
   }
-  
   const positionAllowance = Math.round(baseSalary * responsibilityRate);
+  pushAllowance({ id: 'position', category: ITEM_CATEGORIES.POSITION, name: `مخصصات المنصب (${responsibilityName})`, amount: positionAllowance, calcType: 'percentage', calculationBase: 'nominal', baseAmount: baseSalary, details: `${pctLabel(Math.round(responsibilityRate * 10000) / 100)} ${BASE_LABELS.nominal}` });
 
   // 5. مخصصات موقع العمل الجغرافية/النائية
   const selectedLocationName = employee.work_location || employee.workLocation;
   let regionAllowance = 0;
   if (selectedLocationName) {
-    let locs = customWorkLocations;
-    if (!locs && isClient) {
-      try {
-        const savedLocs = localStorage.getItem('WORK_LOCATIONS');
-        if (savedLocs) locs = JSON.parse(savedLocs);
-      } catch (e) {}
-    }
-    if (locs && Array.isArray(locs)) {
+    const locs = Array.isArray(opts.customWorkLocations) ? opts.customWorkLocations : fromStorage('WORK_LOCATIONS');
+    if (Array.isArray(locs)) {
       const matched = locs.find(l => l.name === selectedLocationName);
-      if (matched) {
-        regionAllowance = parseInt(matched.allowance_amount || matched.allowanceAmount || 0);
-      }
+      const amt = matched ? toNumber(matched.allowance_amount ?? matched.allowanceAmount) : NaN;
+      if (Number.isFinite(amt)) regionAllowance = amt;
     }
   }
+  pushAllowance({ id: 'region', category: 'region', name: `مخصصات الموقع (${selectedLocationName || ''})`, amount: regionAllowance, calcType: 'flat', calculationBase: 'nominal', baseAmount: baseSalary, details: 'مبلغ مقطوع' });
 
-  // 6. مخصصات أخرى واستقطاعات رسمية فعالة مضافة لجميع الموظفين من جدول المخصصات والاستقطاعات
+  // 6. البنود العامة (المستمرة والمؤقتة)
+  const allowancesOrder = opts.itemOrder?.allowances || fromStorage('CUSTOM_ALLOWANCES_ORDER') || [];
+  const deductionsOrder = opts.itemOrder?.deductions || fromStorage('CUSTOM_DEDUCTIONS_ORDER') || [];
+  const orderIndex = (list, id) => {
+    const idx = Array.isArray(list) ? list.map(String).indexOf(String(id)) : -1;
+    return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+  };
+  const sortedItems = items
+    .map((it, idx) => ({ it, idx }))
+    .sort((a, b) => {
+      if (a.it.type !== b.it.type) return a.idx - b.idx;
+      const list = (a.it.type === 'deduction' || a.it.type === 'M_DEDUCTION') ? deductionsOrder : allowancesOrder;
+      const d = orderIndex(list, a.it.id) - orderIndex(list, b.it.id);
+      return d !== 0 ? d : a.idx - b.idx;
+    })
+    .map(x => x.it);
+
+  const getRule = (item) => {
+    if (item.rules !== undefined) return item.rules;
+    if (opts.rules && Object.prototype.hasOwnProperty.call(opts.rules, item.id)) return opts.rules[item.id];
+    const raw = rawStorage(`ALLOWANCE_RULES_${item.id}`);
+    return raw ? raw : null;
+  };
+  const getTempMeta = (item) => {
+    let meta = item.temporary_meta ?? item.temporaryMeta;
+    if (meta === undefined && opts.temporaryMeta) meta = opts.temporaryMeta[item.id];
+    if (meta === undefined) meta = rawStorage(`TEMPORARY_META_${item.id}`);
+    if (typeof meta === 'string') {
+      try { meta = JSON.parse(meta); } catch (e) { warnings.push(`تعذّرت قراءة بيانات البند المؤقت ${item.name} — لم يُطبَّق`); return { invalid: true }; }
+    }
+    return meta || null;
+  };
+  const ruleMatches = (item) => {
+    const { matched, error } = evaluateEmployeeRule(employee, getRule(item));
+    if (error) warnings.push(`تعذّر تقييم شروط البند "${item.name}": ${error} — لم يُمنح`);
+    return matched;
+  };
+
+  const seenIds = new Set();
+  const eligibleAllowances = [];
+  const eligibleDeductions = [];
+  let retirementRecordSeen = null;
+
+  sortedItems.forEach(a => {
+    if (!a || typeof a !== 'object') return;
+    const category = getItemCategory(a);
+    if (category === ITEM_CATEGORIES.SPOUSE || category === ITEM_CATEGORIES.CHILD) return; // محتسبة أعلاه
+    if (category === ITEM_CATEGORIES.RETIREMENT) { retirementRecordSeen = retirementRecordSeen || a; return; } // يُستقطع مرة واحدة أدناه
+    if (category === ITEM_CATEGORIES.CERTIFICATE || category === ITEM_CATEGORIES.POSITION) {
+      // مخصص الشهادة والمنصب يُحتسبان من جداولهما فقط؛ السجلات المكررة لا تُضاف فوقهما
+      if (isItemInPeriod(a)) warnings.push(`البند "${a.name}" مكرر لمخصص ${category === ITEM_CATEGORIES.CERTIFICATE ? 'الشهادة' : 'المنصب'} المحتسب من جدوله — لم يُضف`);
+      return;
+    }
+    if (category === ITEM_CATEGORIES.TAX) {
+      if (isItemInPeriod(a)) warnings.push(`البند "${a.name}" (ضريبة الدخل) لم يُطبَّق: محرك الضريبة بالشرائح غير منفذ بعد`);
+      return;
+    }
+
+    if (a.id !== undefined && a.id !== null) {
+      const key = `${a.type}:${a.id}`;
+      if (seenIds.has(key)) return; // منع التكرار في الفترة نفسها
+      seenIds.add(key);
+    }
+
+    if (!isItemInPeriod(a)) return;
+
+    const tempMeta = getTempMeta(a);
+    if (tempMeta && tempMeta.invalid) return;
+    if (tempMeta && tempMeta.isTemporary) {
+      if (tempMeta.timingType === 'range') {
+        const startVal = parseInt(tempMeta.startYear, 10) * 12 + parseInt(tempMeta.startMonth, 10);
+        const endVal = parseInt(tempMeta.endYear, 10) * 12 + parseInt(tempMeta.endMonth, 10);
+        const currentVal = period.year * 12 + period.month;
+        if (!(currentVal >= startVal && currentVal <= endVal)) return;
+      } else if (parseInt(tempMeta.paymentYear, 10) !== period.year || parseInt(tempMeta.paymentMonth, 10) !== period.month) {
+        return;
+      }
+      if (tempMeta.beneficiaryType === 'direct') {
+        const directIds = Array.isArray(tempMeta.directEmployeeIds) ? tempMeta.directEmployeeIds : [];
+        if (!directIds.map(String).includes(String(employee.id))) return;
+      } else if (!ruleMatches(a)) {
+        return;
+      }
+    } else if (!ruleMatches(a)) {
+      return;
+    }
+
+    if (a.type === 'allowance' || a.type === 'M_ALLOWANCE') eligibleAllowances.push(a);
+    else if (a.type === 'deduction' || a.type === 'M_DEDUCTION') eligibleDeductions.push(a);
+  });
+
+  const entryFor = (a, amount, base, calcBase) => {
+    const calcType = a.calcType || a.calc_type || 'flat';
+    return {
+      id: a.id,
+      name: a.name,
+      category: ITEM_CATEGORIES.GENERAL,
+      amount,
+      calcType,
+      calculationBase: calcType === 'percentage' ? calcBase : 'flat',
+      baseAmount: calcType === 'percentage' ? base : null,
+      value: toNumber(a.value),
+      details: calcType === 'percentage' ? `${pctLabel(toNumber(a.value))} ${BASE_LABELS[calcBase]}` : 'مبلغ مقطوع',
+    };
+  };
+  const calcBaseOf = (a) => {
+    const b = a.calculationBase || a.calculation_base || 'nominal';
+    return BASE_LABELS[b] ? b : 'nominal';
+  };
+  const isPct = (a) => (a.calcType || a.calc_type) === 'percentage';
+
+  const extraAllowances = toNumber(opts.extraAllowances) || 0;
+  const loanDeduction = toNumber(opts.loanDeduction) || 0;
+  const penaltyDeduction = toNumber(opts.penaltyDeduction) || 0;
+  const absenceDeduction = toNumber(opts.absenceDeduction) || 0;
+  const otherDeductions = toNumber(opts.otherDeductions) || 0;
+
+  const fixedAllowances = degreeAllowance + higherDegreeAllowance + spouseAllowance + childrenAllowance + positionAllowance + regionAllowance + extraAllowances;
   let generalCustomAllowances = 0;
-  let generalCustomDeductions = 0;
 
-  let sortedLocalAllowances = localAllowances;
-  if (localAllowances && Array.isArray(localAllowances) && isClient) {
-    try {
-      const allowancesOrderStr = localStorage.getItem('CUSTOM_ALLOWANCES_ORDER');
-      const deductionsOrderStr = localStorage.getItem('CUSTOM_DEDUCTIONS_ORDER');
-      const allowancesOrder = allowancesOrderStr ? JSON.parse(allowancesOrderStr) : [];
-      const deductionsOrder = deductionsOrderStr ? JSON.parse(deductionsOrderStr) : [];
-      
-      sortedLocalAllowances = [...localAllowances].sort((a, b) => {
-        if (a.type !== b.type) return 0;
-        if (a.type === 'allowance') {
-          const idxA = allowancesOrder.indexOf(a.id);
-          const idxB = allowancesOrder.indexOf(b.id);
-          if (idxA === -1 && idxB === -1) return 0;
-          if (idxA === -1) return 1;
-          if (idxB === -1) return -1;
-          return idxA - idxB;
-        } else if (a.type === 'deduction') {
-          const idxA = deductionsOrder.indexOf(a.id);
-          const idxB = deductionsOrder.indexOf(b.id);
-          if (idxA === -1 && idxB === -1) return 0;
-          if (idxA === -1) return 1;
-          if (idxB === -1) return -1;
-          return idxA - idxB;
-        }
-        return 0;
-      });
-    } catch (e) {
-      console.error("Error sorting custom allowances/deductions:", e);
-    }
-  }
-
-  if (sortedLocalAllowances && Array.isArray(sortedLocalAllowances)) {
-    sortedLocalAllowances.forEach(a => {
-      if (a.status === 'فعال' || a.status === 'active') {
-        const isSpouse = (a.name.includes('زوجية') || a.name.includes('الزوجية'));
-        const isChild = (a.name.includes('أطفال') || a.name.includes('الاطفال') || a.name.includes('أولاد') || a.name.includes('الاولاد') || a.name.includes('طفل') || a.name.includes('ولد'));
-        
-        if (!isSpouse && !isChild) {
-          // Check if there is temporary metadata
-          let tempMeta = null;
-          if (isClient) {
-            try {
-              const savedMeta = localStorage.getItem(`TEMPORARY_META_${a.id}`);
-              if (savedMeta) tempMeta = JSON.parse(savedMeta);
-            } catch (e) {}
-          }
-
-          if (tempMeta && tempMeta.isTemporary) {
-            // 1. Check date matching (payment month and year or range)
-            const finalMonth = parseInt(targetMonth || (new Date().getMonth() + 1));
-            const finalYear = parseInt(targetYear || new Date().getFullYear());
-            
-            if (tempMeta.timingType === 'range') {
-              const startYear = parseInt(tempMeta.startYear);
-              const startMonth = parseInt(tempMeta.startMonth);
-              const endYear = parseInt(tempMeta.endYear);
-              const endMonth = parseInt(tempMeta.endMonth);
-              
-              const startVal = startYear * 12 + startMonth;
-              const endVal = endYear * 12 + endMonth;
-              const currentVal = finalYear * 12 + finalMonth;
-              
-              if (currentVal < startVal || currentVal > endVal) {
-                return; // Out of temporary period range!
-              }
-            } else {
-              if (parseInt(tempMeta.paymentYear) !== finalYear || parseInt(tempMeta.paymentMonth) !== finalMonth) {
-                return; // Skip: temporary item is not for this month/year!
-              }
-            }
-
-            // 2. Check beneficiary eligibility
-            if (tempMeta.beneficiaryType === 'direct') {
-              const directIds = tempMeta.directEmployeeIds || [];
-              const isBeneficiary = directIds.map(String).includes(String(employee.id));
-              if (!isBeneficiary) {
-                return; // Skip: employee is not directly selected
-              }
-            } else {
-              // criteria-based
-              if (!checkEmployeeMatchesRule(employee, a.id)) {
-                return; // Skip: employee doesn't match criteria
-              }
-            }
-          } else {
-            // Check custom rules for normal allowances/deductions (eligibility and blocking)
-            if (!checkEmployeeMatchesRule(employee, a.id)) {
-              return; // Skip this allowance/deduction if the employee doesn't match conditions
-            }
-          }
-
-          const calcType = a.calcType || a.calc_type;
-          const aVal = a.value || 0;
-          let calculatedVal = 0;
-          if (calcType === 'percentage') {
-            calculatedVal = Math.round(baseSalary * (aVal / 100));
-          } else {
-            calculatedVal = aVal;
-          }
-
-          if (a.type === 'allowance' || a.type === 'M_ALLOWANCE') {
-            generalCustomAllowances += calculatedVal;
-          } else if (a.type === 'deduction' || a.type === 'M_DEDUCTION') {
-            generalCustomDeductions += calculatedVal;
-          }
-        }
-      }
+  // المخصصات: الاسمي والمقطوع أولاً، ثم النسبية من الراتب الكلي (كل منها على ما سبقها، دون نفسها)
+  const allowancePass = (predicate) => {
+    eligibleAllowances.filter(predicate).forEach(a => {
+      const calcBase = isPct(a) ? calcBaseOf(a) : 'nominal';
+      const base = calcBase === 'nominal' ? baseSalary : baseSalary + fixedAllowances + generalCustomAllowances;
+      const amount = isPct(a) ? itemAmount(a, base) : itemAmount(a, baseSalary);
+      generalCustomAllowances += amount;
+      allowances_breakdown.push(entryFor(a, amount, base, calcBase));
     });
+  };
+  allowancePass(a => !(isPct(a) && calcBaseOf(a) !== 'nominal'));
+  allowancePass(a => isPct(a) && calcBaseOf(a) !== 'nominal');
+
+  const totalAllowances = fixedAllowances + generalCustomAllowances;
+  const grossSalary = baseSalary + totalAllowances;
+
+  // 7. التوقيفات التقاعدية — مرة واحدة فقط، من الراتب الاسمي
+  const retirementRec = retirementRecordSeen ? { item: retirementRecordSeen, active: isItemInPeriod(retirementRecordSeen) } : null;
+  const retirementEnabled = resolveFlag(opts.retirementStatus, retirementRec, 'RETIREMENT_STATUS');
+  let retirementRate = legacyRates.retirement;
+  if (Number.isFinite(toNumber(opts.retirementRate))) {
+    retirementRate = toNumber(opts.retirementRate);
+  } else if (retirementRec && (retirementRec.item.calcType || retirementRec.item.calc_type) === 'percentage' && Number.isFinite(toNumber(retirementRec.item.value))) {
+    retirementRate = toNumber(retirementRec.item.value) / 100;
+  }
+  const retirementDeduction = retirementEnabled ? Math.round(baseSalary * retirementRate) : 0;
+  if (retirementDeduction) {
+    deductions_breakdown.push({ id: retirementRec?.item?.id ?? 'retirement', category: ITEM_CATEGORIES.RETIREMENT, name: 'التوقيفات التقاعدية', amount: retirementDeduction, calcType: 'percentage', calculationBase: 'nominal', baseAmount: baseSalary, details: `${pctLabel(Math.round(retirementRate * 10000) / 100)} ${BASE_LABELS.nominal}` });
   }
 
-  const experienceAllowance = 0; // يمكن تعديله لاحقاً
+  // 8. الاستقطاعات العامة: الاسمي والكلي والمقطوع، ثم النسبية من الصافي
+  let generalCustomDeductions = 0;
+  const fixedDeductions = retirementDeduction + loanDeduction + penaltyDeduction + absenceDeduction + otherDeductions;
+  eligibleDeductions.filter(a => !(isPct(a) && calcBaseOf(a) === 'net')).forEach(a => {
+    const calcBase = isPct(a) ? calcBaseOf(a) : 'nominal';
+    const base = calcBase === 'gross' ? grossSalary : baseSalary;
+    const amount = itemAmount(a, base);
+    generalCustomDeductions += amount;
+    deductions_breakdown.push(entryFor(a, amount, base, calcBase));
+  });
+  eligibleDeductions.filter(a => isPct(a) && calcBaseOf(a) === 'net').forEach(a => {
+    const base = grossSalary - fixedDeductions - generalCustomDeductions;
+    const amount = itemAmount(a, base);
+    generalCustomDeductions += amount;
+    deductions_breakdown.push(entryFor(a, amount, base, 'net'));
+  });
 
-  let retirementEnabled = true;
-  if (isClient) {
-    try {
-      retirementEnabled = localStorage.getItem('RETIREMENT_STATUS') !== 'متوقف مؤقتاً';
-    } catch (e) {}
-  }
+  const experienceAllowance = 0; // غير منفذ
 
-  const totalAllowances = degreeAllowance + higherDegreeAllowance + spouseAllowance + childrenAllowance + positionAllowance + regionAllowance + extraAllowances + generalCustomAllowances;
-  const retirementDeduction = retirementEnabled ? Math.round(baseSalary * activeRetirementRate) : 0;
-  const totalDeductions = retirementDeduction + loanDeduction + penaltyDeduction + absenceDeduction + otherDeductions + generalCustomDeductions;
+  const totalDeductions = fixedDeductions + generalCustomDeductions;
   const netSalary = baseSalary + totalAllowances - totalDeductions;
 
   return {
+    status: 'ok',
+    missing_data: false,
+    reason: null,
+    warnings,
     base_salary: baseSalary,
     degree_allowance: degreeAllowance,
     higher_degree_allowance: higherDegreeAllowance,
     spouse_allowance: spouseAllowance,
     children_allowance: childrenAllowance,
+    eligible_children_count: childrenCount,
     position_allowance: positionAllowance,
     experience_allowance: experienceAllowance,
     region_allowance: regionAllowance,
@@ -541,19 +1001,23 @@ export function calculateSalary(employee, extraAllowances = 0, loanDeduction = 0
     general_custom_allowances: generalCustomAllowances,
     general_custom_deductions: generalCustomDeductions,
     total_allowances: totalAllowances,
+    gross_salary: grossSalary,
     retirement_deduction: retirementDeduction,
-    tax_deduction: 0,
+    tax_deduction: 0, // محرك ضريبة الدخل غير منفذ بعد
     loan_deduction: loanDeduction,
     penalty_deduction: penaltyDeduction,
     absence_deduction: absenceDeduction,
     other_deductions: otherDeductions + generalCustomDeductions,
     total_deductions: totalDeductions,
-    net_salary: netSalary
+    net_salary: netSalary,
+    allowances_breakdown,
+    deductions_breakdown,
   };
 }
 
 export function formatCurrency(amount) {
-  return new Intl.NumberFormat('ar-IQ').format(amount) + ' د.ع';
+  if (amount === null || amount === undefined || amount === '' || !Number.isFinite(Number(amount))) return 'بيانات ناقصة';
+  return new Intl.NumberFormat('ar-IQ').format(Number(amount)) + ' د.ع';
 }
 
 export function getGradeLabel(grade) {

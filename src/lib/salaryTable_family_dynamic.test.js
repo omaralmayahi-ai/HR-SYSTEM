@@ -228,8 +228,8 @@ describe('Family & Dynamic Allowances Calculation Engine (المخصصات ال�
   // 4. انعكاس المحددات والشروط (الكل vs الفئات المحددة)
   describe('انعكاس المحددات والشروط على الموظفين (Targeting & Categories)', () => {
     it('should apply allowance to ALL employees when no categories or constraints are defined', () => {
-      const emp1 = { grade: 1, department: 'قسم تقنية المعلومات' };
-      const emp2 = { grade: 7, department: 'القسم القانوني' };
+      const emp1 = { grade: 1, step: 1, department: 'قسم تقنية المعلومات' };
+      const emp2 = { grade: 7, step: 1, department: 'القسم القانوني' };
       const generalAllowance = [
         {
           id: 'general-bonus',
@@ -248,8 +248,8 @@ describe('Family & Dynamic Allowances Calculation Engine (المخصصات ال�
     });
 
     it('should apply allowance ONLY to matching department employees when constrained', () => {
-      const itEmp = { grade: 3, department: 'قسم تقنية المعلومات' };
-      const legalEmp = { grade: 3, department: 'القسم القانوني' };
+      const itEmp = { grade: 3, step: 1, department: 'قسم تقنية المعلومات' };
+      const legalEmp = { grade: 3, step: 1, department: 'القسم القانوني' };
       const itAllowance = [
         {
           id: 'it-special-allowance',

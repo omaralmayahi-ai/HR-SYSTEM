@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { 
   calculateSalary, 
   SALARY_TABLE, 
-  EDUCATION_ALLOWANCES, 
   RESPONSIBILITY_ALLOWANCE_RATES, 
   SPOUSE_ALLOWANCE, 
   CHILD_ALLOWANCE, 
@@ -64,10 +63,12 @@ describe('Salary Calculation Engine (محرك حساب الرواتب)', () => {
     const result = calculateSalary(employee);
 
     expect(result.base_salary).toBe(600000);
-    expect(result.degree_allowance).toBe(350000);
-    expect(result.total_allowances).toBe(350000);
+    // Law 22/2008 art. 11: PhD = 100% of nominal salary
+    expect(result.degree_allowance).toBe(600000);
+    expect(result.higher_degree_allowance).toBe(0);
+    expect(result.total_allowances).toBe(600000);
     expect(result.retirement_deduction).toBe(60000); // 10% of 600,000
-    expect(result.net_salary).toBe(600000 + 350000 - 60000);
+    expect(result.net_salary).toBe(600000 + 600000 - 60000);
   });
 
   it('should add correct education allowance for Master degree (ماجستير)', () => {
@@ -81,8 +82,8 @@ describe('Salary Calculation Engine (محرك حساب الرواتب)', () => {
     const result = calculateSalary(employee);
 
     expect(result.base_salary).toBe(509000);
-    expect(result.degree_allowance).toBe(250000);
-    expect(result.total_allowances).toBe(250000);
+    expect(result.degree_allowance).toBe(381750); // 75% of 509,000
+    expect(result.total_allowances).toBe(381750);
   });
 
   it('should add correct education allowance for Bachelor degree (بكالوريوس)', () => {
@@ -96,12 +97,12 @@ describe('Salary Calculation Engine (محرك حساب الرواتب)', () => {
     const result = calculateSalary(employee);
 
     expect(result.base_salary).toBe(296000);
-    expect(result.degree_allowance).toBe(150000);
-    expect(result.total_allowances).toBe(150000);
+    expect(result.degree_allowance).toBe(133200); // 45% of 296,000
+    expect(result.total_allowances).toBe(133200);
   });
 
   // 3. موظف متزوج وله أطفال
-  it('should grant spouse allowance (75,000) and child allowance (30,000/child) for married employee with 2 children', () => {
+  it('should grant spouse allowance (50,000) and child allowance (10,000/child) for married employee with 2 children', () => {
     const employee = {
       grade: 6,
       step: 1,
@@ -112,11 +113,11 @@ describe('Salary Calculation Engine (محرك حساب الرواتب)', () => {
     const result = calculateSalary(employee);
 
     expect(result.base_salary).toBe(362000);
-    expect(result.spouse_allowance).toBe(75000);
-    expect(result.children_allowance).toBe(60000); // 2 * 30,000
-    expect(result.total_allowances).toBe(75000 + 60000);
+    expect(result.spouse_allowance).toBe(50000);
+    expect(result.children_allowance).toBe(20000); // 2 * 10,000
+    expect(result.total_allowances).toBe(50000 + 20000);
     expect(result.retirement_deduction).toBe(36200); // 10% of base 362,000
-    expect(result.net_salary).toBe(362000 + 135000 - 36200);
+    expect(result.net_salary).toBe(362000 + 70000 - 36200);
   });
 
   it('should cap children allowance to maximum of 4 children by default', () => {
@@ -129,10 +130,10 @@ describe('Salary Calculation Engine (محرك حساب الرواتب)', () => {
 
     const result = calculateSalary(employee);
 
-    expect(result.spouse_allowance).toBe(75000);
-    // Capped at 4 children * 30,000 = 120,000
-    expect(result.children_allowance).toBe(120000);
-    expect(result.total_allowances).toBe(75000 + 120000);
+    expect(result.spouse_allowance).toBe(50000);
+    // Capped at 4 children * 10,000 = 40,000
+    expect(result.children_allowance).toBe(40000);
+    expect(result.total_allowances).toBe(50000 + 40000);
   });
 
   // 4. استقطاع التقاعد بالنسبة الافتراضية
@@ -158,7 +159,7 @@ describe('Salary Calculation Engine (محرك حساب الرواتب)', () => {
       education_level: 'ماجستير',
       marital_status: 'متزوج',
       children_count: 3,
-      primary_responsibility: 'مدير قسم' // 25% of base salary
+      primary_responsibility: 'مدير قسم' // 20% of base salary (Law 22/2008 art. 10)
     };
 
     const extraAllowances = 20000;
@@ -177,16 +178,16 @@ describe('Salary Calculation Engine (محرك حساب الرواتب)', () => {
     );
 
     const expectedBase = 509000;
-    const expectedDegree = 250000;
-    const expectedPosition = Math.round(509000 * 0.25); // 127250
-    const expectedSpouse = 75000;
-    const expectedChildren = 3 * 30000; // 90000
-    const expectedTotalAllowances = expectedDegree + expectedPosition + expectedSpouse + expectedChildren + extraAllowances; // 250000 + 127250 + 75000 + 90000 + 20000 = 562250
+    const expectedDegree = Math.round(509000 * 0.75); // 381750
+    const expectedPosition = Math.round(509000 * 0.20); // 101800
+    const expectedSpouse = 50000;
+    const expectedChildren = 3 * 10000; // 30000
+    const expectedTotalAllowances = expectedDegree + expectedPosition + expectedSpouse + expectedChildren + extraAllowances;
 
     const expectedRetirement = Math.round(509000 * 0.10); // 50900
     const expectedTotalDeductions = expectedRetirement + loanDeduction + penaltyDeduction + absenceDeduction + otherDeductions; // 50900 + 50000 + 15000 + 10000 + 5000 = 130900
 
-    const expectedNet = expectedBase + expectedTotalAllowances - expectedTotalDeductions; // 509000 + 562250 - 130900 = 940350
+    const expectedNet = expectedBase + expectedTotalAllowances - expectedTotalDeductions;
 
     expect(result.base_salary).toBe(expectedBase);
     expect(result.degree_allowance).toBe(expectedDegree);
@@ -233,7 +234,7 @@ describe('Salary Calculation Engine (محرك حساب الرواتب)', () => {
     const customDegrees = [
       {
         name: 'ماجستير',
-        allowance_rate: 30, // 30% of base salary instead of flat 250,000
+        allowance_rate: 30, // 30% of base salary
         is_higher_education: true,
         higher_allowance_rate: 10 // +10% higher degree bonus
       }
@@ -249,6 +250,8 @@ describe('Salary Calculation Engine (محرك حساب الرواتب)', () => {
     expect(result.degree_allowance).toBe(expectedDegree);
     expect(result.higher_degree_allowance).toBe(expectedHigher);
     expect(result.total_allowances).toBe(expectedDegree + expectedHigher);
+    // An explicitly configured higher-degree extra is honoured but flagged (not in art. 11)
+    expect(result.warnings.some(w => w.includes('الشهادة العليا'))).toBe(true);
   });
 
 });
