@@ -257,8 +257,8 @@ export async function ensureSchema() {
     await safeQuery(`UPDATE employees SET civil_service_number = NULL WHERE civil_service_number IS NOT NULL AND TRIM(civil_service_number) = '';`);
     await safeQuery(`UPDATE employees SET employee_id_number = NULL WHERE employee_id_number IS NOT NULL AND TRIM(employee_id_number) = '';`);
     await safeQuery(`ALTER TABLE employees ADD CONSTRAINT employees_company_number_unique UNIQUE (company_number);`);
-    // الرقم الوظيفي (رقم وزارة التخطيط) رقم فريد أيضاً، رغم أن الاعتماد الأساسي في النظام على رقم الشركة
-    await safeQuery(`ALTER TABLE employees ADD CONSTRAINT employees_civil_service_number_unique UNIQUE (civil_service_number);`);
+    // الرقم الوظيفي (رقم وزارة التخطيط): لا قيد UNIQUE (قرار 2026-11-09 — المعرّف الموثوق هو رقم الشركة،
+    // وفي بيانات التشغيل تكرارات قديمة). يُحذف القيد إن وُجد بالترحيل 0003. منع التكرار عند الإدخال في الخادم.
     // رقم هوية الموظف: يُنشأ تلقائياً من الخادم عند إضافة الموظف، ويجب أن يبقى فريداً دوماً (يُستخدم في الهوية الرقمية ورمز الوصول السريع)
     await safeQuery(`ALTER TABLE employees ADD CONSTRAINT employees_employee_id_number_unique UNIQUE (employee_id_number);`);
 

@@ -18,7 +18,7 @@ export const employees = pgTable('employees', {
   id: serial('id').primaryKey(),
   employeeNumber: text('employee_number'),
   companyNumber: text('company_number').unique(), // رقم الشركة - معرّف فريد إلزامي (6 أرقام، أو حروف لعقد/أجر يومي)
-  civilServiceNumber: text('civil_service_number').unique(), // الرقم الوظيفي - رقم فريد أيضاً (رقم وزارة التخطيط)، لكن الاعتماد الأساسي في النظام على رقم الشركة
+  civilServiceNumber: text('civil_service_number'), // الرقم الوظيفي (رقم وزارة التخطيط) — غير مفروض فريداً في القاعدة (قرار 2026-11-09)؛ المعرّف الموثوق هو رقم الشركة
   fullName: text('full_name').notNull(),
   firstName: text('first_name'), // الاسم الأول
   fatherName: text('father_name'), // اسم الأب
