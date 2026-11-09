@@ -19,6 +19,9 @@ import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src
 import { checkReferentialUsage, isDbConnectionFailure } from './src/lib/referentialIntegrity.ts';
 import { respondIfDbWriteError, sendRouteError, HttpError, classifyDbError } from './server/dbErrors.ts';
 import { installRouteRegistry } from './server/routeRegistry.ts';
+import { syncEnrollmentToTrainingCourses } from './server/trainingSync.ts';
+import { resolveAccrualParams, accrueBalance, isValidAccrualMonth, ACCRUAL_ELIGIBLE_STATUSES, ACCRUAL_UPDATE_SQL, ACCRUAL_CLAIM_SQL, LEGAL_MONTHLY_REGULAR_LEAVE_DAYS, LEGAL_MAX_REGULAR_LEAVE_ACCUMULATION, DEFAULT_MONTHLY_SICK_LEAVE_DAYS, DEFAULT_MAX_SICK_LEAVE_ACCUMULATION } from './server/leaveAccrual.ts';
+import { LEAVE_STATUS, normalizeLeaveStatus, isApprovedLeaveStatus, isRejectedOrCancelledLeaveStatus, leaveStatusVariants, toEngineLeave } from './server/leaveStatus.ts';
 
 
 const currentFilename = typeof __filename !== 'undefined' ? __filename : '';
@@ -70,10 +73,10 @@ async function startServer() {
     retirementAge: 60,
     retirementNotificationDays: 180,
     maxChildrenCount: 4,
-    monthlyRegularLeaveDays: 2.5, // عدد أيام الإجازة الاعتيادية المضافة شهرياً
-    monthlySickLeaveDays: 2.5, // عدد أيام الإجازة المرضية المضافة شهرياً
-    maxRegularLeaveAccumulation: 10000, // الحد الأقصى لتراكم الإجازة الاعتيادية (القيمة الافتراضية 10000 يوم)
-    maxSickLeaveAccumulation: 10000, // الحد الأقصى لتراكم الإجازة المرضية (القيمة الافتراضية 10000 يوم)
+    monthlyRegularLeaveDays: LEGAL_MONTHLY_REGULAR_LEAVE_DAYS, // م43: يوم عن كل 10 أيام خدمة = 3 أيام شهرياً
+    monthlySickLeaveDays: DEFAULT_MONTHLY_SICK_LEAVE_DAYS, // 30 يوماً براتب تام في السنة = 2.5 شهرياً
+    maxRegularLeaveAccumulation: LEGAL_MAX_REGULAR_LEAVE_ACCUMULATION, // م43: سقف التراكم 180 يوماً
+    maxSickLeaveAccumulation: DEFAULT_MAX_SICK_LEAVE_ACCUMULATION,
     autoMonthlyLeaveAccrual: true, // زيادة أرصدة الإجازات تلقائياً شهرياً
     lastLeaveAccrualMonth: '',
     lastLeaveAccrualDate: ''
@@ -83,20 +86,81 @@ async function startServer() {
   let leaveAccrualLogs: any[] = [];
 
   // Monthly Leave Accrual Execution Function
-  async function executeMonthlyLeaveAccrual(targetMonth?: string, force = false) {
+  // - الأيام والسقف من الإعدادات مع القيم القانونية الافتراضية (3 أيام/شهر، سقف 180) — server/leaveAccrual.ts
+  // - تخزين عشري (منزلتان) بلا تقريب إلى عدد صحيح
+  // - منع التكرار في قاعدة البيانات نفسها: صف لكل شهر في leave_accrual_runs، داخل معاملة واحدة مع التحديث
+  // - لا يوجد «إجبار» لإعادة ترحيل شهر نُفِّذ سابقاً (كان يضاعف الأرصدة)
+  async function executeMonthlyLeaveAccrual(targetMonth?: string, triggeredBy = 'النظام الآلي (ترحيل شهري)') {
     const currentMonth = targetMonth || new Date().toISOString().slice(0, 7); // e.g. '2026-08'
-    
+    if (!isValidAccrualMonth(currentMonth)) {
+      throw new HttpError(400, 'صيغة الشهر غير صحيحة (المطلوب YYYY-MM)');
+    }
+
+    let dbAvailable = true;
     try {
       const [dbSettings] = await db.select().from(schema.systemSettings).limit(1);
       if (dbSettings) {
         systemSettingsStore = { ...systemSettingsStore, ...dbSettings };
       }
-    } catch {
-      // Fallback to in-memory settings
+    } catch (settingsErr) {
+      if (!isDbConnectionFailure(settingsErr)) throw settingsErr;
+      dbAvailable = false;
     }
 
-    // If not forced and already accrued for this month, return status
-    if (!force && systemSettingsStore.lastLeaveAccrualMonth === currentMonth) {
+    const params = resolveAccrualParams(systemSettingsStore);
+    const accrualDate = new Date().toISOString();
+    let processedCount = 0;
+    let alreadyExecuted = false;
+
+    if (dbAvailable) {
+      let client: any = null;
+      try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const claim = await client.query(ACCRUAL_CLAIM_SQL, [currentMonth, params.regularDays, params.sickDays, triggeredBy]);
+        if (!claim.rowCount) {
+          await client.query('ROLLBACK');
+          alreadyExecuted = true;
+        } else {
+          const upd = await client.query(ACCRUAL_UPDATE_SQL, [params.regularDays, params.regularCap, params.sickDays, params.sickCap]);
+          processedCount = upd.rowCount || 0;
+          await client.query('UPDATE leave_accrual_runs SET employees_count = $1 WHERE month = $2', [processedCount, currentMonth]);
+          const st = await client.query('UPDATE system_settings SET last_leave_accrual_month = $1, last_leave_accrual_date = $2', [currentMonth, accrualDate]);
+          if (!st.rowCount) {
+            await client.query('INSERT INTO system_settings (last_leave_accrual_month, last_leave_accrual_date) VALUES ($1, $2)', [currentMonth, accrualDate]);
+          }
+          await client.query('COMMIT');
+        }
+      } catch (accErr) {
+        if (client) await client.query('ROLLBACK').catch((rbErr: any) => console.error('[LEAVE-ACCRUAL] ROLLBACK failed:', rbErr?.message));
+        if (!isDbConnectionFailure(accErr)) throw accErr;
+        dbAvailable = false;
+      } finally {
+        if (client) client.release();
+      }
+    }
+
+    if (!dbAvailable) {
+      // وضع عدم الاتصال: التخزين الاحتياطي في الذاكرة، مع منع التكرار بمفتاح الشهر
+      if (systemSettingsStore.lastLeaveAccrualMonth === currentMonth || leaveAccrualLogs.some(l => l.month === currentMonth)) {
+        alreadyExecuted = true;
+      } else {
+        for (const emp of inMemoryEmployees) {
+          const st = emp.status;
+          if (!st || ACCRUAL_ELIGIBLE_STATUSES.includes(st)) {
+            const newReg = accrueBalance(emp.initialRegularLeaveBalance ?? emp.initial_regular_leave_balance, params.regularDays, params.regularCap);
+            const newSick = accrueBalance(emp.initialSickLeaveBalance ?? emp.initial_sick_leave_balance, params.sickDays, params.sickCap);
+            emp.initialRegularLeaveBalance = newReg;
+            emp.initial_regular_leave_balance = newReg;
+            emp.initialSickLeaveBalance = newSick;
+            emp.initial_sick_leave_balance = newSick;
+            processedCount++;
+          }
+        }
+      }
+    }
+
+    if (alreadyExecuted) {
       return {
         success: true,
         alreadyExecuted: true,
@@ -105,89 +169,30 @@ async function startServer() {
       };
     }
 
-    const regDaysToAdd = parseFloat(String(systemSettingsStore.monthlyRegularLeaveDays ?? 2.5)) || 0;
-    const sickDaysToAdd = parseFloat(String(systemSettingsStore.monthlySickLeaveDays ?? 2.5)) || 0;
-    const maxRegCap = parseInt(String(systemSettingsStore.maxRegularLeaveAccumulation || 10000)) || 10000;
-    const maxSickCap = parseInt(String(systemSettingsStore.maxSickLeaveAccumulation || 10000)) || 10000;
-
-    let processedCount = 0;
-
-    // 1. Process in-memory employees
-    for (const emp of inMemoryEmployees) {
-      const isContinuing = emp.status === 'مستمر' || !emp.status || emp.status === 'مستمر بالخدمة' || emp.status === 'فعال';
-      if (isContinuing) {
-        const curReg = parseFloat(String(emp.initialRegularLeaveBalance ?? emp.initial_regular_leave_balance ?? 0)) || 0;
-        const curSick = parseFloat(String(emp.initialSickLeaveBalance ?? emp.initial_sick_leave_balance ?? 0)) || 0;
-
-        const newReg = Math.min(curReg + regDaysToAdd, maxRegCap);
-        const newSick = Math.min(curSick + sickDaysToAdd, maxSickCap);
-
-        emp.initialRegularLeaveBalance = Number(newReg.toFixed(1));
-        emp.initial_regular_leave_balance = Number(newReg.toFixed(1));
-        emp.initialSickLeaveBalance = Number(newSick.toFixed(1));
-        emp.initial_sick_leave_balance = Number(newSick.toFixed(1));
-
-        processedCount++;
-      }
-    }
-
-    // 2. Process database employees in a single bulk SQL query (fast for 6,000+ employees)
-    try {
-      const res = await pool.query(
-        `UPDATE employees
-         SET initial_regular_leave_balance = ROUND(LEAST(COALESCE(initial_regular_leave_balance, 0) + $1, $2)::numeric, 1)::real,
-             initial_sick_leave_balance = ROUND(LEAST(COALESCE(initial_sick_leave_balance, 0) + $3, $4)::numeric, 1)::real
-         WHERE status IN ('مستمر', 'مستمر بالخدمة', 'فعال') OR status IS NULL`,
-        [regDaysToAdd, maxRegCap, sickDaysToAdd, maxSickCap]
-      );
-      if (res && typeof res.rowCount === 'number' && res.rowCount > 0) {
-        processedCount = res.rowCount;
-      }
-    } catch (e) {
-      // Database fallback
-    }
-
-    // Update settings state
-    const accrualDate = new Date().toISOString();
     systemSettingsStore.lastLeaveAccrualMonth = currentMonth;
     systemSettingsStore.lastLeaveAccrualDate = accrualDate;
-
-    try {
-      const [existingSettings] = await db.select().from(schema.systemSettings).limit(1);
-      if (existingSettings) {
-        await db.update(schema.systemSettings)
-          .set({ lastLeaveAccrualMonth: currentMonth, lastLeaveAccrualDate: accrualDate, updatedAt: new Date() })
-          .where(eq(schema.systemSettings.id, existingSettings.id));
-      } else {
-        await db.insert(schema.systemSettings).values({
-          lastLeaveAccrualMonth: currentMonth,
-          lastLeaveAccrualDate: accrualDate
-        });
-      }
-    } catch {
-      // Fallback
-    }
 
     const logEntry = {
       id: leaveAccrualLogs.length + 1,
       month: currentMonth,
       employeesCount: processedCount,
-      regularDaysAdded: regDaysToAdd,
-      sickDaysAdded: sickDaysToAdd,
+      regularDaysAdded: params.regularDays,
+      sickDaysAdded: params.sickDays,
       timestamp: accrualDate,
-      triggeredBy: force ? 'مسؤول الموارد البشرية (يدوياً)' : 'النظام الآلي (ترحيل شهري)',
-      status: 'ناجح'
+      triggeredBy,
+      status: dbAvailable ? 'ناجح' : 'ناجح (تخزين احتياطي - بلا اتصال)'
     };
     leaveAccrualLogs.unshift(logEntry);
 
-    // Also add to system logs
-    systemLogsStore.unshift({
-      id: systemLogsStore.length + 1,
-      action: 'زيادة الأرصدة الشهرية للإجازات',
-      user: 'النظام الآلي',
-      details: `تم بنجاح تطبيق الزيادة الشهرية لشهر ${currentMonth} على ${processedCount} موظفاً (إجازة اعتيادية: +${regDaysToAdd} يوم، إجازة مرضية: +${sickDaysToAdd} يوم)`,
-      timestamp: accrualDate
-    });
+    const details = `تم تطبيق الزيادة الشهرية لشهر ${currentMonth} على ${processedCount} موظفاً (اعتيادية: +${params.regularDays} يوم بسقف ${params.regularCap}، مرضية: +${params.sickDays} يوم)`;
+    systemLogsStore.unshift({ id: systemLogsStore.length + 1, action: 'زيادة الأرصدة الشهرية للإجازات', user: 'النظام الآلي', details, timestamp: accrualDate });
+    if (dbAvailable) {
+      try {
+        await db.insert(schema.activityLogs).values({ action: 'زيادة الأرصدة الشهرية للإجازات', userEmail: triggeredBy, details });
+      } catch (logErr: any) {
+        console.warn('[ACTIVITY-LOG] تعذّر تسجيل الترحيل الشهري:', logErr?.message);
+      }
+    }
 
     saveLocalDb();
 
@@ -195,9 +200,11 @@ async function startServer() {
       success: true,
       month: currentMonth,
       employeesCount: processedCount,
-      regularDaysAdded: regDaysToAdd,
-      sickDaysAdded: sickDaysToAdd,
-      date: accrualDate
+      regularDaysAdded: params.regularDays,
+      sickDaysAdded: params.sickDays,
+      regularCap: params.regularCap,
+      date: accrualDate,
+      offline: !dbAvailable
     };
   }
 
@@ -259,28 +266,41 @@ async function startServer() {
   // Leave Accrual Dedicated Endpoints
   app.get('/api/leave-accrual/status', requireAuth, async (req, res) => {
     const currentMonth = new Date().toISOString().slice(0, 7);
-    const isAccruedForCurrentMonth = systemSettingsStore.lastLeaveAccrualMonth === currentMonth;
+    let runs: any[] | null = null;
+    try {
+      const r = await pool.query('SELECT month, executed_at, employees_count, regular_days_added, sick_days_added, triggered_by FROM leave_accrual_runs ORDER BY month DESC LIMIT 60');
+      runs = r.rows;
+    } catch (statusErr) {
+      if (!isDbConnectionFailure(statusErr)) return sendRouteError(res, statusErr, 'قراءة حالة الترحيل الشهري');
+    }
+    const params = resolveAccrualParams(systemSettingsStore);
+    const logs = runs
+      ? runs.map((r: any, i: number) => ({ id: i + 1, month: r.month, employeesCount: r.employees_count, regularDaysAdded: r.regular_days_added, sickDaysAdded: r.sick_days_added, timestamp: r.executed_at, triggeredBy: r.triggered_by, status: 'ناجح' }))
+      : leaveAccrualLogs;
+    const isAccruedForCurrentMonth = runs ? runs.some((r: any) => r.month === currentMonth) : systemSettingsStore.lastLeaveAccrualMonth === currentMonth;
     res.json({
       currentMonth,
       isAccruedForCurrentMonth,
-      lastLeaveAccrualMonth: systemSettingsStore.lastLeaveAccrualMonth || '',
-      lastLeaveAccrualDate: systemSettingsStore.lastLeaveAccrualDate || '',
-      monthlyRegularLeaveDays: systemSettingsStore.monthlyRegularLeaveDays ?? 2.5,
-      monthlySickLeaveDays: systemSettingsStore.monthlySickLeaveDays ?? 2.5,
-      maxRegularLeaveAccumulation: systemSettingsStore.maxRegularLeaveAccumulation ?? 10000,
-      maxSickLeaveAccumulation: systemSettingsStore.maxSickLeaveAccumulation ?? 10000,
+      lastLeaveAccrualMonth: (runs && runs[0]?.month) || systemSettingsStore.lastLeaveAccrualMonth || '',
+      lastLeaveAccrualDate: (runs && runs[0]?.executed_at) || systemSettingsStore.lastLeaveAccrualDate || '',
+      monthlyRegularLeaveDays: params.regularDays,
+      monthlySickLeaveDays: params.sickDays,
+      maxRegularLeaveAccumulation: params.regularCap,
+      maxSickLeaveAccumulation: params.sickCap,
       autoMonthlyLeaveAccrual: systemSettingsStore.autoMonthlyLeaveAccrual !== false,
-      logs: leaveAccrualLogs
+      logs
     });
   });
 
-  app.post('/api/leave-accrual/execute', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/leave-accrual/execute', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     try {
-      const { month, force } = req.body || {};
-      const result = await executeMonthlyLeaveAccrual(month, force !== undefined ? Boolean(force) : true);
+      const { month } = req.body || {};
+      // ملاحظة: خيار force أُلغي — الشهر يُرحَّل مرة واحدة فقط (يُسجَّل في leave_accrual_runs).
+      const actor = req.user?.username ? `مسؤول (يدوياً): ${req.user.username}` : 'مسؤول الموارد البشرية (يدوياً)';
+      const result = await executeMonthlyLeaveAccrual(month, actor);
       res.json(result);
     } catch (err: any) {
-      sendRouteError(res, err);
+      sendRouteError(res, err, 'تنفيذ الترحيل الشهري للإجازات');
     }
   });
 
@@ -2566,30 +2586,65 @@ async function startServer() {
   });
 
   // Leave Requests API
+  // الحالة موحّدة: معلق / معتمد / مرفوض / ملغى (انظر server/leaveStatus.ts)؛ القيم القديمة
+  // («مقبولة»، «موافق_عليها»، approved...) تُقرأ كـ«معتمد» وتُعاد بالقيمة الموحدة.
+  const presentLeave = (r: any) => {
+    const out = mapKeys(r, camelToSnake);
+    if (out && out.status !== undefined) out.status = normalizeLeaveStatus(out.status);
+    return out;
+  };
+
   app.get('/api/leaves', requireAuth, async (req, res) => {
-    try {
-      const empIdParam = req.query.employeeId || req.query.employee_id;
-      const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
-      let query = db.select().from(schema.leaveRequests);
-      if (employeeId && !isNaN(employeeId)) {
-        query = db.select().from(schema.leaveRequests).where(eq(schema.leaveRequests.employeeId, employeeId)) as any;
-      }
-      const leaves = await query.orderBy(desc(schema.leaveRequests.createdAt));
-      if (leaves && leaves.length > 0) {
-        return res.json(leaves.map(r => mapKeys(r, camelToSnake)));
-      }
-    } catch (error: any) {
-      console.warn('Database fallback for leaves list');
-    }
     const empIdParam = req.query.employeeId || req.query.employee_id;
+    const employeeId = empIdParam ? parseInt(empIdParam as string) : undefined;
+    const statusParam = req.query.status && req.query.status !== 'all' ? String(req.query.status) : null;
+    const statusVariants = statusParam ? leaveStatusVariants(statusParam) : [];
+    try {
+      const conds: any[] = [];
+      if (employeeId && !isNaN(employeeId)) conds.push(eq(schema.leaveRequests.employeeId, employeeId));
+      if (statusParam) {
+        // حالة فارغة/NULL في السجلات القديمة تُعامل «معلق»
+        conds.push(normalizeLeaveStatus(statusParam) === LEAVE_STATUS.PENDING
+          ? or(inArray(schema.leaveRequests.status, statusVariants), isNull(schema.leaveRequests.status), eq(schema.leaveRequests.status, ''))
+          : inArray(schema.leaveRequests.status, statusVariants));
+      }
+      const leaves = conds.length > 0
+        ? await db.select().from(schema.leaveRequests).where(and(...conds)).orderBy(desc(schema.leaveRequests.createdAt))
+        : await db.select().from(schema.leaveRequests).orderBy(desc(schema.leaveRequests.createdAt));
+      return res.json(leaves.map(presentLeave));
+    } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة طلبات الإجازة');
+      console.warn('Database fallback (offline) for leaves list');
+    }
     let memList = genericMemoryStores['leaves'] || inMemoryLeaves || [];
     if (empIdParam) {
       memList = memList.filter(item => String(item.employee_id || item.employeeId) === String(empIdParam));
     }
-    res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
+    if (statusParam) {
+      const wanted = normalizeLeaveStatus(statusParam);
+      memList = memList.filter(item => (normalizeLeaveStatus(item.status) || LEAVE_STATUS.PENDING) === wanted);
+    }
+    res.json(memList.map(presentLeave));
   });
 
-  app.post('/api/leaves', requireAuth, async (req, res) => {
+  // خصم الرصيد (في السجل المركزي) يحدث مرة واحدة فقط عند انتقال الطلب إلى «معتمد»، لا عند تقديمه معلقاً،
+  // ويُعاد الرصيد عند رفض/إلغاء/حذف طلب كان معتمداً. direction: -1 خصم، +1 إعادة.
+  async function adjustLeaveBalance(employeeId: number, days: number, leaveType: any, direction: -1 | 1) {
+    if (!employeeId || !(days > 0)) return;
+    const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === employeeId);
+    if (!emp) return;
+    const lType = String(leaveType || '').toLowerCase();
+    if (lType.includes('مرض') || lType.includes('sick')) {
+      const cur = parseFloat(String(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 0)) || 0;
+      await updateEmployeeCentralRecord(employeeId, { sickLeaveBalance: Math.max(0, Number((cur + direction * days).toFixed(2))) });
+    } else {
+      const cur = parseFloat(String(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 0)) || 0;
+      await updateEmployeeCentralRecord(employeeId, { regularLeaveBalance: Math.max(0, Number((cur + direction * days).toFixed(2))) });
+    }
+  }
+  const deductLeaveBalanceOnApproval = (employeeId: number, days: number, leaveType: any) => adjustLeaveBalance(employeeId, days, leaveType, -1);
+
+  app.post('/api/leaves', requireAuth, async (req: AuthRequest, res) => {
     try {
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
@@ -2606,44 +2661,38 @@ async function startServer() {
       delete mappedData.createdAt;
 
       if (!mappedData.employeeId || isNaN(mappedData.employeeId)) {
-        return res.status(400).json({ error: 'employee_id is required' });
+        return res.status(400).json({ error: 'يجب تحديد الموظف (employee_id) لطلب الإجازة' });
       }
+
+      mappedData.status = normalizeLeaveStatus(mappedData.status) || LEAVE_STATUS.PENDING;
+      // صاحب دور «موظف» يقدّم طلباً فقط ولا يعتمده لنفسه
+      if (req.user?.role === 'employee') mappedData.status = LEAVE_STATUS.PENDING;
+
+      const validCols = new Set(Object.keys(getTableColumns(schema.leaveRequests)));
+      const dbData: any = {};
+      for (const [k, v] of Object.entries(mappedData)) if (validCols.has(k)) dbData[k] = v;
 
       let newLeave: any = null;
       try {
-        const [inserted] = await db.insert(schema.leaveRequests).values(mappedData).returning();
+        const [inserted] = await db.insert(schema.leaveRequests).values(dbData).returning();
         newLeave = inserted;
       } catch (dbErr) {
-        console.warn('Database fallback for create leave');
+        if (respondIfDbWriteError(res, dbErr, 'حفظ طلب الإجازة')) return;
       }
 
-      // Sync leave balance to central employee record
-      const days = mappedData.daysCount || 0;
-      const lType = (mappedData.leaveType || '').toLowerCase();
-      if (days > 0 && mappedData.status !== 'مرفوضة' && mappedData.status !== 'rejected') {
-        const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === mappedData.employeeId);
-        if (emp) {
-          if (lType.includes('مرض') || lType.includes('sick')) {
-            const cur = parseFloat(String(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30));
-            const updatedSick = Math.max(0, Number((cur - days).toFixed(1)));
-            await updateEmployeeCentralRecord(mappedData.employeeId, { sickLeaveBalance: updatedSick });
-          } else {
-            const cur = parseFloat(String(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 30));
-            const updatedReg = Math.max(0, Number((cur - days).toFixed(1)));
-            await updateEmployeeCentralRecord(mappedData.employeeId, { regularLeaveBalance: updatedReg });
-          }
-        }
+      if (mappedData.status === LEAVE_STATUS.APPROVED) {
+        await deductLeaveBalanceOnApproval(mappedData.employeeId, mappedData.daysCount || 0, mappedData.leaveType);
       }
 
       const newId = newLeave?.id || (genericMemoryStores['leaves']?.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
-      const cleanSnake = mapKeys(req.body, camelToSnake);
-      const memRecord = { ...cleanSnake, id: newId, created_at: new Date().toISOString() };
+      const cleanSnake = { ...mapKeys(req.body, camelToSnake), status: mappedData.status };
+      const memRecord = { ...cleanSnake, ...(newLeave ? mapKeys(newLeave, camelToSnake) : {}), id: newId, created_at: newLeave?.createdAt || new Date().toISOString() };
       syncEntityRecord('leaves', memRecord, 'insert');
 
-      res.status(201).json(mapKeys(newLeave || memRecord, camelToSnake));
+      res.status(201).json(presentLeave(newLeave || memRecord));
     } catch (error: any) {
       console.error('Error creating leave:', error);
-      sendRouteError(res, error);
+      sendRouteError(res, error, 'حفظ طلب الإجازة');
     }
   });
 
@@ -2661,66 +2710,80 @@ async function startServer() {
       if (mappedData.daysCount !== undefined) {
         mappedData.daysCount = parseFloat(mappedData.daysCount);
       }
+      if (mappedData.status !== undefined) {
+        mappedData.status = normalizeLeaveStatus(mappedData.status) || LEAVE_STATUS.PENDING;
+      }
       delete mappedData.id;
       delete mappedData.createdAt;
 
+      const validCols = new Set(Object.keys(getTableColumns(schema.leaveRequests)));
+      const dbData: any = {};
+      for (const [k, v] of Object.entries(mappedData)) if (validCols.has(k)) dbData[k] = v;
+
+      const memPrev = (genericMemoryStores['leaves'] || []).find(r => String(r.id) === String(id));
+      let previous: any = memPrev ? mapKeys(memPrev, snakeToCamel) : null;
       let updatedLeave: any = null;
+      let dbAnswered = false;
       try {
-        const [updated] = await db.update(schema.leaveRequests)
-          .set(mappedData)
-          .where(eq(schema.leaveRequests.id, id))
-          .returning();
-        updatedLeave = updated;
+        updatedLeave = await db.transaction(async (tx) => {
+          const [prev] = await tx.select().from(schema.leaveRequests).where(eq(schema.leaveRequests.id, id));
+          if (!prev) return null;
+          previous = prev;
+          if (Object.keys(dbData).length === 0) return prev;
+          const [updated] = await tx.update(schema.leaveRequests)
+            .set(dbData)
+            .where(eq(schema.leaveRequests.id, id))
+            .returning();
+          return updated;
+        });
+        dbAnswered = true;
       } catch (dbErr) {
-        console.warn('Database fallback for update leave');
+        if (respondIfDbWriteError(res, dbErr, 'تعديل طلب الإجازة')) return;
+      }
+      if (dbAnswered && !updatedLeave) {
+        return res.status(404).json({ error: 'طلب الإجازة غير موجود' });
       }
 
-      // Sync leave balance to central employee record if approved
-      if (mappedData.status === 'مقبولة' || mappedData.status === 'approved') {
-        const days = mappedData.daysCount || 0;
-        const empId = mappedData.employeeId;
-        const lType = (mappedData.leaveType || '').toLowerCase();
-        if (days > 0 && empId) {
-          const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empId);
-          if (emp) {
-            if (lType.includes('مرض') || lType.includes('sick')) {
-              const cur = parseFloat(String(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30));
-              const updatedSick = Math.max(0, Number((cur - days).toFixed(1)));
-              await updateEmployeeCentralRecord(empId, { sickLeaveBalance: updatedSick });
-            } else {
-              const cur = parseFloat(String(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 30));
-              const updatedReg = Math.max(0, Number((cur - days).toFixed(1)));
-              await updateEmployeeCentralRecord(empId, { regularLeaveBalance: updatedReg });
-            }
-          }
-        }
+      const merged = { ...(previous || {}), ...mappedData, ...(updatedLeave || {}) };
+      const wasApproved = isApprovedLeaveStatus(previous?.status);
+      const nowApproved = isApprovedLeaveStatus(merged.status);
+      if (!wasApproved && nowApproved) {
+        await deductLeaveBalanceOnApproval(parseInt(String(merged.employeeId)), parseFloat(String(merged.daysCount || 0)) || 0, merged.leaveType);
+      } else if (wasApproved && isRejectedOrCancelledLeaveStatus(merged.status)) {
+        await adjustLeaveBalance(parseInt(String(merged.employeeId)), parseFloat(String(merged.daysCount || 0)) || 0, merged.leaveType, 1);
       }
 
-      const cleanSnake = mapKeys(req.body, camelToSnake);
-      const memRecord = { ...cleanSnake, id };
+      const cleanSnake = { ...mapKeys(req.body, camelToSnake), ...(mappedData.status !== undefined ? { status: mappedData.status } : {}) };
+      const memRecord = { ...cleanSnake, ...(updatedLeave ? mapKeys(updatedLeave, camelToSnake) : {}), id };
       syncEntityRecord('leaves', memRecord, 'update');
 
-      res.json(mapKeys(updatedLeave || memRecord, camelToSnake));
+      res.json(presentLeave(updatedLeave || memRecord));
     } catch (error: any) {
       console.error('Error updating leave request:', error);
-      sendRouteError(res, error);
+      sendRouteError(res, error, 'تعديل طلب الإجازة');
     }
   });
 
   app.delete('/api/leaves/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+      if (isNaN(id)) return res.status(400).json({ error: 'معرّف طلب الإجازة غير صالح' });
+      const memPrev = (genericMemoryStores['leaves'] || []).find(r => String(r.id) === String(id));
+      let removed: any = memPrev ? mapKeys(memPrev, snakeToCamel) : null;
       try {
-        await db.delete(schema.leaveRequests).where(eq(schema.leaveRequests.id, id));
+        const rows = await db.delete(schema.leaveRequests).where(eq(schema.leaveRequests.id, id)).returning();
+        if (rows[0]) removed = rows[0];
       } catch (error: any) {
-        console.warn('Database fallback for delete leave');
+        if (respondIfDbWriteError(res, error, 'حذف طلب الإجازة')) return;
+      }
+      if (removed && isApprovedLeaveStatus(removed.status)) {
+        await adjustLeaveBalance(parseInt(String(removed.employeeId)), parseFloat(String(removed.daysCount || 0)) || 0, removed.leaveType, 1);
       }
       syncEntityRecord('leaves', { id }, 'delete');
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting leave:', error);
-      sendRouteError(res, error);
+      sendRouteError(res, error, 'حذف طلب الإجازة');
     }
   });
 
@@ -6008,6 +6071,7 @@ async function startServer() {
       const records = await db.select().from(schema.leaveTypes).orderBy(asc(schema.leaveTypes.id));
       if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for leave types');
     }
     res.json(inMemoryLeaveTypes.map(r => mapKeys(r, camelToSnake)));
@@ -6063,6 +6127,7 @@ async function startServer() {
       }).returning();
       newRec = newRecord;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create leave type');
     }
 
@@ -6155,6 +6220,7 @@ async function startServer() {
         .returning();
       updatedRec = updated;
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update leave type');
     }
 
@@ -6196,6 +6262,7 @@ async function startServer() {
     try {
       await db.delete(schema.leaveTypes).where(eq(schema.leaveTypes.id, id));
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete leave type');
     }
     inMemoryLeaveTypes = inMemoryLeaveTypes.filter(r => r.id !== id);
@@ -9358,16 +9425,30 @@ async function startServer() {
   // Automatic periodic check for monthly leave accrual
   setTimeout(() => {
     if (systemSettingsStore.autoMonthlyLeaveAccrual !== false) {
-      executeMonthlyLeaveAccrual().catch(() => {});
+      executeMonthlyLeaveAccrual().catch((accErr: any) => console.error('[LEAVE-ACCRUAL] فشل الترحيل الشهري التلقائي:', accErr?.message || accErr));
     }
   }, 3000);
   setInterval(() => {
     if (systemSettingsStore.autoMonthlyLeaveAccrual !== false) {
-      executeMonthlyLeaveAccrual().catch(() => {});
+      executeMonthlyLeaveAccrual().catch((accErr: any) => console.error('[LEAVE-ACCRUAL] فشل الترحيل الشهري التلقائي:', accErr?.message || accErr));
     }
   }, 1000 * 60 * 60);
 
   // Central Promotion and Increment Recalculation Trigger
+  async function loadPenaltyTypesForEngine(): Promise<any[] | undefined> {
+    try {
+      const rows = await db.select().from(schema.penaltyTypes);
+      if (rows.length > 0) return rows;
+    } catch (ptErr) {
+      if (!isDbConnectionFailure(ptErr)) throw ptErr;
+    }
+    return Array.isArray(inMemoryPenaltyTypes) && inMemoryPenaltyTypes.length > 0 ? inMemoryPenaltyTypes : undefined;
+  }
+
+  function logRecalcError(err: any) {
+    console.error('[ELIGIBILITY] فشلت إعادة احتساب الاستحقاق:', err?.message || err);
+  }
+
   async function triggerRecalculateEligibility(employeeId: number | string) {
     if (!employeeId) return null;
     const empIdNum = parseInt(String(employeeId));
@@ -9396,7 +9477,7 @@ async function startServer() {
       ...(genericMemoryStores['performance'] || []).filter(e => parseInt(String(e.employee_id || e.employeeId)) === empIdNum),
       ...(genericMemoryStores['annual-evaluations'] || []).filter(e => parseInt(String(e.employee_id || e.employeeId)) === empIdNum)
     ];
-    const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empIdNum);
+    const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empIdNum).map(toEngineLeave);
     const serviceCredits = [
       ...(genericMemoryStores['service-credits'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum),
       ...(genericMemoryStores['service-records'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum)
@@ -10273,7 +10354,7 @@ async function startServer() {
           if (activeSnap) {
             const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
             const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-            const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+            const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId).map(toEngineLeave);
             const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
 
             const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
@@ -10609,7 +10690,7 @@ async function startServer() {
 
           const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
           const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-          const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
+          const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId).map(toEngineLeave);
           const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
 
           const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
@@ -10787,7 +10868,7 @@ async function startServer() {
         {
           specializationCredits: genericMemoryStores['specialization-credits'] || [],
           penalties: genericMemoryStores['penalties'] || [],
-          leaves: genericMemoryStores['leaves'] || [],
+          leaves: (genericMemoryStores['leaves'] || []).map(toEngineLeave),
           attendances: genericMemoryStores['attendance'] || []
         },
         {

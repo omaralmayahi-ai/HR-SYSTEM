@@ -425,7 +425,7 @@ export const systemSettings = pgTable('system_settings', {
   retirementNotificationPeriod: text('retirement_notification_period').default('three_months'), // فترة إشعار التقاعد (month, three_months, etc)
   retirementNotificationDays: integer('retirement_notification_days').default(90), // فترة الإشعار بالأيام في حال مخصص
   degreeTrackAutoSettlement: boolean('degree_track_auto_settlement').default(false), // تفعيل التسوية التلقائية لمسار احتساب الشهادات
-  monthlyRegularLeaveDays: real('monthly_regular_leave_days').default(2.5),
+  monthlyRegularLeaveDays: real('monthly_regular_leave_days').default(3), // م43: يوم عن كل 10 أيام خدمة = 3 أيام شهرياً
   monthlySickLeaveDays: real('monthly_sick_leave_days').default(2.5),
   maxRegularLeaveAccumulation: real('max_regular_leave_accumulation').default(180),
   maxSickLeaveAccumulation: real('max_sick_leave_accumulation').default(180),
@@ -433,6 +433,16 @@ export const systemSettings = pgTable('system_settings', {
   lastLeaveAccrualMonth: text('last_leave_accrual_month').default(''),
   lastLeaveAccrualDate: text('last_leave_accrual_date').default(''),
   createdAt: timestamp('created_at').defaultNow(),
+});
+
+// 10-ب. سجل الترحيل الشهري للإجازات: صف واحد لكل شهر (يمنع تكرار الترحيل على مستوى قاعدة البيانات)
+export const leaveAccrualRuns = pgTable('leave_accrual_runs', {
+  month: text('month').primaryKey(), // YYYY-MM
+  executedAt: timestamp('executed_at').defaultNow(),
+  employeesCount: integer('employees_count').default(0),
+  regularDaysAdded: real('regular_days_added').notNull(),
+  sickDaysAdded: real('sick_days_added').notNull(),
+  triggeredBy: text('triggered_by'),
 });
 
 // 11. Activity Logs table

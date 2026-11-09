@@ -240,9 +240,7 @@ export async function ensureSchema() {
       );
     `);
     await safeQuery(`ALTER TABLE work_locations ALTER COLUMN allowance_amount TYPE REAL;`);
-    await safeQuery(`ALTER TABLE education_degrees ALTER COLUMN allowance_rate TYPE REAL;`);
-    await safeQuery(`ALTER TABLE education_degrees ALTER COLUMN higher_allowance_rate TYPE REAL;`);
-    await safeQuery(`ALTER TABLE responsibility_allowances ALTER COLUMN allowance_rate TYPE REAL;`);
+    // (type fixes for education_degrees / responsibility_allowances moved after their CREATE TABLE)
     await safeQuery(`ALTER TABLE employees ALTER COLUMN initial_regular_leave_balance TYPE REAL;`);
     await safeQuery(`ALTER TABLE employees ALTER COLUMN initial_sick_leave_balance TYPE REAL;`);
 
@@ -512,6 +510,27 @@ export async function ensureSchema() {
     `);
 
     await safeQuery(`ALTER TABLE performance_evaluations ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'مرفوع للاعتماد';`);
+    // Fix: align legacy performance_evaluations tables with the columns the code writes, and drop the
+    // payroll columns (total_deductions / net_salary NOT NULL) that were copied by mistake from
+    // salary_records in an earlier schema version and made every insert fail.
+    for (const col of [
+      `form_id INTEGER`, `form_title TEXT`, `scores_json TEXT`, `evaluator TEXT`, `evaluation_order TEXT`,
+      `evaluation_date TEXT`, `weaknesses TEXT`, `strengths TEXT`, `training_needs TEXT`,
+      `employee_opinion TEXT`, `notes TEXT`, `total_score INTEGER DEFAULT 0`, `grade TEXT DEFAULT 'بانتظار التقييم'`
+    ]) {
+      await safeQuery(`ALTER TABLE performance_evaluations ADD COLUMN IF NOT EXISTS ${col};`);
+    }
+    await safeQuery(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_evaluations' AND column_name = 'total_deductions') THEN
+          ALTER TABLE performance_evaluations ALTER COLUMN total_deductions DROP NOT NULL;
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'performance_evaluations' AND column_name = 'net_salary') THEN
+          ALTER TABLE performance_evaluations ALTER COLUMN net_salary DROP NOT NULL;
+        END IF;
+      END $$;
+    `);
     // Fix: same class of bug as salary_records/leave_requests — this column was added to the CREATE TABLE
     // definition after the table already existed on deployed databases, so legacy installs never got it.
 
@@ -974,14 +993,6 @@ export async function ensureSchema() {
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_leave INTEGER DEFAULT 30;`);
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_evaluation INTEGER DEFAULT 30;`);
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_absence INTEGER DEFAULT 10;`);
-    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
-    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS monthly_regular_leave_days REAL DEFAULT 2.5;`);
-    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS monthly_sick_leave_days REAL DEFAULT 2.5;`);
-    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS max_regular_leave_accumulation REAL DEFAULT 180;`);
-    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS max_sick_leave_accumulation REAL DEFAULT 180;`);
-    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_monthly_leave_accrual BOOLEAN DEFAULT TRUE;`);
-    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS last_leave_accrual_month TEXT DEFAULT '';`);
-    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS last_leave_accrual_date TEXT DEFAULT '';`);
     // System Settings Table
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS system_settings (
@@ -1004,6 +1015,33 @@ export async function ensureSchema() {
         retirement_notification_days INTEGER DEFAULT 90,
         degree_track_auto_settlement BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    // On a fresh database the ALTERs above ran before this CREATE and failed; re-apply them now (idempotent).
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS monthly_regular_leave_days REAL DEFAULT 3;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS monthly_sick_leave_days REAL DEFAULT 2.5;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS max_regular_leave_accumulation REAL DEFAULT 180;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS max_sick_leave_accumulation REAL DEFAULT 180;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_monthly_leave_accrual BOOLEAN DEFAULT TRUE;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS last_leave_accrual_month TEXT DEFAULT '';`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS last_leave_accrual_date TEXT DEFAULT '';`);
+    // Legal values (art. 43): ordinary leave 1 day / 10 days of service = 3 days per month, cap 180 days.
+    // Replace only the old wrong defaults (2.5 days, 10000 cap); a deliberately different value is kept.
+    await safeQuery(`ALTER TABLE system_settings ALTER COLUMN monthly_regular_leave_days SET DEFAULT 3;`);
+    await safeQuery(`UPDATE system_settings SET monthly_regular_leave_days = 3 WHERE monthly_regular_leave_days IS NULL OR monthly_regular_leave_days = 2.5;`);
+    await safeQuery(`UPDATE system_settings SET max_regular_leave_accumulation = 180 WHERE max_regular_leave_accumulation IS NULL OR max_regular_leave_accumulation > 180;`);
+
+    // Monthly leave accrual ledger: one row per month makes the accrual idempotent in the database
+    // itself (the month key used to live only in memory / data/local_storage.json).
+    await safeQuery(`
+      CREATE TABLE IF NOT EXISTS leave_accrual_runs (
+        month TEXT PRIMARY KEY,
+        executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        employees_count INTEGER DEFAULT 0,
+        regular_days_added REAL NOT NULL,
+        sick_days_added REAL NOT NULL,
+        triggered_by TEXT
       );
     `);
 
