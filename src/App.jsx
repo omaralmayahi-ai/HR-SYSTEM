@@ -1,3 +1,4 @@
+import React, { Suspense, lazy } from 'react';
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
@@ -9,26 +10,35 @@ import ScrollToTop from './components/ScrollToTop';
 
 // Layout
 import AppLayout from '@/components/layout/AppLayout';
-
-// Pages
-import Dashboard from '@/pages/Dashboard';
-import Employees from '@/pages/Employees';
-import EmployeeForm from '@/pages/EmployeeForm';
-import EmployeeDetail from '@/pages/EmployeeDetail';
-import Salaries from '@/pages/Salaries';
-import Leaves from '@/pages/Leaves';
-import Attendance from '@/pages/Attendance';
-import Penalties from '@/pages/Penalties';
-import Performance from '@/pages/Performance';
-import Training from '@/pages/Training';
-import Reports from '@/pages/Reports';
-import Settings from '@/pages/Settings';
 import Login from '@/pages/Login';
-import UsersManagement from '@/pages/UsersManagement';
-import OrgChart from '@/pages/OrgChart';
-import SystemSettings from '@/pages/SystemSettings';
-import ServiceManagement from '@/pages/ServiceManagement';
-import PromotionsDue from '@/pages/PromotionsDue';
+
+// Lazy-loaded Pages
+const Dashboard = lazy(() => import('@/pages/Dashboard'));
+const Employees = lazy(() => import('@/pages/Employees'));
+const EmployeeForm = lazy(() => import('@/pages/EmployeeForm'));
+const EmployeeDetail = lazy(() => import('@/pages/EmployeeDetail'));
+const Salaries = lazy(() => import('@/pages/Salaries'));
+const Leaves = lazy(() => import('@/pages/Leaves'));
+const Attendance = lazy(() => import('@/pages/Attendance'));
+const Penalties = lazy(() => import('@/pages/Penalties'));
+const Performance = lazy(() => import('@/pages/Performance'));
+const Training = lazy(() => import('@/pages/Training'));
+const Reports = lazy(() => import('@/pages/Reports'));
+const Settings = lazy(() => import('@/pages/Settings'));
+const UsersManagement = lazy(() => import('@/pages/UsersManagement'));
+const OrgChart = lazy(() => import('@/pages/OrgChart'));
+const SystemSettings = lazy(() => import('@/pages/SystemSettings'));
+const ServiceManagement = lazy(() => import('@/pages/ServiceManagement'));
+const PromotionsDue = lazy(() => import('@/pages/PromotionsDue'));
+
+const PageLoadingFallback = () => (
+  <div className="flex items-center justify-center min-h-[60vh]" dir="rtl">
+    <div className="text-center">
+      <div className="w-10 h-10 border-4 border-[#1B3A6B]/20 border-t-[#1B3A6B] rounded-full animate-spin mx-auto mb-3" />
+      <p className="text-sm text-[#1B3A6B] font-medium">جاري تحميل الصفحة...</p>
+    </div>
+  </div>
+);
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin, isAuthenticated } = useAuth();
@@ -63,30 +73,32 @@ const AuthenticatedApp = () => {
   }
 
   return (
-    <Routes>
-      <Route element={<AppLayout />}>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/employees" element={<Employees />} />
-        <Route path="/employees/new" element={<EmployeeForm />} />
-        <Route path="/employees/:id" element={<EmployeeDetail />} />
-        <Route path="/employees/:id/edit" element={<EmployeeForm />} />
-        <Route path="/service-management" element={<ServiceManagement />} />
-        <Route path="/promotions-due" element={<PromotionsDue />} />
-        <Route path="/salaries" element={<Salaries />} />
-        <Route path="/leaves" element={<Leaves />} />
-        <Route path="/attendance" element={<Attendance />} />
-        <Route path="/penalties" element={<Penalties />} />
-        <Route path="/performance" element={<Performance />} />
-        <Route path="/training" element={<Training />} />
-        <Route path="/reports" element={<Reports />} />
-        <Route path="/users" element={<UsersManagement />} />
-        <Route path="/system-settings" element={<SystemSettings />} />
-        <Route path="/org-chart" element={<OrgChart />} />
-        <Route path="/settings" element={<Settings />} />
-      </Route>
-      <Route path="/login" element={<Navigate to="/" replace />} />
-      <Route path="*" element={<PageNotFound />} />
-    </Routes>
+    <Suspense fallback={<PageLoadingFallback />}>
+      <Routes>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/employees" element={<Employees />} />
+          <Route path="/employees/new" element={<EmployeeForm />} />
+          <Route path="/employees/:id" element={<EmployeeDetail />} />
+          <Route path="/employees/:id/edit" element={<EmployeeForm />} />
+          <Route path="/service-management" element={<ServiceManagement />} />
+          <Route path="/promotions-due" element={<PromotionsDue />} />
+          <Route path="/salaries" element={<Salaries />} />
+          <Route path="/leaves" element={<Leaves />} />
+          <Route path="/attendance" element={<Attendance />} />
+          <Route path="/penalties" element={<Penalties />} />
+          <Route path="/performance" element={<Performance />} />
+          <Route path="/training" element={<Training />} />
+          <Route path="/reports" element={<Reports />} />
+          <Route path="/users" element={<UsersManagement />} />
+          <Route path="/system-settings" element={<SystemSettings />} />
+          <Route path="/org-chart" element={<OrgChart />} />
+          <Route path="/settings" element={<Settings />} />
+        </Route>
+        <Route path="/login" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<PageNotFound />} />
+      </Routes>
+    </Suspense>
   );
 };
 

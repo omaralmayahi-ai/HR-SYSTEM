@@ -3,9 +3,9 @@ import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { 
   Plus, Trash2, Edit2, Check, X, RefreshCw, Play, Pause, 
-  CalendarDays, ShieldCheck, Sparkles, AlertCircle, Clock,
-  Save, CheckCircle2, History, ArrowUpRight, Award, TrendingUp,
-  Banknote, AlertTriangle, CheckSquare, Square
+  CalendarDays, ShieldCheck, Sparkles, Clock,
+  Save, CheckCircle2, History, Award, TrendingUp,
+  Banknote, AlertTriangle
 } from 'lucide-react';
 
 export default function LeaveTypesSettings() {

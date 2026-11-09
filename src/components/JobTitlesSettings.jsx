@@ -1,9 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  Briefcase, Plus, Search, Filter, Edit3, Trash2, CheckCircle2, XCircle, 
-  RefreshCw, Power, AlertCircle, Award, Sparkles, Layers, FileText, 
-  PlusCircle, Check, Users, ShieldAlert, FolderKanban, X
+  Briefcase, Plus, Search, Edit3, Trash2, CheckCircle2, XCircle, 
+  RefreshCw, Power, AlertCircle, Layers, Users, ShieldAlert, FolderKanban
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

@@ -7,17 +7,21 @@ const { Pool } = pkg;
 
 // Function to create a new connection pool.
 export const createPool = () => {
-  return new Pool({
+  const p = new Pool({
     host: process.env.SQL_HOST,
     port: process.env.SQL_PORT ? Number(process.env.SQL_PORT) : undefined,
     user: process.env.SQL_USER,
     password: process.env.SQL_PASSWORD,
     database: process.env.SQL_DB_NAME,
-    connectionTimeoutMillis: 15000,
+    connectionTimeoutMillis: 4000,
     idleTimeoutMillis: 30000,
     max: 20,
     keepAlive: true,
   });
+  p.on('error', (err) => {
+    console.warn('[PG-POOL] Idle client error (will reconnect automatically):', err?.message);
+  });
+  return p;
 };
 
 // Create a pool instance.
@@ -216,22 +220,33 @@ export async function ensureSchema() {
         name TEXT NOT NULL,
         type TEXT NOT NULL,
         calc_type TEXT NOT NULL,
-        value INTEGER NOT NULL,
+        calculation_base TEXT DEFAULT 'nominal',
+        value REAL NOT NULL,
         status TEXT DEFAULT 'فعال',
+        deactivated_at TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await safeQuery(`ALTER TABLE allowances_deductions ADD COLUMN IF NOT EXISTS calculation_base TEXT DEFAULT 'nominal';`);
+    await safeQuery(`ALTER TABLE allowances_deductions ADD COLUMN IF NOT EXISTS deactivated_at TEXT;`);
+    await safeQuery(`ALTER TABLE allowances_deductions ALTER COLUMN value TYPE REAL;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS work_locations (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
-        allowance_amount INTEGER DEFAULT 0,
+        allowance_amount REAL DEFAULT 0,
         work_start_hour TEXT DEFAULT '08:00',
         work_end_hour TEXT DEFAULT '15:00',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await safeQuery(`ALTER TABLE work_locations ALTER COLUMN allowance_amount TYPE REAL;`);
+    await safeQuery(`ALTER TABLE education_degrees ALTER COLUMN allowance_rate TYPE REAL;`);
+    await safeQuery(`ALTER TABLE education_degrees ALTER COLUMN higher_allowance_rate TYPE REAL;`);
+    await safeQuery(`ALTER TABLE responsibility_allowances ALTER COLUMN allowance_rate TYPE REAL;`);
+    await safeQuery(`ALTER TABLE employees ALTER COLUMN initial_regular_leave_balance TYPE REAL;`);
+    await safeQuery(`ALTER TABLE employees ALTER COLUMN initial_sick_leave_balance TYPE REAL;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS education_degrees (
@@ -962,6 +977,13 @@ export async function ensureSchema() {
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_evaluation INTEGER DEFAULT 30;`);
     await safeQuery(`ALTER TABLE commendation_rules_settings ADD COLUMN IF NOT EXISTS reminder_days_absence INTEGER DEFAULT 10;`);
     await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS degree_track_auto_settlement BOOLEAN DEFAULT FALSE;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS monthly_regular_leave_days REAL DEFAULT 2.5;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS monthly_sick_leave_days REAL DEFAULT 2.5;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS max_regular_leave_accumulation REAL DEFAULT 180;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS max_sick_leave_accumulation REAL DEFAULT 180;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_monthly_leave_accrual BOOLEAN DEFAULT TRUE;`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS last_leave_accrual_month TEXT DEFAULT '';`);
+    await safeQuery(`ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS last_leave_accrual_date TEXT DEFAULT '';`);
     // System Settings Table
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS system_settings (

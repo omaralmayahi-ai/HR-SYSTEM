@@ -236,6 +236,7 @@ export const apiClient = {
   },
   settings: {
     get: async () => request('/api/settings'),
+    getPublic: async () => request('/api/settings/public'),
     update: async (data) => request('/api/settings', {
       method: 'PUT',
       body: JSON.stringify(data)

@@ -84,8 +84,8 @@ export const employees = pgTable('employees', {
   statusOrderNumber: text('status_order_number'),
   statusOrderDate: text('status_order_date'),
   statusNotes: text('status_notes'),
-  initialRegularLeaveBalance: integer('initial_regular_leave_balance').default(0), // رصيد الإجازات الاعتيادية عند التسجيل
-  initialSickLeaveBalance: integer('initial_sick_leave_balance').default(0), // رصيد الإجازات المرضية عند التسجيل
+  initialRegularLeaveBalance: real('initial_regular_leave_balance').default(0), // رصيد الإجازات الاعتيادية عند التسجيل
+  initialSickLeaveBalance: real('initial_sick_leave_balance').default(0), // رصيد الإجازات المرضية عند التسجيل
   photo: text('photo'), // الصورة الشخصية
   securityClearanceNumber: text('security_clearance_number'), // رقم التصريح الأمني
   securityClearanceDate: text('security_clearance_date'), // تاريخ التصريح الأمني
@@ -425,6 +425,13 @@ export const systemSettings = pgTable('system_settings', {
   retirementNotificationPeriod: text('retirement_notification_period').default('three_months'), // فترة إشعار التقاعد (month, three_months, etc)
   retirementNotificationDays: integer('retirement_notification_days').default(90), // فترة الإشعار بالأيام في حال مخصص
   degreeTrackAutoSettlement: boolean('degree_track_auto_settlement').default(false), // تفعيل التسوية التلقائية لمسار احتساب الشهادات
+  monthlyRegularLeaveDays: real('monthly_regular_leave_days').default(2.5),
+  monthlySickLeaveDays: real('monthly_sick_leave_days').default(2.5),
+  maxRegularLeaveAccumulation: real('max_regular_leave_accumulation').default(180),
+  maxSickLeaveAccumulation: real('max_sick_leave_accumulation').default(180),
+  autoMonthlyLeaveAccrual: boolean('auto_monthly_leave_accrual').default(true),
+  lastLeaveAccrualMonth: text('last_leave_accrual_month').default(''),
+  lastLeaveAccrualDate: text('last_leave_accrual_date').default(''),
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -712,8 +719,10 @@ export const allowancesDeductions = pgTable('allowances_deductions', {
   name: text('name').notNull(), // الاسم (مثلاً: مخصصات شهادة، مخصصات منصب، استقطاع تقاعد)
   type: text('type').notNull(), // allowance (مخصصات) or deduction (استقطاع)
   calcType: text('calc_type').notNull(), // percentage (نسبة من الراتب الاسمي) or flat (مبلغ مقطوع)
-  value: integer('value').notNull(), // قيمة النسبة أو المبلغ المقطوع
+  calculationBase: text('calculation_base').default('nominal'), // nominal | gross | net
+  value: real('value').notNull(), // قيمة النسبة أو المبلغ المقطوع (تدعم الكسور العشرية مثل 5.25)
   status: text('status').default('فعال'), // فعال أو متوقف مؤقتاً
+  deactivatedAt: text('deactivated_at'), // تاريخ إيقاف المخصص أو الاستقطاع
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -724,7 +733,7 @@ export const leaveTypes = pgTable('leave_types', {
   maxDays: integer('max_days'), // الحد الأقصى للأيام المسموح بها في السنة (اختياري)
   administrativeEffect: text('administrative_effect').default('لا_يؤثر'), // 'لا_يؤثر', 'يوقف_الترفيع', 'يؤخر_العلاوة'
   financialEffect: text('financial_effect').default('براتب_كامل'), // 'براتب_كامل', 'بدون_راتب', 'استقطاع_جزئي', 'براتب_ومخصصات_ثابتة'
-  financialDeductionPercentage: integer('financial_deduction_percentage').default(0), // نسبة الاستقطاع في حال استقطاع جزئي (0 - 100)
+  financialDeductionPercentage: real('financial_deduction_percentage').default(0), // نسبة الاستقطاع في حال استقطاع جزئي (0 - 100)
   affectsIncrement: boolean('affects_increment').default(false), // إيقاف / تأخير العلاوة السنوية
   affectsPromotion: boolean('affects_promotion').default(false), // إيقاف الترفيع واحتساب القدم
   affectsCommendations: boolean('affects_commendations').default(false), // توقف منح كتب الشكر والتقدير
@@ -740,7 +749,7 @@ export const leaveTypes = pgTable('leave_types', {
 export const workLocations = pgTable('work_locations', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم موقع العمل
-  allowanceAmount: integer('allowance_amount').default(0), // مخصصات الموقع الجغرافي أو النامي
+  allowanceAmount: real('allowance_amount').default(0), // مخصصات الموقع الجغرافي أو النامي
   workStartHour: text('work_start_hour').default('08:00'), // وقت بدء الدوام
   workEndHour: text('work_end_hour').default('15:00'), // وقت نهاية الدوام
   createdAt: timestamp('created_at').defaultNow(),
@@ -751,8 +760,8 @@ export const educationDegrees = pgTable('education_degrees', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم الشهادة (مثلاً: بكالوريوس، ماجستير)
   isHigherEducation: boolean('is_higher_education').default(false), // هل هي شهادة عليا؟
-  allowanceRate: integer('allowance_rate').default(0), // نسبة مخصص الشهادة (مثلاً: 45 تعني 45%)
-  higherAllowanceRate: integer('higher_allowance_rate').default(0), // نسبة مخصص الشهادة العليا الإضافي (مثلاً: 50 تعني 50%)
+  allowanceRate: real('allowance_rate').default(0), // نسبة مخصص الشهادة (مثلاً: 45 أو 45.5)
+  higherAllowanceRate: real('higher_allowance_rate').default(0), // نسبة مخصص الشهادة العليا الإضافي (مثلاً: 50 تعني 50%)
   baselineGrade: integer('baseline_grade').default(7), // الدرجة الأساس للتعيين/الاحتساب (دكتوراه 5، ماجستير 6، بكالوريوس 7، دبلوم 8، إعدادية 8)
   baselineStep: integer('baseline_step').default(1), // المرحلة الأساس للتعيين/الاحتساب
   createdAt: timestamp('created_at').defaultNow(),
@@ -762,7 +771,7 @@ export const educationDegrees = pgTable('education_degrees', {
 export const responsibilityAllowances = pgTable('responsibility_allowances', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم المسؤولية / المنصب (مثلاً: مدير عام، رئيس قسم)
-  allowanceRate: integer('allowance_rate').default(0), // نسبة مخصص المنصب والمسؤولية (مثلاً: 25 تعني 25%)
+  allowanceRate: real('allowance_rate').default(0), // نسبة مخصص المنصب والمسؤولية (مثلاً: 25 تعني 25%)
   createdAt: timestamp('created_at').defaultNow(),
 });
 

@@ -6,16 +6,12 @@ import {
   Plus,
   Trash2,
   Edit2,
-  Check,
   X,
   Search,
   BookOpen,
   ShieldCheck,
   RotateCcw,
-  Sparkles,
   AlertTriangle,
-  Layers,
-  FileText,
   UserCheck,
   Award,
   CheckCircle2,
@@ -24,15 +20,11 @@ import {
   Save,
   Clock,
   Calendar,
-  Filter,
   CheckCheck,
-  HelpCircle,
   Eye,
-  Info,
-  TrendingUp,
-  Briefcase
+  Info
 } from 'lucide-react';
-import { notifySettingsChanged, applySavedOrder, fetchEducationDegreesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
+import { fetchEducationDegreesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
 import { useAuth } from '@/lib/AuthContext';
 
 export const JOB_GRADES_LIST = [

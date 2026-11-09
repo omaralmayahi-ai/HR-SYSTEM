@@ -7,12 +7,12 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { db, schema, eq, and, or, desc, asc, ensureSchema, pool } from './src/db/index.ts';
 import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
-import { requireAuth, AuthRequest, JWT_SECRET } from './src/middleware/auth.ts';
+import { requireAuth, requireAdmin, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { SALARY_TABLE } from './src/lib/salaryTable.js';
-import { encryptData, decryptData } from './src/lib/cryptoStorage.ts';
+import { encryptData, decryptData, validateEncryptionKeyConfig } from './src/lib/cryptoStorage.ts';
 import { recalculateEligibilitySync, EngineContextData, formatDateString, isDateOnOrAfter } from './src/lib/promotionEngine.ts';
 import { calculateDegreeTrackSimulation, processDegreeTrackSettlement, processBatchDegreeTrackAutoSettlement } from './src/lib/degreeTrackEngine.ts';
 import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src/lib/promotionDelayReasonsEngine.ts';
@@ -23,6 +23,8 @@ const currentFilename = typeof __filename !== 'undefined' ? __filename : '';
 const currentDirname = typeof __dirname !== 'undefined' ? __dirname : (currentFilename ? path.dirname(currentFilename) : process.cwd());
 
 async function startServer() {
+  validateEncryptionKeyConfig();
+  getJwtSecret();
   // تشخيص اتصال قاعدة البيانات (مؤقت): يطبع سبب فشل الاتصال الحقيقي بوضوح في الطرفية عند الإقلاع،
   // بدل رسالة 'Database offline' العامة التي لا تحدد السبب.
   try {
@@ -39,6 +41,15 @@ async function startServer() {
   await ensureSchema().catch(() => {});
   const app = express();
   const PORT = Number(process.env.PORT) || 5000;
+
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
 
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ limit: '10mb', extended: true }));
@@ -71,6 +82,15 @@ async function startServer() {
   async function executeMonthlyLeaveAccrual(targetMonth?: string, force = false) {
     const currentMonth = targetMonth || new Date().toISOString().slice(0, 7); // e.g. '2026-08'
     
+    try {
+      const [dbSettings] = await db.select().from(schema.systemSettings).limit(1);
+      if (dbSettings) {
+        systemSettingsStore = { ...systemSettingsStore, ...dbSettings };
+      }
+    } catch {
+      // Fallback to in-memory settings
+    }
+
     // If not forced and already accrued for this month, return status
     if (!force && systemSettingsStore.lastLeaveAccrualMonth === currentMonth) {
       return {
@@ -107,33 +127,42 @@ async function startServer() {
       }
     }
 
-    // 2. Process database employees if connected
+    // 2. Process database employees in a single bulk SQL query (fast for 6,000+ employees)
     try {
-      const dbEmps = await db.select().from(schema.employees);
-      if (dbEmps && dbEmps.length > 0) {
-        for (const emp of dbEmps) {
-          const isContinuing = emp.status === 'مستمر' || !emp.status || emp.status === 'مستمر بالخدمة' || emp.status === 'فعال';
-          if (isContinuing) {
-            const curReg = parseFloat(String(emp.initialRegularLeaveBalance ?? 0)) || 0;
-            const curSick = parseFloat(String(emp.initialSickLeaveBalance ?? 0)) || 0;
-
-            const newReg = Math.min(curReg + regDaysToAdd, maxRegCap);
-            const newSick = Math.min(curSick + sickDaysToAdd, maxSickCap);
-
-            await db.update(schema.employees).set({
-              initialRegularLeaveBalance: Math.round(newReg),
-              initialSickLeaveBalance: Math.round(newSick)
-            }).where(eq(schema.employees.id, emp.id)).catch(() => {});
-          }
-        }
+      const res = await pool.query(
+        `UPDATE employees
+         SET initial_regular_leave_balance = ROUND(LEAST(COALESCE(initial_regular_leave_balance, 0) + $1, $2)::numeric, 1)::real,
+             initial_sick_leave_balance = ROUND(LEAST(COALESCE(initial_sick_leave_balance, 0) + $3, $4)::numeric, 1)::real
+         WHERE status IN ('مستمر', 'مستمر بالخدمة', 'فعال') OR status IS NULL`,
+        [regDaysToAdd, maxRegCap, sickDaysToAdd, maxSickCap]
+      );
+      if (res && typeof res.rowCount === 'number' && res.rowCount > 0) {
+        processedCount = res.rowCount;
       }
     } catch (e) {
       // Database fallback
     }
 
     // Update settings state
+    const accrualDate = new Date().toISOString();
     systemSettingsStore.lastLeaveAccrualMonth = currentMonth;
-    systemSettingsStore.lastLeaveAccrualDate = new Date().toISOString();
+    systemSettingsStore.lastLeaveAccrualDate = accrualDate;
+
+    try {
+      const [existingSettings] = await db.select().from(schema.systemSettings).limit(1);
+      if (existingSettings) {
+        await db.update(schema.systemSettings)
+          .set({ lastLeaveAccrualMonth: currentMonth, lastLeaveAccrualDate: accrualDate, updatedAt: new Date() })
+          .where(eq(schema.systemSettings.id, existingSettings.id));
+      } else {
+        await db.insert(schema.systemSettings).values({
+          lastLeaveAccrualMonth: currentMonth,
+          lastLeaveAccrualDate: accrualDate
+        });
+      }
+    } catch {
+      // Fallback
+    }
 
     const logEntry = {
       id: leaveAccrualLogs.length + 1,
@@ -141,7 +170,7 @@ async function startServer() {
       employeesCount: processedCount,
       regularDaysAdded: regDaysToAdd,
       sickDaysAdded: sickDaysToAdd,
-      timestamp: new Date().toISOString(),
+      timestamp: accrualDate,
       triggeredBy: force ? 'مسؤول الموارد البشرية (يدوياً)' : 'النظام الآلي (ترحيل شهري)',
       status: 'ناجح'
     };
@@ -153,7 +182,7 @@ async function startServer() {
       action: 'زيادة الأرصدة الشهرية للإجازات',
       user: 'النظام الآلي',
       details: `تم بنجاح تطبيق الزيادة الشهرية لشهر ${currentMonth} على ${processedCount} موظفاً (إجازة اعتيادية: +${regDaysToAdd} يوم، إجازة مرضية: +${sickDaysToAdd} يوم)`,
-      timestamp: new Date().toISOString()
+      timestamp: accrualDate
     });
 
     saveLocalDb();
@@ -164,21 +193,58 @@ async function startServer() {
       employeesCount: processedCount,
       regularDaysAdded: regDaysToAdd,
       sickDaysAdded: sickDaysToAdd,
-      date: new Date().toISOString()
+      date: accrualDate
     };
   }
 
-  app.get('/api/settings', async (req, res) => {
-    res.json(systemSettingsStore);
+  app.get('/api/settings/public', (req, res) => {
+    // Refresh from DB asynchronously without blocking health checks / login page
+    db.select().from(schema.systemSettings).limit(1).then(([dbSettings]) => {
+      if (dbSettings) {
+        systemSettingsStore = { ...systemSettingsStore, ...dbSettings };
+      }
+    }).catch(() => {});
+
+    res.json({
+      platformName: systemSettingsStore.platformName,
+      beneficiaryName: systemSettingsStore.beneficiaryName,
+      copyrightText: systemSettingsStore.copyrightText,
+      primaryColor: systemSettingsStore.primaryColor,
+      secondaryColor: systemSettingsStore.secondaryColor,
+      activeTheme: systemSettingsStore.activeTheme || 'governmental',
+      fontFamily: systemSettingsStore.fontFamily || 'Cairo',
+      logoUrl: systemSettingsStore.logoUrl
+    });
   });
 
-  app.get('/api/settings/public', async (req, res) => {
-    res.json(systemSettingsStore);
-  });
-
-  app.put('/api/settings', requireAuth, async (req: AuthRequest, res) => {
+  app.get('/api/settings', requireAuth, async (req, res) => {
     try {
-      systemSettingsStore = { ...systemSettingsStore, ...req.body };
+      let [dbSettings] = await db.select().from(schema.systemSettings).limit(1);
+      if (dbSettings) {
+        systemSettingsStore = { ...systemSettingsStore, ...dbSettings };
+      }
+    } catch {
+      // Fallback to in-memory/local_storage settings
+    }
+    res.json(systemSettingsStore);
+  });
+
+  app.put('/api/settings', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+    try {
+      const { id, createdAt, updatedAt, ...data } = req.body || {};
+      systemSettingsStore = { ...systemSettingsStore, ...data };
+      try {
+        const [existing] = await db.select().from(schema.systemSettings).limit(1);
+        if (!existing) {
+          await db.insert(schema.systemSettings).values(data);
+        } else {
+          await db.update(schema.systemSettings)
+            .set({ ...data, updatedAt: new Date() })
+            .where(eq(schema.systemSettings.id, existing.id));
+        }
+      } catch (dbErr) {
+        console.warn('Database fallback for update settings');
+      }
       saveLocalDb();
       res.json(systemSettingsStore);
     } catch (err: any) {
@@ -204,7 +270,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/leave-accrual/execute', requireAuth, async (req, res) => {
+  app.post('/api/leave-accrual/execute', requireAuth, requireAdmin, async (req, res) => {
     try {
       const { month, force } = req.body || {};
       const result = await executeMonthlyLeaveAccrual(month, force !== undefined ? Boolean(force) : true);
@@ -217,18 +283,82 @@ async function startServer() {
   // System Logs Store & API
   const systemLogsStore: any[] = [];
   app.get('/api/logs', requireAuth, async (req, res) => {
+    try {
+      const dbLogs = await db.select()
+        .from(schema.activityLogs)
+        .orderBy(desc(schema.activityLogs.createdAt))
+        .limit(100);
+      if (dbLogs && dbLogs.length > 0) {
+        return res.json(dbLogs.map(l => ({
+          id: l.id,
+          action: l.action,
+          user: l.userEmail,
+          userEmail: l.userEmail,
+          details: l.details,
+          timestamp: l.createdAt,
+          createdAt: l.createdAt
+        })));
+      }
+    } catch {
+      // Fallback to in-memory logs
+    }
     res.json(systemLogsStore);
   });
   app.post('/api/logs', requireAuth, async (req: AuthRequest, res) => {
+    const userActor = req.user?.username || req.user?.email || 'admin';
     const logItem = { 
       id: systemLogsStore.length + 1, 
       ...req.body, 
-      user: req.user?.username || 'admin', 
+      user: userActor, 
+      userEmail: userActor,
       timestamp: new Date().toISOString() 
     };
     systemLogsStore.unshift(logItem);
+    try {
+      await db.insert(schema.activityLogs).values({
+        action: String(req.body?.action || 'عملية نظام'),
+        userEmail: userActor,
+        details: req.body?.details ? String(req.body.details) : null
+      });
+    } catch {
+      // Fallback to in-memory log store
+    }
+    saveLocalDb();
     res.json(logItem);
   });
+
+  // Bounded Dual-Layer Login Rate Limiter (Per-IP and Per-Account)
+  const LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+  const MAX_IP_FAILURES = 40;
+  const MAX_ACCOUNT_FAILURES = 10;
+  const MAX_RATE_LIMIT_KEYS = 5000;
+  const loginFailuresMap = new Map<string, { count: number; resetAt: number }>();
+
+  function getRateLimitRecord(key: string, now: number) {
+    const existing = loginFailuresMap.get(key);
+    if (!existing || now >= existing.resetAt) {
+      return null;
+    }
+    return existing;
+  }
+
+  function recordLoginFailure(key: string, now: number) {
+    if (loginFailuresMap.size >= MAX_RATE_LIMIT_KEYS && !loginFailuresMap.has(key)) {
+      for (const [k, v] of loginFailuresMap.entries()) {
+        if (now >= v.resetAt) loginFailuresMap.delete(k);
+      }
+      if (loginFailuresMap.size >= MAX_RATE_LIMIT_KEYS) {
+        const oldestKey = loginFailuresMap.keys().next().value;
+        if (oldestKey) loginFailuresMap.delete(oldestKey);
+      }
+    }
+    const existing = loginFailuresMap.get(key);
+    if (!existing || now >= existing.resetAt) {
+      loginFailuresMap.set(key, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    } else {
+      existing.count += 1;
+    }
+  }
 
   // Custom Authentication Endpoints
   app.post('/api/auth/login', async (req, res) => {
@@ -236,6 +366,20 @@ async function startServer() {
       const { username, password } = req.body;
       if (!username || !password) {
         return res.status(400).json({ error: 'اسم المستخدم وكلمة المرور مطلوبان' });
+      }
+
+      const now = Date.now();
+      const clientIp = String(req.ip || req.socket?.remoteAddress || 'unknown');
+      const normalizedUser = String(username).trim().toLowerCase();
+      const ipKey = `ip:${clientIp}`;
+      const acctKey = `acct:${clientIp}:${normalizedUser}`;
+
+      const ipRec = getRateLimitRecord(ipKey, now);
+      const acctRec = getRateLimitRecord(acctKey, now);
+      if ((ipRec && ipRec.count >= MAX_IP_FAILURES) || (acctRec && acctRec.count >= MAX_ACCOUNT_FAILURES)) {
+        return res.status(429).json({
+          error: 'تم تجاوز الحد المسموح لمحاولات تسجيل الدخول الفاشلة. يرجى الانتظار 15 دقيقة قبل المحاولة مجدداً.'
+        });
       }
 
       let user: any = null;
@@ -246,43 +390,31 @@ async function startServer() {
           .limit(1);
         user = usersList[0];
       } catch (dbErr) {
-        console.warn('Database query fallback during login:', dbErr);
-        // Fallback for admin test user when local PostgreSQL is offline
-        if (username === 'admin' && password === 'admin123') {
-          user = {
-            id: 1,
-            username: 'admin',
-            password: 'admin123',
-            name: 'مدير النظام الافتراضي (وضع الاختبار)',
-            role: 'admin',
-            email: 'admin@hr.gov.iq'
-          };
-        }
+        console.error('Database query error during login:', dbErr);
+        return res.status(503).json({ error: 'قاعدة البيانات غير متصلة حالياً. يرجى التحقق من خدمة PostgreSQL.' });
       }
 
-      if (!user) {
+      if (!user || !user.password) {
+        recordLoginFailure(ipKey, now);
+        recordLoginFailure(acctKey, now);
         return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
       }
 
-      let isMatch = false;
-      if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$') || user.password.startsWith('$2y$'))) {
-        isMatch = await bcrypt.compare(password, user.password);
-      } else {
-        // Plaintext match fallback + auto-upgrade to hashed password
-        isMatch = user.password === password;
-        if (isMatch && !user.isFallback) {
-          try {
-            const newHash = await bcrypt.hash(password, 10);
-            await db.update(schema.users).set({ password: newHash }).where(eq(schema.users.id, user.id));
-          } catch (upgradeErr) {
-            // ignore
-          }
-        }
+      const isBcryptHash = user.password.startsWith('$2a$') || user.password.startsWith('$2b$') || user.password.startsWith('$2y$');
+      if (!isBcryptHash) {
+        recordLoginFailure(ipKey, now);
+        recordLoginFailure(acctKey, now);
+        return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
       }
 
+      const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
+        recordLoginFailure(ipKey, now);
+        recordLoginFailure(acctKey, now);
         return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
       }
+
+      loginFailuresMap.delete(acctKey);
 
       // Generate cryptographically signed JWT token of user info
       const token = jwt.sign({
@@ -291,7 +423,7 @@ async function startServer() {
         role: user.role,
         name: user.name,
         email: user.email
-      }, JWT_SECRET, { expiresIn: '7d' });
+      }, getJwtSecret(), { expiresIn: '7d' });
 
       res.json({
         token,
@@ -305,7 +437,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Error in login:', error);
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: 'حدث خطأ أثناء تسجيل الدخول' });
     }
   });
 
@@ -329,19 +461,26 @@ async function startServer() {
     }
   ];
 
-  app.get('/api/auth/users', requireAuth, async (req: AuthRequest, res) => {
+  app.get('/api/auth/users', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     try {
-      const allUsers = await db.select().from(schema.users).orderBy(asc(schema.users.id));
+      const allUsers = await db.select({
+        id: schema.users.id,
+        username: schema.users.username,
+        name: schema.users.name,
+        email: schema.users.email,
+        role: schema.users.role,
+        createdAt: schema.users.createdAt
+      }).from(schema.users).orderBy(asc(schema.users.id));
       if (allUsers && allUsers.length > 0) {
         return res.json(allUsers);
       }
     } catch (error: any) {
       console.warn('Database fallback for users list');
     }
-    res.json(inMemoryUsers);
+    res.json(inMemoryUsers.map(({ password, ...safeUser }) => safeUser));
   });
 
-  app.post('/api/auth/users', requireAuth, async (req: AuthRequest, res) => {
+  app.post('/api/auth/users', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'غير مصرح لك بإجراء هذه العملية' });
@@ -401,7 +540,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/auth/users/:id', requireAuth, async (req: AuthRequest, res) => {
+  app.put('/api/auth/users/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'غير مصرح لك بإجراء هذه العملية' });
@@ -476,7 +615,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/auth/users/:id', requireAuth, async (req: AuthRequest, res) => {
+  app.delete('/api/auth/users/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'غير مصرح لك بإجراء هذه العملية' });
@@ -1286,7 +1425,7 @@ async function startServer() {
     }
   }
 
-  app.post('/api/admin/reload-local-db', async (req, res) => {
+  app.post('/api/admin/reload-local-db', requireAuth, requireAdmin, async (req, res) => {
     loadLocalDb();
     res.json({ success: true, count: inMemoryEmployees.length });
   });
@@ -1508,7 +1647,6 @@ async function startServer() {
 
         let rows: any[] = [];
         let total = 0;
-        let debugFallbackError: string | undefined;
         try {
           const [{ value: totalCount }] = whereClause
             ? await db.select({ value: sqlCount() }).from(schema.employees).where(whereClause)
@@ -1522,7 +1660,6 @@ async function startServer() {
             : await db.select().from(schema.employees).orderBy(sortDir(sortCol)).limit(pageSize).offset((page - 1) * pageSize);
         } catch (dbErr: any) {
           console.warn('Database fallback for paginated employees list:', dbErr?.message);
-          debugFallbackError = String(dbErr?.message || dbErr) + ' || stack: ' + String(dbErr?.stack || '').slice(0, 500);
           // احتياطي: فلترة/ترقيم على نسخة الذاكرة عند فشل الاستعلام المباشر لقاعدة البيانات
           rows = inMemoryEmployees.slice((page - 1) * pageSize, page * pageSize);
           total = inMemoryEmployees.length;
@@ -1533,7 +1670,6 @@ async function startServer() {
           total,
           page,
           pageSize,
-          _debugFallbackError: debugFallbackError,
         });
       } catch (error: any) {
         console.error('Error in paginated employees list:', error);
@@ -1541,15 +1677,21 @@ async function startServer() {
       }
     }
 
+    const statusFilter = req.query.status && req.query.status !== 'all' ? String(req.query.status) : null;
     try {
-      const allEmployees = await db.select().from(schema.employees).orderBy(desc(schema.employees.createdAt));
+      const allEmployees = statusFilter
+        ? await db.select().from(schema.employees).where(eq(schema.employees.status, statusFilter)).orderBy(desc(schema.employees.createdAt))
+        : await db.select().from(schema.employees).orderBy(desc(schema.employees.createdAt));
       if (allEmployees && allEmployees.length > 0) {
         return res.json(allEmployees.map(enhanceEmployeeRecord));
       }
     } catch (error: any) {
       console.warn('Database fallback for employees list');
     }
-    res.json(inMemoryEmployees.map(enhanceEmployeeRecord));
+    const memList = statusFilter
+      ? inMemoryEmployees.filter(e => String(e.status || 'مستمر') === statusFilter)
+      : inMemoryEmployees;
+    res.json(memList.map(enhanceEmployeeRecord));
   });
 
   app.post('/api/employees', requireAuth, async (req, res) => {
@@ -1644,7 +1786,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/employees/bulk-import', requireAuth, async (req, res) => {
+  app.post('/api/employees/bulk-import', requireAuth, requireAdmin, async (req, res) => {
     try {
       const { employees } = req.body;
       if (!Array.isArray(employees) || employees.length === 0) {
@@ -2088,7 +2230,7 @@ async function startServer() {
     }
   }
 
-  app.delete('/api/employees/:id', requireAuth, async (req, res) => {
+  app.delete('/api/employees/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid ID format' });
@@ -2198,7 +2340,7 @@ async function startServer() {
   // حذفه نهائياً. مدير النظام يستطيع من نافذة الإعدادات استعراض الأرشيف، استعادة أي سجل منه بكل
   // تفاصيله بنفس معرّفاته الأصلية، أو تأكيد حذفه بشكل نهائي ولا رجعة فيه.
 
-  app.get('/api/archive', requireAuth, async (req, res) => {
+  app.get('/api/archive', requireAuth, requireAdmin, async (req, res) => {
     try {
       const entityType = req.query.entity_type as string | undefined;
       let query = db.select().from(schema.archivedItems);
@@ -2249,7 +2391,7 @@ async function startServer() {
     promotionDelayReasons: 'promotion-delay-reasons',
   };
 
-  app.post('/api/archive/:id/restore', requireAuth, async (req, res) => {
+  app.post('/api/archive/:id/restore', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid ID' });
@@ -2374,7 +2516,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/archive/:id', requireAuth, async (req, res) => {
+  app.delete('/api/archive/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid ID' });
@@ -2429,10 +2571,10 @@ async function startServer() {
         mappedData.employeeId = parseInt(mappedData.employeeId);
       }
       if (mappedData.daysCount !== undefined) {
-        mappedData.daysCount = parseInt(mappedData.daysCount);
+        mappedData.daysCount = parseFloat(mappedData.daysCount);
       }
       if (mappedData.remainingBalance !== undefined && mappedData.remainingBalance !== null) {
-        mappedData.remainingBalance = parseInt(mappedData.remainingBalance);
+        mappedData.remainingBalance = parseFloat(mappedData.remainingBalance);
       }
       delete mappedData.id;
       delete mappedData.createdAt;
@@ -2456,12 +2598,12 @@ async function startServer() {
         const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === mappedData.employeeId);
         if (emp) {
           if (lType.includes('مرض') || lType.includes('sick')) {
-            const cur = parseInt(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30);
-            const updatedSick = Math.max(0, cur - days);
+            const cur = parseFloat(String(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30));
+            const updatedSick = Math.max(0, Number((cur - days).toFixed(1)));
             await updateEmployeeCentralRecord(mappedData.employeeId, { sickLeaveBalance: updatedSick });
           } else {
-            const cur = parseInt(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 30);
-            const updatedReg = Math.max(0, cur - days);
+            const cur = parseFloat(String(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 30));
+            const updatedReg = Math.max(0, Number((cur - days).toFixed(1)));
             await updateEmployeeCentralRecord(mappedData.employeeId, { regularLeaveBalance: updatedReg });
           }
         }
@@ -2491,7 +2633,7 @@ async function startServer() {
         mappedData.employeeId = parseInt(mappedData.employeeId);
       }
       if (mappedData.daysCount !== undefined) {
-        mappedData.daysCount = parseInt(mappedData.daysCount);
+        mappedData.daysCount = parseFloat(mappedData.daysCount);
       }
       delete mappedData.id;
       delete mappedData.createdAt;
@@ -2516,12 +2658,12 @@ async function startServer() {
           const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empId);
           if (emp) {
             if (lType.includes('مرض') || lType.includes('sick')) {
-              const cur = parseInt(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30);
-              const updatedSick = Math.max(0, cur - days);
+              const cur = parseFloat(String(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 30));
+              const updatedSick = Math.max(0, Number((cur - days).toFixed(1)));
               await updateEmployeeCentralRecord(empId, { sickLeaveBalance: updatedSick });
             } else {
-              const cur = parseInt(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 30);
-              const updatedReg = Math.max(0, cur - days);
+              const cur = parseFloat(String(emp.regular_leave_balance ?? emp.regularLeaveBalance ?? emp.initial_regular_leave_balance ?? 30));
+              const updatedReg = Math.max(0, Number((cur - days).toFixed(1)));
               await updateEmployeeCentralRecord(empId, { regularLeaveBalance: updatedReg });
             }
           }
@@ -4756,7 +4898,7 @@ async function startServer() {
     res.json(inMemorySalaryScale);
   });
 
-  app.post('/api/salary-scale', requireAuth, async (req, res) => {
+  app.post('/api/salary-scale', requireAuth, requireAdmin, async (req, res) => {
     const { grade, step, amount, effective_from, effectiveFrom } = req.body;
     const effDate = effective_from || effectiveFrom || '2026-08-27';
     try {
@@ -4784,7 +4926,7 @@ async function startServer() {
     res.status(201).json(memRecord);
   });
 
-  app.post('/api/salary-scale/bulk', requireAuth, async (req, res) => {
+  app.post('/api/salary-scale/bulk', requireAuth, requireAdmin, async (req, res) => {
     const items = req.body;
     if (!Array.isArray(items)) {
       return res.status(400).json({ error: 'Body must be an array' });
@@ -4816,7 +4958,7 @@ async function startServer() {
     res.json({ success: true, count: inMemorySalaryScale.length });
   });
 
-  app.put('/api/salary-scale/:id', requireAuth, async (req, res) => {
+  app.put('/api/salary-scale/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     const { grade, step, amount } = req.body;
     try {
@@ -4846,7 +4988,7 @@ async function startServer() {
     res.json({ id, grade, step, amount });
   });
 
-  app.delete('/api/salary-scale/:id', requireAuth, async (req, res) => {
+  app.delete('/api/salary-scale/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     try {
       await db.delete(schema.salaryScale).where(eq(schema.salaryScale.id, id));
@@ -4871,7 +5013,7 @@ async function startServer() {
     res.json(inMemoryGradePromotionRules.map(r => mapKeys(r, camelToSnake)));
   });
 
-  app.put('/api/grade-promotion-rules/:id', requireAuth, async (req, res) => {
+  app.put('/api/grade-promotion-rules/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     const { promotion_years, promotionYears, notes } = req.body;
     const pYears = promotion_years !== undefined ? (promotion_years === null || promotion_years === '' ? null : parseInt(promotion_years)) : (promotionYears !== undefined ? (promotionYears === null || promotionYears === '' ? null : parseInt(promotionYears)) : undefined);
@@ -4912,7 +5054,7 @@ async function startServer() {
     res.json({ id, promotion_years: pYears, notes });
   });
 
-  app.put('/api/grade-promotion-rules', requireAuth, async (req, res) => {
+  app.put('/api/grade-promotion-rules', requireAuth, requireAdmin, async (req, res) => {
     const items = req.body;
     if (!Array.isArray(items)) {
       return res.status(400).json({ error: 'Body must be an array of rules' });
@@ -4962,7 +5104,7 @@ async function startServer() {
     res.json(inMemoryCommendationTypes.map(r => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/commendation-types', requireAuth, async (req, res) => {
+  app.post('/api/commendation-types', requireAuth, requireAdmin, async (req, res) => {
     const { name, credit_months, creditMonths, status, notes } = req.body;
     const cMonths = parseInt(credit_months ?? creditMonths ?? 1);
     try {
@@ -4987,7 +5129,7 @@ async function startServer() {
     res.status(201).json(mem);
   });
 
-  app.put('/api/commendation-types/:id', requireAuth, async (req, res) => {
+  app.put('/api/commendation-types/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     const { name, credit_months, creditMonths, status, notes } = req.body;
     const cMonths = credit_months !== undefined ? parseInt(credit_months) : (creditMonths !== undefined ? parseInt(creditMonths) : undefined);
@@ -5026,7 +5168,7 @@ async function startServer() {
     res.json({ id, name, status });
   });
 
-  app.delete('/api/commendation-types/:id', requireAuth, async (req, res) => {
+  app.delete('/api/commendation-types/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     try {
       await db.delete(schema.commendationTypes).where(eq(schema.commendationTypes.id, id));
@@ -5183,7 +5325,7 @@ async function startServer() {
     res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
   });
 
-  app.put('/api/commendation-rules-settings', requireAuth, async (req, res) => {
+  app.put('/api/commendation-rules-settings', requireAuth, requireAdmin, async (req, res) => {
     const {
       max_per_year, maxPerYear,
       allowed_combinations, allowedCombinations,
@@ -5267,14 +5409,18 @@ async function startServer() {
     res.json(inMemoryAllowancesDeductions);
   });
 
-  app.post('/api/allowances-deductions', requireAuth, async (req, res) => {
-    const { name, type, calcType, value, status } = req.body;
+  app.post('/api/allowances-deductions', requireAuth, requireAdmin, async (req, res) => {
+    const { name, type, calcType, value, status, calculationBase, calculation_base, deactivatedAt, deactivated_at } = req.body;
+    const calcBase = calculationBase || calculation_base || 'nominal';
+    const deactAt = deactivatedAt || deactivated_at || null;
     try {
       const [newRecord] = await db.insert(schema.allowancesDeductions).values({
         name,
         type,
         calcType,
-        value: parseInt(value),
+        value: parseFloat(value),
+        calculationBase: calcBase,
+        deactivatedAt: deactAt,
         status: status || 'فعال',
       }).returning();
       if (newRecord) return res.status(201).json(newRecord);
@@ -5286,7 +5432,11 @@ async function startServer() {
       name,
       type,
       calcType,
-      value: parseInt(value),
+      value: parseFloat(value),
+      calculationBase: calcBase,
+      calculation_base: calcBase,
+      deactivatedAt: deactAt,
+      deactivated_at: deactAt,
       status: status || 'فعال',
       createdAt: new Date().toISOString()
     };
@@ -5295,9 +5445,11 @@ async function startServer() {
     res.status(201).json(memItem);
   });
 
-  app.put('/api/allowances-deductions/:id', requireAuth, async (req, res) => {
+  app.put('/api/allowances-deductions/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
-    const { name, type, calcType, value, status } = req.body;
+    const { name, type, calcType, value, status, calculationBase, calculation_base, deactivatedAt, deactivated_at } = req.body;
+    const calcBase = calculationBase !== undefined ? calculationBase : calculation_base;
+    const deactAt = deactivatedAt !== undefined ? deactivatedAt : deactivated_at;
 
     if (status === 'موقوف' || status === 'غير فعال' || status === 'معطل') {
       const refCheck = checkReferentialUsage('allowances_deductions', id, true, buildRefContext());
@@ -5312,7 +5464,9 @@ async function startServer() {
           name,
           type,
           calcType,
-          value: value !== undefined ? parseInt(value) : undefined,
+          value: value !== undefined ? parseFloat(value) : undefined,
+          calculationBase: calcBase !== undefined ? calcBase : undefined,
+          deactivatedAt: deactAt !== undefined ? deactAt : undefined,
           status: status !== undefined ? status : undefined,
         })
         .where(eq(schema.allowancesDeductions.id, id))
@@ -5328,7 +5482,11 @@ async function startServer() {
         name: name || inMemoryAllowancesDeductions[idx].name,
         type: type || inMemoryAllowancesDeductions[idx].type,
         calcType: calcType || inMemoryAllowancesDeductions[idx].calcType,
-        value: value !== undefined ? parseInt(value) : inMemoryAllowancesDeductions[idx].value,
+        value: value !== undefined ? parseFloat(value) : inMemoryAllowancesDeductions[idx].value,
+        calculationBase: calcBase !== undefined ? calcBase : inMemoryAllowancesDeductions[idx].calculationBase,
+        calculation_base: calcBase !== undefined ? calcBase : inMemoryAllowancesDeductions[idx].calculation_base,
+        deactivatedAt: deactAt !== undefined ? deactAt : inMemoryAllowancesDeductions[idx].deactivatedAt,
+        deactivated_at: deactAt !== undefined ? deactAt : inMemoryAllowancesDeductions[idx].deactivated_at,
         status: status || inMemoryAllowancesDeductions[idx].status
       };
       saveLocalDb();
@@ -5337,7 +5495,7 @@ async function startServer() {
     res.json({ id, name, type, calcType, value, status });
   });
 
-  app.delete('/api/allowances-deductions/:id', requireAuth, async (req, res) => {
+  app.delete('/api/allowances-deductions/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
 
     const refCheck = checkReferentialUsage('allowances_deductions', id, false, buildRefContext());
@@ -5366,7 +5524,7 @@ async function startServer() {
     res.json(inMemoryWorkLocations);
   });
 
-  app.post('/api/work-locations', requireAuth, async (req, res) => {
+  app.post('/api/work-locations', requireAuth, requireAdmin, async (req, res) => {
     const { name, province, allowance_amount, work_start_hour, work_end_hour } = req.body;
     const locName = String(name || '').trim();
     if (!locName) {
@@ -5389,7 +5547,7 @@ async function startServer() {
       const [newRecord] = await db.insert(schema.workLocations).values({
         name,
         province,
-        allowanceAmount: allowance_amount !== undefined ? parseInt(allowance_amount) : 0,
+        allowanceAmount: allowance_amount !== undefined ? parseFloat(allowance_amount) : 0,
         workStartHour: work_start_hour || '08:00',
         workEndHour: work_end_hour || '15:00',
       }).returning();
@@ -5401,7 +5559,7 @@ async function startServer() {
       id: inMemoryWorkLocations.length + 1,
       name,
       province,
-      allowance_amount: allowance_amount !== undefined ? parseInt(allowance_amount) : 0,
+      allowance_amount: allowance_amount !== undefined ? parseFloat(allowance_amount) : 0,
       work_start_hour: work_start_hour || '08:00',
       work_end_hour: work_end_hour || '15:00',
       created_at: new Date().toISOString()
@@ -5411,7 +5569,7 @@ async function startServer() {
     res.status(201).json(memItem);
   });
 
-  app.put('/api/work-locations/:id', requireAuth, async (req, res) => {
+  app.put('/api/work-locations/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     const { name, province, allowance_amount, work_start_hour, work_end_hour } = req.body;
     try {
@@ -5419,7 +5577,7 @@ async function startServer() {
         .set({
           name,
           province,
-          allowanceAmount: allowance_amount !== undefined ? parseInt(allowance_amount) : undefined,
+          allowanceAmount: allowance_amount !== undefined ? parseFloat(allowance_amount) : undefined,
           workStartHour: work_start_hour !== undefined ? work_start_hour : undefined,
           workEndHour: work_end_hour !== undefined ? work_end_hour : undefined,
         })
@@ -5435,7 +5593,7 @@ async function startServer() {
         ...inMemoryWorkLocations[idx],
         name: name || inMemoryWorkLocations[idx].name,
         province: province || inMemoryWorkLocations[idx].province,
-        allowance_amount: allowance_amount !== undefined ? parseInt(allowance_amount) : inMemoryWorkLocations[idx].allowance_amount,
+        allowance_amount: allowance_amount !== undefined ? parseFloat(allowance_amount) : inMemoryWorkLocations[idx].allowance_amount,
         work_start_hour: work_start_hour || inMemoryWorkLocations[idx].work_start_hour,
         work_end_hour: work_end_hour || inMemoryWorkLocations[idx].work_end_hour
       };
@@ -5445,7 +5603,7 @@ async function startServer() {
     res.json({ id, name, province, allowance_amount, work_start_hour, work_end_hour });
   });
 
-  app.delete('/api/work-locations/:id', requireAuth, async (req, res) => {
+  app.delete('/api/work-locations/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     try {
       await db.delete(schema.workLocations).where(eq(schema.workLocations.id, id));
@@ -5539,7 +5697,7 @@ async function startServer() {
 
   // حذف حالة موظف: مسموح فقط بشرط ألا يستخدمها أي موظف حالياً (سيطرة على إدارة الحالات
   // كي لا تُحذف حالة أُضيفت بالخطأ وتؤثر على موظفين فعليين يحملونها).
-  app.delete('/api/employee-statuses/:id', requireAuth, async (req, res) => {
+  app.delete('/api/employee-statuses/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid ID format' });
@@ -5603,7 +5761,7 @@ async function startServer() {
     res.json(inMemoryEducationDegrees);
   });
 
-  app.post('/api/education-degrees', requireAuth, async (req, res) => {
+  app.post('/api/education-degrees', requireAuth, requireAdmin, async (req, res) => {
     const { 
       name, 
       is_higher_education, isHigherEducation, 
@@ -5614,8 +5772,8 @@ async function startServer() {
     } = req.body;
 
     const isHigher = is_higher_education !== undefined ? is_higher_education === true : isHigherEducation === true;
-    const allRate = allowance_rate !== undefined ? parseInt(allowance_rate) : (allowanceRate !== undefined ? parseInt(allowanceRate) : 0);
-    const hAllRate = higher_allowance_rate !== undefined ? parseInt(higher_allowance_rate) : (higherAllowanceRate !== undefined ? parseInt(higherAllowanceRate) : 0);
+    const allRate = allowance_rate !== undefined ? parseFloat(allowance_rate) : (allowanceRate !== undefined ? parseFloat(allowanceRate) : 0);
+    const hAllRate = higher_allowance_rate !== undefined ? parseFloat(higher_allowance_rate) : (higherAllowanceRate !== undefined ? parseFloat(higherAllowanceRate) : 0);
     const bGrade = baseline_grade !== undefined ? parseInt(baseline_grade) : (baselineGrade !== undefined ? parseInt(baselineGrade) : 7);
     const bStep = baseline_step !== undefined ? parseInt(baseline_step) : (baselineStep !== undefined ? parseInt(baselineStep) : 1);
 
@@ -5653,7 +5811,7 @@ async function startServer() {
     res.status(201).json(memItem);
   });
 
-  app.put('/api/education-degrees/:id', requireAuth, async (req, res) => {
+  app.put('/api/education-degrees/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     const { 
       name, 
@@ -5673,8 +5831,8 @@ async function startServer() {
     }
 
     const isHigher = is_higher_education !== undefined ? is_higher_education === true : (isHigherEducation !== undefined ? isHigherEducation === true : undefined);
-    const allRate = allowance_rate !== undefined ? parseInt(allowance_rate) : (allowanceRate !== undefined ? parseInt(allowanceRate) : undefined);
-    const hAllRate = higher_allowance_rate !== undefined ? parseInt(higher_allowance_rate) : (higherAllowanceRate !== undefined ? parseInt(higherAllowanceRate) : undefined);
+    const allRate = allowance_rate !== undefined ? parseFloat(allowance_rate) : (allowanceRate !== undefined ? parseFloat(allowanceRate) : undefined);
+    const hAllRate = higher_allowance_rate !== undefined ? parseFloat(higher_allowance_rate) : (higherAllowanceRate !== undefined ? parseFloat(higherAllowanceRate) : undefined);
     const bGrade = baseline_grade !== undefined ? parseInt(baseline_grade) : (baselineGrade !== undefined ? parseInt(baselineGrade) : undefined);
     const bStep = baseline_step !== undefined ? parseInt(baseline_step) : (baselineStep !== undefined ? parseInt(baselineStep) : undefined);
 
@@ -5723,7 +5881,7 @@ async function startServer() {
     res.json({ id, name, is_higher_education: isHigher, allowance_rate: allRate, higher_allowance_rate: hAllRate, baseline_grade: bGrade, baseline_step: bStep, status });
   });
 
-  app.delete('/api/education-degrees/:id', requireAuth, async (req, res) => {
+  app.delete('/api/education-degrees/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
 
     const refCheck = checkReferentialUsage('education_degrees', id, false, buildRefContext());
@@ -5752,12 +5910,12 @@ async function startServer() {
     res.json(inMemoryResponsibilityAllowances);
   });
 
-  app.post('/api/responsibility-allowances', requireAuth, async (req, res) => {
+  app.post('/api/responsibility-allowances', requireAuth, requireAdmin, async (req, res) => {
     const { name, allowance_rate } = req.body;
     try {
       const [newRecord] = await db.insert(schema.responsibilityAllowances).values({
         name,
-        allowanceRate: allowance_rate !== undefined ? parseInt(allowance_rate) : 0,
+        allowanceRate: allowance_rate !== undefined ? parseFloat(allowance_rate) : 0,
       }).returning();
       if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
     } catch (error: any) {
@@ -5766,7 +5924,7 @@ async function startServer() {
     const memItem = {
       id: inMemoryResponsibilityAllowances.length + 1,
       name,
-      allowance_rate: allowance_rate !== undefined ? parseInt(allowance_rate) : 0,
+      allowance_rate: allowance_rate !== undefined ? parseFloat(allowance_rate) : 0,
       status: 'فعال',
       created_at: new Date().toISOString()
     };
@@ -5775,7 +5933,7 @@ async function startServer() {
     res.status(201).json(memItem);
   });
 
-  app.put('/api/responsibility-allowances/:id', requireAuth, async (req, res) => {
+  app.put('/api/responsibility-allowances/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     const { name, allowance_rate, status } = req.body;
 
@@ -5790,7 +5948,7 @@ async function startServer() {
       const [updated] = await db.update(schema.responsibilityAllowances)
         .set({
           name,
-          allowanceRate: allowance_rate !== undefined ? parseInt(allowance_rate) : undefined,
+          allowanceRate: allowance_rate !== undefined ? parseFloat(allowance_rate) : undefined,
         })
         .where(eq(schema.responsibilityAllowances.id, id))
         .returning();
@@ -5803,7 +5961,7 @@ async function startServer() {
       inMemoryResponsibilityAllowances[idx] = {
         ...inMemoryResponsibilityAllowances[idx],
         name: name || inMemoryResponsibilityAllowances[idx].name,
-        allowance_rate: allowance_rate !== undefined ? parseInt(allowance_rate) : inMemoryResponsibilityAllowances[idx].allowance_rate
+        allowance_rate: allowance_rate !== undefined ? parseFloat(allowance_rate) : inMemoryResponsibilityAllowances[idx].allowance_rate
       };
       saveLocalDb();
       return res.json(inMemoryResponsibilityAllowances[idx]);
@@ -5811,7 +5969,7 @@ async function startServer() {
     res.json({ id, name, allowance_rate });
   });
 
-  app.delete('/api/responsibility-allowances/:id', requireAuth, async (req, res) => {
+  app.delete('/api/responsibility-allowances/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
 
     const refCheck = checkReferentialUsage('responsibility_allowances', id, false, buildRefContext());
@@ -5829,72 +5987,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // --- Service Records API ---
-  app.get('/api/service-records', requireAuth, async (req, res) => {
-    try {
-      const records = await db.select().from(schema.serviceRecords).orderBy(desc(schema.serviceRecords.id));
-      if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
-    } catch (error: any) {
-      console.warn('Database fallback for service records');
-    }
-    res.json(inMemoryServiceRecords.map(r => mapKeys(r, camelToSnake)));
-  });
-
-  app.post('/api/service-records', requireAuth, async (req, res) => {
-    const { employee_id, record_type, duration_years, duration_months, duration_days, order_number, order_date, notes } = req.body;
-    let newRec: any = null;
-    try {
-      const [newRecord] = await db.insert(schema.serviceRecords).values({
-        employeeId: parseInt(employee_id),
-        recordType: record_type,
-        durationYears: parseInt(duration_years) || 0,
-        durationMonths: parseInt(duration_months) || 0,
-        durationDays: parseInt(duration_days) || 0,
-        orderNumber: order_number,
-        orderDate: order_date,
-        notes: notes || '',
-      }).returning();
-      newRec = newRecord;
-    } catch (error: any) {
-      console.warn('Database fallback for create service record');
-    }
-    const newId = newRec?.id || (inMemoryServiceRecords.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1;
-    const memItem = {
-      id: newId,
-      employee_id: parseInt(employee_id),
-      employeeId: parseInt(employee_id),
-      record_type,
-      recordType: record_type,
-      duration_years: parseInt(duration_years) || 0,
-      durationYears: parseInt(duration_years) || 0,
-      duration_months: parseInt(duration_months) || 0,
-      durationMonths: parseInt(duration_months) || 0,
-      duration_days: parseInt(duration_days) || 0,
-      durationDays: parseInt(duration_days) || 0,
-      order_number,
-      orderNumber: order_number,
-      order_date,
-      orderDate: order_date,
-      notes: notes || '',
-      created_at: new Date().toISOString()
-    };
-    inMemoryServiceRecords.push(memItem);
-    saveLocalDb();
-    res.status(201).json(mapKeys(newRec || memItem, camelToSnake));
-  });
-
-  app.delete('/api/service-records/:id', requireAuth, async (req, res) => {
-    const id = parseInt(req.params.id);
-    try {
-      await db.delete(schema.serviceRecords).where(eq(schema.serviceRecords.id, id));
-    } catch (error: any) {
-      console.warn('Database fallback for delete service record');
-    }
-    inMemoryServiceRecords = inMemoryServiceRecords.filter(r => parseInt(String(r.id)) !== id);
-    saveLocalDb();
-    res.json({ success: true });
-  });
-
   // --- Leave Types API ---
   app.get('/api/leave-types', requireAuth, async (req, res) => {
     try {
@@ -5906,7 +5998,7 @@ async function startServer() {
     res.json(inMemoryLeaveTypes.map(r => mapKeys(r, camelToSnake)));
   });
 
-  app.post('/api/leave-types', requireAuth, async (req, res) => {
+  app.post('/api/leave-types', requireAuth, requireAdmin, async (req, res) => {
     const { 
       name, maxDays, max_days, description, status, 
       administrativeEffect, administrative_effect, 
@@ -5935,7 +6027,7 @@ async function startServer() {
     }
 
     const finEff = financialEffect || financial_effect || (salType === 'بدون_راتب' ? 'بدون_راتب' : salType === 'منح_الراتب_والمخصصات_الثابتة_فقط' ? 'براتب_ومخصصات_ثابتة' : salType === 'استقطاع_جزئي' ? 'استقطاع_جزئي' : 'براتب_كامل');
-    const finDedPct = parseInt(financialDeductionPercentage ?? financial_deduction_percentage ?? (salType === 'بدون_راتب' ? 100 : 0)) || 0;
+    const finDedPct = parseFloat(financialDeductionPercentage ?? financial_deduction_percentage ?? (salType === 'بدون_راتب' ? 100 : 0)) || 0;
     const effOptsStr = typeof effectsOptions === 'string' ? effectsOptions : typeof effects_options === 'string' ? effects_options : JSON.stringify(effectsOptions || effects_options || []);
 
     let newRec: any = null;
@@ -5990,7 +6082,7 @@ async function startServer() {
     res.status(201).json(mapKeys(newRec || memItem, camelToSnake));
   });
 
-  app.put('/api/leave-types/:id', requireAuth, async (req, res) => {
+  app.put('/api/leave-types/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     const { 
       name, maxDays, max_days, description, status, 
@@ -6024,7 +6116,7 @@ async function startServer() {
     if (finEff === undefined && salType !== undefined) {
       finEff = salType === 'بدون_راتب' ? 'بدون_راتب' : salType === 'منح_الراتب_والمخصصات_الثابتة_فقط' ? 'براتب_ومخصصات_ثابتة' : salType === 'استقطاع_جزئي' ? 'استقطاع_جزئي' : 'براتب_كامل';
     }
-    const finDedPct = financialDeductionPercentage !== undefined ? parseInt(financialDeductionPercentage) : (financial_deduction_percentage !== undefined ? parseInt(financial_deduction_percentage) : (salType === 'بدون_راتب' ? 100 : undefined));
+    const finDedPct = financialDeductionPercentage !== undefined ? parseFloat(financialDeductionPercentage) : (financial_deduction_percentage !== undefined ? parseFloat(financial_deduction_percentage) : (salType === 'بدون_راتب' ? 100 : undefined));
 
     let updatedRec: any = null;
     try {
@@ -6084,7 +6176,7 @@ async function startServer() {
     res.json(mapKeys(updatedRec || { id, name, maxDays: mDays, description, status }, camelToSnake));
   });
 
-  app.delete('/api/leave-types/:id', requireAuth, async (req, res) => {
+  app.delete('/api/leave-types/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     try {
       await db.delete(schema.leaveTypes).where(eq(schema.leaveTypes.id, id));
@@ -6240,7 +6332,7 @@ async function startServer() {
     res.json(mapKeys((inMemoryPenaltyTypes && inMemoryPenaltyTypes.length > 0 ? inMemoryPenaltyTypes : LEGAL_ARTICLE_8_PENALTIES).map(enrichPenaltyRecord), camelToSnake));
   });
 
-  app.post('/api/penalty-types/reset-legal', requireAuth, async (req, res) => {
+  app.post('/api/penalty-types/reset-legal', requireAuth, requireAdmin, async (req, res) => {
     try {
       await db.delete(schema.penaltyTypes);
       for (const item of LEGAL_ARTICLE_8_PENALTIES) {
@@ -6257,7 +6349,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/penalty-types', requireAuth, async (req, res) => {
+  app.post('/api/penalty-types', requireAuth, requireAdmin, async (req, res) => {
     try {
       const data = mapKeys(req.body, snakeToCamel);
       const { name, delayMonths, description, salaryDeductionDays, status } = data;
@@ -6297,7 +6389,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/penalty-types/:id', requireAuth, async (req, res) => {
+  app.put('/api/penalty-types/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
@@ -6349,7 +6441,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/penalty-types/:id', requireAuth, async (req, res) => {
+  app.delete('/api/penalty-types/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
@@ -6544,7 +6636,7 @@ async function startServer() {
     res.json(mapKeys(CANONICAL_SEED_FORMS.map((f, i) => ({ id: i + 1, ...f })), camelToSnake));
   });
 
-  app.post('/api/evaluation-forms/seed-defaults', requireAuth, async (req, res) => {
+  app.post('/api/evaluation-forms/seed-defaults', requireAuth, requireAdmin, async (req, res) => {
     try {
       for (const form of CANONICAL_SEED_FORMS) {
         const [existing] = await db.select().from(schema.evaluationForms).where(eq(schema.evaluationForms.title, form.title));
@@ -6572,7 +6664,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/evaluation-forms', requireAuth, async (req, res) => {
+  app.post('/api/evaluation-forms', requireAuth, requireAdmin, async (req, res) => {
     try {
       const data = mapKeys(req.body, snakeToCamel);
       const {
@@ -6617,7 +6709,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/evaluation-forms/:id', requireAuth, async (req, res) => {
+  app.put('/api/evaluation-forms/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
@@ -6672,7 +6764,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/evaluation-forms/:id', requireAuth, async (req, res) => {
+  app.delete('/api/evaluation-forms/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
@@ -6709,7 +6801,7 @@ async function startServer() {
     res.json(DEFAULT_SHIFT_SYSTEMS);
   });
 
-  app.post('/api/shift-systems', requireAuth, async (req, res) => {
+  app.post('/api/shift-systems', requireAuth, requireAdmin, async (req, res) => {
     try {
       const {
         name,
@@ -6742,7 +6834,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/shift-systems/:id', requireAuth, async (req, res) => {
+  app.put('/api/shift-systems/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
@@ -6789,7 +6881,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/shift-systems/:id', requireAuth, async (req, res) => {
+  app.delete('/api/shift-systems/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
@@ -6807,79 +6899,6 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting shift system:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // System Settings API
-  const DEFAULT_SYSTEM_SETTINGS = {
-    id: 1,
-    company_name: 'جمهورية العراق - نظام إدارة الموارد البشرية والرواتب الموحد',
-    created_at: new Date().toISOString()
-  };
-
-  app.get('/api/settings', async (req, res) => {
-    try {
-      let [settings] = await db.select().from(schema.systemSettings).limit(1);
-      if (!settings) {
-        [settings] = await db.insert(schema.systemSettings).values({}).returning();
-      }
-      if (settings) return res.json(settings);
-    } catch (error: any) {
-      console.warn('Database fallback for settings');
-    }
-    res.json(DEFAULT_SYSTEM_SETTINGS);
-  });
-
-  app.put('/api/settings', requireAuth, async (req, res) => {
-    try {
-      const { id, createdAt, ...data } = req.body;
-      try {
-        let [settings] = await db.select().from(schema.systemSettings).limit(1);
-        let updated;
-        if (!settings) {
-          [updated] = await db.insert(schema.systemSettings).values(data).returning();
-        } else {
-          [updated] = await db.update(schema.systemSettings)
-            .set(data)
-            .where(eq(schema.systemSettings.id, settings.id))
-            .returning();
-        }
-        if (updated) return res.json(updated);
-      } catch (err) {
-        console.warn('Database fallback for update settings');
-      }
-      res.json({ ...DEFAULT_SYSTEM_SETTINGS, ...req.body });
-    } catch (error: any) {
-      console.error('Error updating settings:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Activity Logs API
-  app.get('/api/logs', requireAuth, async (req, res) => {
-    try {
-      const logs = await db.select()
-        .from(schema.activityLogs)
-        .orderBy(desc(schema.activityLogs.createdAt))
-        .limit(100);
-      if (logs) return res.json(logs);
-    } catch (error: any) {
-      console.warn('Database fallback for activity logs');
-    }
-    res.json([]);
-  });
-
-  app.post('/api/logs', requireAuth, async (req: AuthRequest, res) => {
-    try {
-      const { action, details } = req.body;
-      const userEmail = req.user?.email || 'مستخدم غير معروف';
-      const [log] = await db.insert(schema.activityLogs)
-        .values({ action, userEmail, details })
-        .returning();
-      res.json(log);
-    } catch (error: any) {
-      console.error('Error creating activity log:', error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -7210,7 +7229,9 @@ async function startServer() {
     const empId = parseInt(String(updatedRec?.employeeId || memItem.employee_id || memItem.employeeId));
     if (empId) {
       await syncEmployeeEducationQualification(empId);
+      triggerRecalculateEligibility(empId).catch(() => {});
     }
+    saveLocalDb();
 
     res.json({
       ...memItem,
@@ -7266,7 +7287,9 @@ async function startServer() {
 
     if (empId) {
       await syncEmployeeEducationQualification(empId);
+      triggerRecalculateEligibility(empId).catch(() => {});
     }
+    saveLocalDb();
 
     if (updatedRec) {
       return res.json({
@@ -7314,7 +7337,9 @@ async function startServer() {
 
     if (empId) {
       await syncEmployeeEducationQualification(empId);
+      triggerRecalculateEligibility(empId).catch(() => {});
     }
+    saveLocalDb();
 
     res.json({ success: true });
   });
@@ -8406,7 +8431,7 @@ async function startServer() {
     return res.json(filteredMemory);
   });
 
-  app.post('/api/governing-courses', requireAuth, async (req, res) => {
+  app.post('/api/governing-courses', requireAuth, requireAdmin, async (req, res) => {
     const data = req.body;
     const grade = parseInt(data.grade);
     if (isNaN(grade)) return res.status(400).json({ error: 'الدرجة الوظيفية مطلوبة بشكل صحيح' });
@@ -8466,7 +8491,7 @@ async function startServer() {
     return res.json(newMemoryItem);
   });
 
-  app.put('/api/governing-courses/:id', requireAuth, async (req, res) => {
+  app.put('/api/governing-courses/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
     const data = req.body;
@@ -8521,7 +8546,7 @@ async function startServer() {
     return res.status(404).json({ error: 'Governing course not found' });
   });
 
-  app.delete('/api/governing-courses/:id', requireAuth, async (req, res) => {
+  app.delete('/api/governing-courses/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
 
@@ -8541,7 +8566,7 @@ async function startServer() {
     return res.json({ success: true });
   });
 
-  app.post('/api/governing-courses/reset-defaults', requireAuth, async (req, res) => {
+  app.post('/api/governing-courses/reset-defaults', requireAuth, requireAdmin, async (req, res) => {
     try {
       await ensureGoverningCoursesTable();
       await db.delete(schema.governingCourses).catch(() => {});
@@ -8671,7 +8696,7 @@ async function startServer() {
     return res.json(inMemoryExemptionRules);
   });
 
-  app.post('/api/governing-courses/exemption-rules', requireAuth, async (req, res) => {
+  app.post('/api/governing-courses/exemption-rules', requireAuth, requireAdmin, async (req, res) => {
     const data = req.body;
     inMemoryExemptionRules = { ...inMemoryExemptionRules, ...data };
 
@@ -8781,7 +8806,7 @@ async function startServer() {
     res.json(inMemoryPromotionPathsMatrix);
   });
 
-  app.post('/api/governing-courses/matrix', requireAuth, async (req, res) => {
+  app.post('/api/governing-courses/matrix', requireAuth, requireAdmin, async (req, res) => {
     if (Array.isArray(req.body)) {
       inMemoryPromotionPathsMatrix = req.body;
       res.json(inMemoryPromotionPathsMatrix);
@@ -8833,7 +8858,7 @@ async function startServer() {
     res.json(inMemoryGradeRequirements);
   });
 
-  app.post('/api/governing-courses/grade-requirements', requireAuth, async (req, res) => {
+  app.post('/api/governing-courses/grade-requirements', requireAuth, requireAdmin, async (req, res) => {
     if (req.body && typeof req.body === 'object') {
       inMemoryGradeRequirements = req.body;
       saveLocalDb();
@@ -8962,7 +8987,16 @@ async function startServer() {
     } catch (e) {}
   }
 
-  function saveLocalDb() {
+  let pendingSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let isSavingLocalDb = false;
+
+  function flushLocalDbSync() {
+    if (pendingSaveTimer) {
+      clearTimeout(pendingSaveTimer);
+      pendingSaveTimer = null;
+    }
+    if (isSavingLocalDb) return;
+    isSavingLocalDb = true;
     try {
       ensureDataDir();
       const state = {
@@ -9012,22 +9046,69 @@ async function startServer() {
         inMemoryAttendance,
         inMemoryOrgUnits,
         systemSettingsStore,
-        leaveAccrualLogs,
-        genericMemoryStores
+        leaveAccrualLogs
       };
-      const jsonStr = JSON.stringify(state, null, 2);
+      const jsonStr = JSON.stringify(state);
       const encryptedPayload = encryptData(jsonStr);
-      fs.writeFileSync(DATA_FILE, encryptedPayload, { encoding: 'utf-8', mode: 0o600 });
+      const tmpFile = `${DATA_FILE}.tmp.${process.pid}.${Date.now()}`;
+      fs.writeFileSync(tmpFile, encryptedPayload, { encoding: 'utf-8', mode: 0o600 });
+      try {
+        fs.renameSync(tmpFile, DATA_FILE);
+      } catch {
+        fs.writeFileSync(DATA_FILE, encryptedPayload, { encoding: 'utf-8', mode: 0o600 });
+        try { fs.unlinkSync(tmpFile); } catch {}
+      }
     } catch (e) {
       console.warn('Could not save local DB state:', e);
+    } finally {
+      isSavingLocalDb = false;
     }
   }
 
+  function saveLocalDb() {
+    if (pendingSaveTimer) {
+      clearTimeout(pendingSaveTimer);
+    }
+    pendingSaveTimer = setTimeout(() => {
+      pendingSaveTimer = null;
+      flushLocalDbSync();
+    }, 300);
+    if (pendingSaveTimer && typeof pendingSaveTimer.unref === 'function') {
+      pendingSaveTimer.unref();
+    }
+  }
+
+  process.once('beforeExit', () => {
+    if (pendingSaveTimer) flushLocalDbSync();
+  });
+  process.once('SIGINT', () => {
+    if (pendingSaveTimer) flushLocalDbSync();
+    process.exit(0);
+  });
+  process.once('SIGTERM', () => {
+    if (pendingSaveTimer) flushLocalDbSync();
+    process.exit(0);
+  });
+
   function loadLocalDb() {
+    if (pendingSaveTimer) {
+      clearTimeout(pendingSaveTimer);
+      pendingSaveTimer = null;
+    }
     try {
       if (fs.existsSync(DATA_FILE)) {
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-        const decryptedStr = decryptData(raw);
+        let decryptedStr: string;
+        try {
+          decryptedStr = decryptData(raw);
+        } catch (decryptErr: any) {
+          console.warn('[LOCAL-DB] Could not decrypt existing local_storage.json (key changed or file interrupted). Re-initializing encrypted local backup with active key.');
+          try {
+            fs.copyFileSync(DATA_FILE, `${DATA_FILE}.bak`);
+          } catch {}
+          flushLocalDbSync();
+          return;
+        }
         const state = JSON.parse(decryptedStr);
 
         // If file was legacy plain text, re-save immediately as encrypted
@@ -9513,68 +9594,29 @@ async function startServer() {
     return fullResult;
   }
 
-  // Qualifications Toggle Endpoint
-  app.patch('/api/qualifications/:id/toggle', requireAuth, async (req, res) => {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
-
-    let qualObj = (genericMemoryStores['qualifications'] || []).find(q => String(q.id) === String(id));
-    if (!qualObj) {
-      return res.status(404).json({ error: 'الشهادة غير موجودة' });
-    }
-
-    const newActive = !(qualObj.is_active !== false && qualObj.isActive !== false);
-    qualObj.is_active = newActive;
-    qualObj.isActive = newActive;
-
-    try {
-      await db.update(schema.qualifications)
-        .set({ isActive: newActive })
-        .where(eq(schema.qualifications.id, id));
-    } catch (e) {}
-
-    const empId = parseInt(String(qualObj.employee_id || qualObj.employeeId));
-    if (empId) {
-      if (newActive) {
-        await updateEmployeeCentralRecord(empId, {
-          education_level: qualObj.education_level || qualObj.level,
-          educationLevel: qualObj.education_level || qualObj.level,
-          specialization: qualObj.specialization || '',
-          university: qualObj.institution || qualObj.university || '',
-          institution: qualObj.institution || qualObj.university || '',
-          graduation_year: qualObj.graduation_year || qualObj.graduationYear || 0,
-          graduationYear: qualObj.graduation_year || qualObj.graduationYear || 0,
-          education_order: qualObj.evaluation_order || qualObj.equation_number || qualObj.education_order || '',
-          evaluation_order: qualObj.evaluation_order || qualObj.equation_number || qualObj.education_order || ''
-        });
-      } else {
-        const nextActive = (genericMemoryStores['qualifications'] || []).find(
-          q => String(q.employee_id || q.employeeId) === String(empId) && String(q.id) !== String(id) && (q.is_active !== false && q.isActive !== false)
-        );
-        if (nextActive) {
-          await updateEmployeeCentralRecord(empId, {
-            education_level: nextActive.education_level || nextActive.level,
-            educationLevel: nextActive.education_level || nextActive.level,
-            specialization: nextActive.specialization || '',
-            university: nextActive.institution || nextActive.university || '',
-            institution: nextActive.institution || nextActive.university || '',
-            graduation_year: nextActive.graduation_year || nextActive.graduationYear || 0,
-            graduationYear: nextActive.graduation_year || nextActive.graduationYear || 0,
-            education_order: nextActive.evaluation_order || nextActive.equation_number || nextActive.education_order || '',
-            evaluation_order: nextActive.evaluation_order || nextActive.equation_number || nextActive.education_order || ''
-          });
-        }
-      }
-      triggerRecalculateEligibility(empId).catch(() => {});
-    }
-
-    saveLocalDb();
-    res.json(mapKeys(qualObj, camelToSnake));
-  });
+  const fullCrudAlreadyRegistered = new Set([
+    'qualifications',
+    'job-assignments',
+    'promotions',
+    'salary-allowances',
+    'annual-evaluations',
+    'training-courses',
+    'transfers',
+    'service-records',
+    'leaves',
+    'penalties',
+    'appreciations',
+    'performance'
+  ]);
+  const putOnlyNeeded = new Set(['career', 'retirements', 'documents']);
 
   Object.entries(genericEntitiesMap).forEach(([endpoint, schemaKey]) => {
     genericMemoryStores[endpoint] = genericMemoryStores[endpoint] || [];
+    if (fullCrudAlreadyRegistered.has(endpoint)) {
+      return;
+    }
 
+    if (!putOnlyNeeded.has(endpoint)) {
     app.get(`/api/${endpoint}`, requireAuth, async (req, res) => {
       const empIdParam = req.query.employeeId || req.query.employee_id;
       try {
@@ -9672,6 +9714,7 @@ async function startServer() {
       saveLocalDb();
       res.status(201).json(mapKeys(memRecord, camelToSnake));
     });
+    }
 
     app.put(`/api/${endpoint}/:id`, requireAuth, async (req, res) => {
       const id = parseInt(req.params.id);
@@ -9772,6 +9815,7 @@ async function startServer() {
       return res.json(mapKeys(savedRecord, camelToSnake));
     });
 
+    if (!putOnlyNeeded.has(endpoint)) {
     app.delete(`/api/${endpoint}/:id`, requireAuth, async (req, res) => {
       const id = parseInt(req.params.id);
       const deletedRecord = (genericMemoryStores[endpoint] || []).find(r => String(r.id) === String(id));
@@ -9817,6 +9861,7 @@ async function startServer() {
       saveLocalDb();
       res.json({ success: true });
     });
+    }
   });
 
   // --- Promotion & Increment Eligibility API (المسار الاعتيادي ومسار الشهادات) ---
@@ -10448,7 +10493,7 @@ async function startServer() {
   });
 
   // 5. Batch Approval API (مسار الاعتماد الدفعي Transactional)
-  app.post('/api/promotions/approve-batch', requireAuth, async (req: AuthRequest, res) => {
+  app.post('/api/promotions/approve-batch', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
     try {
       const { items, order_number, orderNumber, order_date, orderDate } = req.body;
       const finalOrderNumber = String(order_number || orderNumber || '').trim();
@@ -10720,7 +10765,7 @@ async function startServer() {
   });
 
   // 5. Batch Auto-Settlement Trigger
-  app.post('/api/degree-track/process-auto-settlement', requireAuth, async (req, res) => {
+  app.post('/api/degree-track/process-auto-settlement', requireAuth, requireAdmin, async (req, res) => {
     try {
       const isAutoEnabled = inMemoryCommendationRulesSettings.degreeTrackAutoSettlement === true ||
         inMemoryCommendationRulesSettings.degree_track_auto_settlement === true;
@@ -11013,7 +11058,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', async () => {
+  const HOST = process.env.HOST || '0.0.0.0';
+  app.listen(PORT, HOST, async () => {
     console.log(`Server running on http://localhost:${PORT}`);
     await seedAdminUser();
   });
