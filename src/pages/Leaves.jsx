@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, CheckCircle, XCircle } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { normalizeLeaveStatus, APPROVED_LEAVE_STATUS, PENDING_LEAVE_STATUS } from '@/components/employee/leaveStatus';
 
 const LEAVE_TYPES = ['اعتيادية','مرضية','أمومة','حج','دراسية','اضطرارية','بدون راتب','عدة وفاة','زواج'];
 
@@ -30,10 +31,13 @@ export default function Leaves() {
       apiClient.entities.LeaveRequest.list('-created_date', 200),
       apiClient.entities.Employee.list()
     ]).then(([lv, emps]) => {
-      setLeaves(lv);
-      setEmployees(emps);
-      setLoading(false);
-    });
+      // توحيد الحالة: «مقبولة/موافق_عليها» القديمة تُعرض «معتمد»
+      setLeaves((lv || []).map(l => ({ ...l, status: normalizeLeaveStatus(l.status) })));
+      setEmployees(emps || []);
+    }).catch(err => {
+      console.error('Error loading leaves:', err);
+      toast({ title: 'تعذر تحميل الإجازات', description: err?.message || 'خطأ في الاتصال بالخادم', variant: 'destructive' });
+    }).finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, []);
@@ -48,16 +52,25 @@ export default function Leaves() {
 
   const handleSubmit = async () => {
     const days = calcDays(form.start_date, form.end_date);
-    await apiClient.entities.LeaveRequest.create({ ...form, days_count: days });
-    toast({ title: 'تم تسجيل طلب الإجازة' });
-    setShowForm(false);
-    load();
+    try {
+      // الطلب يُسجَّل «معلق» ولا يُخصم من الرصيد إلا بعد اعتماده
+      await apiClient.entities.LeaveRequest.create({ ...form, status: PENDING_LEAVE_STATUS, days_count: days });
+      toast({ title: 'تم تسجيل طلب الإجازة' });
+      setShowForm(false);
+      load();
+    } catch (err) {
+      toast({ title: 'تعذر تسجيل الإجازة', description: err?.message || 'حدث خطأ غير متوقع', variant: 'destructive' });
+    }
   };
 
   const updateStatus = async (id, status, notes = '') => {
-    await apiClient.entities.LeaveRequest.update(id, { status, manager_notes: notes, approval_date: new Date().toISOString().split('T')[0] });
-    toast({ title: status === 'معتمد' ? 'تم اعتماد الإجازة' : 'تم رفض الإجازة' });
-    load();
+    try {
+      await apiClient.entities.LeaveRequest.update(id, { status, manager_notes: notes, approval_date: new Date().toISOString().split('T')[0] });
+      toast({ title: status === APPROVED_LEAVE_STATUS ? 'تم اعتماد الإجازة' : 'تم رفض الإجازة' });
+      load();
+    } catch (err) {
+      toast({ title: 'تعذر تحديث حالة الإجازة', description: err?.message || 'حدث خطأ غير متوقع', variant: 'destructive' });
+    }
   };
 
   const filtered = leaves.filter(l => statusFilter === 'all' || l.status === statusFilter);

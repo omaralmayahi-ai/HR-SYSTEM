@@ -123,8 +123,8 @@ export default function EmployeeForm() {
   const [form, setForm] = useState({
     first_name: '', father_name: '', grandfather_name: '', great_grandfather_name: '',
     full_name: '', surname: '', company_number: '', civil_service_number: '',
-    gender: 'ذكر', birth_date: '', birth_place: '', nationality: 'عراقي', ethnicity: 'عربي/ة',
-    religion: 'مسلم', marital_status: 'أعزب', children_count: 0,
+    gender: 'ذكر', birth_date: '', birth_place: '', nationality: 'عراقي', ethnicity: '',
+    religion: '', marital_status: 'أعزب', children_count: 0,
     national_id: '', passport_number: '', blood_type: 'غير معروف',
     residence_card: '', ration_card: '', nationality_cert: '', address: '', phone: '', email: '',
     appointment_date: '', first_appointment_date: '', current_appointment_date: '', oil_sector_start_date: '', appointment_order: '', job_title: '', department: '', section: '',
@@ -563,54 +563,8 @@ export default function EmployeeForm() {
         return;
       }
 
-      const allEmployees = await apiClient.entities.Employee.list();
-
-      const duplicateCompanyNumber = allEmployees.find(emp =>
-        (emp.company_number || '').toString().trim() === form.company_number.toString().trim() &&
-        String(emp.id) !== String(id || '')
-      );
-      if (duplicateCompanyNumber) {
-        toast({
-          title: 'تنبيه تكرار رقم الشركة',
-          description: `رقم الشركة (${form.company_number}) مستخدم بالفعل من قبل موظف آخر`,
-          variant: 'destructive'
-        });
-        setSaving(false);
-        return;
-      }
-
-      if (form.service_record_number && form.service_record_number !== PENDING_VALUE) {
-        const duplicate = allEmployees.find(emp => 
-          emp.service_record_number === form.service_record_number && 
-          String(emp.id) !== String(id || '')
-        );
-        if (duplicate) {
-          toast({
-            title: 'تنبيه تكرار رقم الإضبارة',
-            description: 'رقم اضبارة الموظف يجب أن يكون فريداً ولا يتكرر لموظف آخر!',
-            variant: 'destructive'
-          });
-          setSaving(false);
-          return;
-        }
-      }
-
-      // الرقم الوظيفي (رقم وزارة التخطيط): رقم فريد أيضاً، لكن يُسمح بتجاوز الفحص إن كانت قيمته PENDING_VALUE
-      if (form.civil_service_number && form.civil_service_number !== PENDING_VALUE) {
-        const duplicateCivilServiceNumber = allEmployees.find(emp =>
-          (emp.civil_service_number || '').toString().trim() === form.civil_service_number.toString().trim() &&
-          String(emp.id) !== String(id || '')
-        );
-        if (duplicateCivilServiceNumber) {
-          toast({
-            title: 'تنبيه تكرار الرقم الوظيفي',
-            description: `الرقم الوظيفي (${form.civil_service_number}) مستخدم بالفعل من قبل موظف آخر`,
-            variant: 'destructive'
-          });
-          setSaving(false);
-          return;
-        }
-      }
+      // فحص تكرار رقم الشركة والرقم الوظيفي يتم على الخادم (لا يُحمَّل كل الموظفين إلى المتصفح)،
+      // ورسالة الخادم تُعرض كما هي عند الرفض.
 
       const cleanSpouseNames = spouses.map(s => s.name?.trim()).filter(Boolean);
       const spouseNamesStr = cleanSpouseNames.join('، ');
@@ -653,8 +607,9 @@ export default function EmployeeForm() {
       navigate('/employees');
     } catch (error) {
       console.error('Error saving employee:', error);
+      const msg = String(error?.message || '');
       toast({
-        title: 'خطأ أثناء الحفظ',
+        title: msg.includes('مستخدم بالفعل') ? 'تنبيه تكرار' : 'خطأ أثناء الحفظ',
         description: error.message || 'حدث خطأ غير متوقع',
         variant: 'destructive'
       });
@@ -779,18 +734,18 @@ export default function EmployeeForm() {
                   <Input className="mt-1 rounded-xl" value={form.nationality || ''} onChange={e => set('nationality', e.target.value)} required />
                 </div>
                 <div>
-                  <Label>القومية *</Label>
-                  <Select value={form.ethnicity || 'عربي/ة'} onValueChange={v => set('ethnicity', v)}>
-                    <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                  <Label>القومية (اختياري)</Label>
+                  <Select value={form.ethnicity || ''} onValueChange={v => set('ethnicity', v)}>
+                    <SelectTrigger className="mt-1 rounded-xl"><SelectValue placeholder="غير محدد" /></SelectTrigger>
                     <SelectContent>
                       {['عربي/ة', 'كردي/ة', 'تركماني/ة', 'كلداني/ة', 'آشوري/ة', 'سرياني/ة', 'أرمني/ة', 'أخرى', 'غير محدد'].map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label>الديانة *</Label>
-                  <Select value={form.religion} onValueChange={v => set('religion', v)}>
-                    <SelectTrigger className="mt-1 rounded-xl"><SelectValue /></SelectTrigger>
+                  <Label>الديانة (اختياري)</Label>
+                  <Select value={form.religion || ''} onValueChange={v => set('religion', v)}>
+                    <SelectTrigger className="mt-1 rounded-xl"><SelectValue placeholder="غير محدد" /></SelectTrigger>
                     <SelectContent>
                       {['مسلم','مسيحي','صابئي','يزيدي','أخرى','غير محدد'].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
                     </SelectContent>
@@ -1291,15 +1246,8 @@ export default function EmployeeForm() {
                               <div
                                 key={item.id || item.name}
                                 onMouseDown={() => {
+                                  // اختيار العنوان لا يغيّر الدرجة: تغيير الدرجة يتم بأمر إداري (ترفيع/تعيين) لا من دليل العناوين
                                   set('job_title', item.name);
-                                  const linkedGrade = parseInt(item.min_grade || item.minGrade || item.grade);
-                                  if (!isNaN(linkedGrade) && linkedGrade >= 1 && linkedGrade <= 11) {
-                                    set('grade', linkedGrade);
-                                    toast({
-                                      title: 'تم ربط الدرجة الوظيفية تلقائياً',
-                                      description: `تم تحديد (الدرجة ${linkedGrade}) تلقائياً حسب العنوان الوظيفي "${item.name}".`
-                                    });
-                                  }
                                   setShowJobSuggestions(false);
                                 }}
                                 className="px-3 py-2 text-right rounded-xl text-xs font-semibold text-slate-700 hover:bg-blue-50/70 hover:text-[#1B3A6B] cursor-pointer transition-all flex items-center justify-between"

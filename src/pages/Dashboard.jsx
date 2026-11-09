@@ -11,6 +11,10 @@ function StatCard({ title, value, icon: Icon, color, bg, link, subtitle, loading
           <p className="text-slate-500 text-xs font-semibold mb-1">{title}</p>
           {loading ? (
             <div className="h-8 w-16 bg-slate-200/80 animate-pulse rounded-lg mt-1" />
+          ) : value === null || value === undefined ? (
+            <p className="text-sm font-bold text-red-600 mt-1 flex items-center gap-1" title="فشل تحميل البيانات من الخادم">
+              <AlertTriangle size={14} /> تعذر التحميل
+            </p>
           ) : (
             <p className={`text-2xl font-black ${color}`}>{value}</p>
           )}
@@ -43,12 +47,21 @@ export default function Dashboard() {
   const [recentEmployees, setRecentEmployees] = useState([]);
   const [approachingEmployeesList, setApproachingEmployeesList] = useState([]);
   const [dueDelayReminders, setDueDelayReminders] = useState({ reminders: [], totalDue: 0, summaryByType: {} });
+  const [remindersError, setRemindersError] = useState(false);
+  const [loadErrors, setLoadErrors] = useState([]);
 
   useEffect(() => {
     let isMounted = true;
 
     async function loadDashboardData() {
       try {
+        // الطلب الفاشل يُعرض مؤشر خطأ لا صفراً
+        const failed = new Set();
+        const safe = (promise, key) => promise.catch(err => {
+          console.error(`Dashboard: failed to load ${key}`, err);
+          failed.add(key);
+          return null;
+        });
         const [
           employeesRes,
           leavesRes,
@@ -59,24 +72,26 @@ export default function Dashboard() {
           dueRemindersRes,
           promotionsDueRes
         ] = await Promise.all([
-          apiClient.entities.Employee.list().catch(() => []),
-          apiClient.entities.LeaveRequest.filter({ status: 'معلق' }).catch(() => []),
-          apiClient.entities.PerformanceEvaluation.filter({ status: 'مرفوع للاعتماد' }).catch(() => []),
-          apiClient.entities.Training.filter({ status: 'جاري' }).catch(() => []),
-          apiClient.entities.ServiceRecord.list().catch(() => []),
-          apiClient.settings.get().catch(() => null),
-          apiClient.promotionDelayReasons.getDueReminders().catch(() => ({ reminders: [], totalDue: 0, summaryByType: {} })),
-          apiClient.promotionsDue.getDueList().catch(() => ({ summary: { totalDue: 0 } }))
+          safe(apiClient.entities.Employee.list(), 'employees'),
+          // ترشيح الحالة يُمرَّر للخادم، ويُعاد تطبيقه محلياً احتياطاً
+          safe(apiClient.entities.LeaveRequest.filter({ status: 'معلق' }), 'leaves'),
+          safe(apiClient.entities.PerformanceEvaluation.filter({ status: 'مرفوع للاعتماد' }), 'evals'),
+          safe(apiClient.entities.Training.filter({ status: 'جاري' }), 'trainings'),
+          safe(apiClient.entities.ServiceRecord.list(), 'serviceRecords'),
+          safe(apiClient.settings.get(), 'settings'),
+          safe(apiClient.promotionDelayReasons.getDueReminders(), 'reminders'),
+          safe(apiClient.promotionsDue.getDueList(), 'promotionsDue')
         ]);
 
         if (!isMounted) return;
 
         const employees = Array.isArray(employeesRes) ? employeesRes : [];
-        const leaves = Array.isArray(leavesRes) ? leavesRes : [];
-        const evals = Array.isArray(evalsRes) ? evalsRes : [];
-        const trainings = Array.isArray(trainingsRes) ? trainingsRes : [];
+        const leaves = Array.isArray(leavesRes) ? leavesRes.filter(l => l.status === 'معلق') : [];
+        const evals = Array.isArray(evalsRes) ? evalsRes.filter(e => e.status === 'مرفوع للاعتماد') : [];
+        const trainings = Array.isArray(trainingsRes) ? trainingsRes.filter(t => t.status === 'جاري') : [];
         const serviceRecords = Array.isArray(serviceRecordsRes) ? serviceRecordsRes : [];
-        const totalDuePromotions = promotionsDueRes?.summary?.totalDue || 0;
+        const totalDuePromotions = promotionsDueRes?.summary?.totalDue ?? null;
+        const orNull = (key, v) => (failed.has(key) ? null : v);
 
         const active = employees.filter(e => e.status === 'فعال' || e.status === 'مستمر' || e.status === 'متقاعد مع تمديد').length;
         
@@ -118,24 +133,29 @@ export default function Dashboard() {
           }
         });
 
+        // التقاعد يعتمد على الموظفين والإعدادات (سن التقاعد)
+        const retirementFailed = failed.has('employees') || failed.has('settings');
         setStats({
-          total: employees.length,
-          active,
-          pending_leaves: leaves.length,
-          due_promotions: totalDuePromotions,
-          pending_evals: evals.length,
-          ongoing_trainings: trainings.length,
-          service_records_count: serviceRecords.length,
-          approaching_retirement_count: approachingCount,
-          reached_retirement_no_extension: reachedNoExtCount,
+          total: orNull('employees', employees.length),
+          active: orNull('employees', active),
+          pending_leaves: orNull('leaves', leaves.length),
+          due_promotions: orNull('promotionsDue', totalDuePromotions),
+          pending_evals: orNull('evals', evals.length),
+          ongoing_trainings: orNull('trainings', trainings.length),
+          service_records_count: orNull('serviceRecords', serviceRecords.length),
+          approaching_retirement_count: retirementFailed ? null : approachingCount,
+          reached_retirement_no_extension: retirementFailed ? null : reachedNoExtCount,
         });
         setRecentEmployees(employees.slice(0, 5));
         setApproachingEmployeesList(approachingList.slice(0, 5));
         if (dueRemindersRes) {
           setDueDelayReminders(dueRemindersRes);
         }
+        setRemindersError(failed.has('reminders'));
+        setLoadErrors(Array.from(failed));
       } catch (err) {
         console.error('Error loading dashboard data:', err);
+        setLoadErrors(['dashboard']);
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -159,6 +179,13 @@ export default function Dashboard() {
           {new Date().toLocaleDateString('ar-IQ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
         </div>
       </div>
+
+      {!loading && loadErrors.length > 0 && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-2.5 text-xs font-bold flex items-center gap-2">
+          <AlertTriangle size={14} />
+          تعذر تحميل بعض بيانات اللوحة من الخادم؛ البطاقات المتأثرة معلَّمة بـ «تعذر التحميل» ولا تُعرض كصفر.
+        </div>
+      )}
 
       {/* Primary Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -332,7 +359,13 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
-              {!dueDelayReminders?.reminders || dueDelayReminders.reminders.length === 0 ? (
+              {remindersError ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-8 text-center text-red-600 font-bold">
+                    تعذر تحميل تذكيرات موانع الترقية والعلاوة من الخادم
+                  </td>
+                </tr>
+              ) : !dueDelayReminders?.reminders || dueDelayReminders.reminders.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
                     لا توجد تذكيرات مستحقة حالياً لموانع الترقية والعلاوة
