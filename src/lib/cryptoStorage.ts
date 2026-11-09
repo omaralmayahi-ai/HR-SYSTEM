@@ -88,3 +88,18 @@ export function decryptData(cipherPayload: string, keyBuffer?: Buffer): string {
 
   return decrypted;
 }
+
+/**
+ * يتحقق من إعداد مفتاح تشفير التخزين المحلي عند الإقلاع.
+ * في الإنتاج يجب أن يكون LOCAL_DB_ENCRYPTION_KEY مضبوطاً بقيمة hex من 64 حرفاً،
+ * لأن المفتاح الاحتياطي الثابت معروف لكل من يقرأ الكود.
+ */
+export function validateEncryptionKeyConfig(): void {
+  const raw = (process.env.LOCAL_DB_ENCRYPTION_KEY || '').trim();
+  const valid = raw.length === 64 && /^[0-9a-fA-F]+$/.test(raw);
+  if (valid) return;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('LOCAL_DB_ENCRYPTION_KEY غير مضبوط أو غير صالح (يجب 64 حرف hex) في ملف .env. شغّل لوحة التحكم (control-app.bat) لتوليده.');
+  }
+  console.warn('[SECURITY] LOCAL_DB_ENCRYPTION_KEY غير مضبوط: يُستخدم مفتاح تطوير ثابت. لا تستخدم هذا في الإنتاج.');
+}
