@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/AuthContext';
 import { validateEmployeeImportRow } from '@/lib/referentialIntegrity';
+import { getColRaw, getColValue, toIsoDate, defaultDuplicateAction } from '@/components/employee/importParsing';
 
 export default function EmployeeImportSettings() {
   const { appPublicSettings } = useAuth();
@@ -246,26 +247,7 @@ export default function EmployeeImportSettings() {
     });
   };
 
-  // Helper to normalize header key string
-  const cleanKey = (k) => {
-    if (!k) return '';
-    return String(k).trim().replace(/\s+/g, ' ').replace(/[^\u0621-\u064Aa-zA-Z0-9]/g, '');
-  };
-
-  // Helper to find matching value from row object
-  const getColValue = (rowObj, possibleKeys) => {
-    for (const p of possibleKeys) {
-      const normalizedP = cleanKey(p);
-      for (const [k, v] of Object.entries(rowObj)) {
-        if (cleanKey(k) === normalizedP || cleanKey(k).includes(normalizedP)) {
-          if (v !== undefined && v !== null && String(v).trim() !== '') {
-            return String(v).trim();
-          }
-        }
-      }
-    }
-    return '';
-  };
+  // مطابقة الأعمدة بالاسم المطبَّع تماماً (لا includes) — راجع components/employee/importParsing.js
 
   // 2. Read and Inspect Excel File
   const handleFileUpload = (e) => {
@@ -287,7 +269,8 @@ export default function EmployeeImportSettings() {
     reader.onload = (evt) => {
       try {
         const buffer = evt.target.result;
-        const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
+        // cellDates:false: التواريخ تصل أرقاماً تسلسلية وتُحوَّل إلى ISO دون انزياح المنطقة الزمنية
+        const wb = XLSX.read(buffer, { type: 'array', cellDates: false });
         
         const firstSheetName = wb.SheetNames[0];
         const ws = wb.Sheets[firstSheetName];
@@ -332,12 +315,22 @@ export default function EmployeeImportSettings() {
           const companyNumber = getColValue(row, ['رقم الشركة الموحد', 'رقم الشركة', 'كود الموظف']);
           const civilServiceNumber = getColValue(row, ['الرقم الوظيفي', 'رقم وزارة التخطيط', 'الرقم المالي']);
           const nationalId = getColValue(row, ['الرقم الوطني', 'الرقم القومي', 'الموحدة', 'رقم الهوية']);
-          const gender = getColValue(row, ['الجنس', 'النوع']) || 'ذكر';
-          const birthDate = getColValue(row, ['تاريخ الميلاد', 'تاريخ ولادة']);
+          const errors = [];
+          const warnings = [];
+          // تحويل خلايا التاريخ إلى yyyy-mm-dd؛ القيمة غير الصالحة تُرفض ولا تُحفظ نصاً
+          const getDate = (keys, label) => {
+            const { value, error } = toIsoDate(getColRaw(row, keys));
+            if (error) errors.push(`${label}: ${error}`);
+            return value;
+          };
+
+          // لا قيم مختلقة للحقول الشخصية: الفارغ يبقى فارغاً
+          const gender = getColValue(row, ['الجنس', 'النوع']);
+          const birthDate = getDate(['تاريخ الميلاد', 'تاريخ ولادة'], 'تاريخ الميلاد');
           const birthPlace = getColValue(row, ['محل الميلاد', 'محل الولادة']);
-          const nationality = getColValue(row, ['الجنسية']) || 'عراقي';
-          const ethnicity = getColValue(row, ['القومية']) || 'عربي/ة';
-          const religion = getColValue(row, ['الديانة']) || 'مسلم';
+          const nationality = getColValue(row, ['الجنسية']);
+          const ethnicity = getColValue(row, ['القومية']);
+          const religion = getColValue(row, ['الديانة']);
           const maritalStatus = getColValue(row, ['الحالة الزوجية']) || 'أعزب';
           const childrenCount = getColValue(row, ['عدد الأطفال', 'عدد الاطفال']) || '0';
           const phone = getColValue(row, ['رقم الهاتف', 'الهاتف', 'الموبايل']);
@@ -353,12 +346,12 @@ export default function EmployeeImportSettings() {
           const employeeIdNumber = getColValue(row, ['رقم هوية الموظف', 'باج الموظف']);
           const retirementNumber = getColValue(row, ['الرقم التقاعدي', 'رقم التقاعد']);
           const securityClearanceNumber = getColValue(row, ['رقم التصريح الأمني', 'التصريح الأمني']);
-          const securityClearanceDate = getColValue(row, ['تاريخ التصريح الأمني']);
+          const securityClearanceDate = getDate(['تاريخ التصريح الأمني'], 'تاريخ التصريح الأمني');
 
-          const firstAppointmentDate = getColValue(row, ['تاريخ المباشرة الأولى', 'تاريخ اول تعيين']);
-          const currentAppointmentDate = getColValue(row, ['تاريخ المباشرة بالجهة الحالية', 'تاريخ المباشرة الحالية', 'المباشرة الحالية']);
-          const oilSectorStartDate = getColValue(row, ['تاريخ العمل في القطاع النفطي', 'تاريخ الخدمة النفطية', 'تاريخ النفط']);
-          const appointmentDate = getColValue(row, ['تاريخ أمر التعيين', 'تاريخ التعيين']);
+          const firstAppointmentDate = getDate(['تاريخ المباشرة الأولى', 'تاريخ اول تعيين'], 'تاريخ المباشرة الأولى');
+          const currentAppointmentDate = getDate(['تاريخ المباشرة بالجهة الحالية', 'تاريخ المباشرة الحالية', 'المباشرة الحالية'], 'تاريخ المباشرة بالجهة الحالية');
+          const oilSectorStartDate = getDate(['تاريخ العمل في القطاع النفطي', 'تاريخ الخدمة النفطية', 'تاريخ النفط'], 'تاريخ العمل في القطاع النفطي');
+          const appointmentDate = getDate(['تاريخ أمر التعيين', 'تاريخ التعيين'], 'تاريخ أمر التعيين');
           const appointmentOrder = getColValue(row, ['أمر التعيين', 'امر التعيين']);
 
           const jobTitle = getColValue(row, ['العنوان الوظيفي', 'المسمى الوظيفي']);
@@ -370,7 +363,7 @@ export default function EmployeeImportSettings() {
           const serviceType = getColValue(row, ['نوع الخدمة', 'نوع الملاك', 'الصفة']) || 'دائم';
           const status = getColValue(row, ['حالة الموظف', 'الحالة']) || 'مستمر';
           const statusOrderNumber = getColValue(row, ['رقم أمر الحالة']);
-          const statusOrderDate = getColValue(row, ['تاريخ أمر الحالة']);
+          const statusOrderDate = getDate(['تاريخ أمر الحالة'], 'تاريخ أمر الحالة');
           const statusNotes = getColValue(row, ['ملاحظات حالة الموظف', 'ملاحظات الحالة']);
           const workNature = getColValue(row, ['طبيعة العمل']) || 'مكتبي';
           const workShiftType = getColValue(row, ['طبيعة الدوام', 'نوع الدوام']) || 'صباحي';
@@ -383,24 +376,21 @@ export default function EmployeeImportSettings() {
           let step = getColValue(row, ['المرحلة الوظيفية', 'المرحلة']);
           grade = grade ? String(grade).replace(/[^\d]/g, '') : '';
           step = step ? String(step).replace(/[^\d]/g, '') : '';
-          const gradeDate = getColValue(row, ['تاريخ الدرجة الحالية', 'تاريخ الترفيع']);
+          const gradeDate = getDate(['تاريخ الدرجة الحالية', 'تاريخ الترفيع'], 'تاريخ الدرجة الحالية');
           const initialRegularLeaveBalance = getColValue(row, ['رصيد الإجازات الاعتيادية الابتدائي', 'رصيد الاعتيادية']);
           const initialSickLeaveBalance = getColValue(row, ['رصيد الإجازات المرضية الابتدائي', 'رصيد المرضية']);
 
-          const educationLevel = getColValue(row, ['التحصيل الدراسي', 'الشهادة', 'مستوى الدراسة']) || 'بكالوريوس';
+          const educationLevel = getColValue(row, ['التحصيل الدراسي', 'الشهادة', 'مستوى الدراسة']);
           const specialization = getColValue(row, ['التخصص الدقيق', 'التخصص', 'الفرع']);
           const university = getColValue(row, ['الجامعة / المعهد', 'الجامعة']);
           const graduationYear = getColValue(row, ['سنة التخرج']);
           const educationOrder = getColValue(row, ['رقم أمر احتساب الشهادة', 'أمر الشهادة']);
 
           const retirementExtensionOrderNumber = getColValue(row, ['رقم أمر تمديد التقاعد', 'أمر تمديد التقاعد']);
-          const retirementExtensionOrderDate = getColValue(row, ['تاريخ أمر تمديد التقاعد', 'تاريخ تمديد التقاعد']);
+          const retirementExtensionOrderDate = getDate(['تاريخ أمر تمديد التقاعد', 'تاريخ تمديد التقاعد'], 'تاريخ أمر تمديد التقاعد');
           const retirementExtensionYears = getColValue(row, ['سنوات تمديد التقاعد', 'سنوات التمديد']);
           const retirementExtensionMonths = getColValue(row, ['أشهر تمديد التقاعد', 'اشهر تمديد التقاعد', 'أشهر التمديد']);
           const retirementExtensionNote = getColValue(row, ['ملاحظة تمديد التقاعد', 'ملاحظات تمديد التقاعد', 'سبب التمديد']);
-
-          const errors = [];
-          const warnings = [];
 
           // 1. Mandatory Field Checks
           if (!firstName && !fullName) {
@@ -477,8 +467,8 @@ export default function EmployeeImportSettings() {
             rowStatus = 'duplicate'; // 🟡
           }
 
-          // Default Action for duplicates: 'update' (استبدال وتحديث المعلومات), for valid: 'insert'
-          const duplicateAction = (isDbDuplicate || isFileDuplicate) ? 'update' : 'insert';
+          // الإجراء الافتراضي للمكرر: «تجاوز» (لا يُكتب فوق القيد القائم إلا باختيار صريح للاستبدال)
+          const duplicateAction = defaultDuplicateAction(isDbDuplicate || isFileDuplicate);
 
           return {
             rowIndex: idx,
@@ -543,8 +533,8 @@ export default function EmployeeImportSettings() {
               shift_work_days: parseInt(shiftWorkDays) || 0,
               shift_rest_days: parseInt(shiftRestDays) || 0,
               work_location: workLocation,
-              grade: grade ? parseInt(grade) : 10,
-              step: step ? parseInt(step) : 1,
+              grade: grade ? parseInt(grade) : null,
+              step: step ? parseInt(step) : null,
               grade_date: gradeDate,
               initial_regular_leave_balance: parseInt(initialRegularLeaveBalance) || 0,
               initial_sick_leave_balance: parseInt(initialSickLeaveBalance) || 0,
