@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { fetchEducationDegreesSorted, fetchResponsibilityAllowancesSorted, subscribeToSettingsUpdates, notifySettingsChanged } from '@/lib/settingsUtils';
 import { useToast } from '@/components/ui/use-toast';
-import { doesEmployeeMatchCriteria } from '@/lib/salaryTable';
+import { doesEmployeeMatchCriteria, getItemCategory, ITEM_CATEGORIES, SPOUSE_ALLOWANCE, CHILD_ALLOWANCE } from '@/lib/salaryTable';
 import { 
   Plus, 
   Trash2, 
@@ -108,7 +108,7 @@ export default function FixedCustomAllowancesSettings() {
       const payload = {
         name: tempName,
         calcType: tempCalcType,
-        value: parseInt(tempValue),
+        value: parseFloat(tempValue),
       };
 
       await apiClient.entities.AllowanceDeduction.update(editingTempRecord.id, payload);
@@ -186,7 +186,7 @@ export default function FixedCustomAllowancesSettings() {
         name: tempName,
         type: 'allowance',
         calcType: tempCalcType,
-        value: parseInt(tempValue),
+        value: parseFloat(tempValue),
         status: 'فعال',
       };
 
@@ -260,8 +260,8 @@ export default function FixedCustomAllowancesSettings() {
   };
   
   // 1. Fixed Allowances State
-  const [spouseAllowance, setSpouseAllowance] = useState(75000);
-  const [childAllowance, setChildAllowance] = useState(30000);
+  const [spouseAllowance, setSpouseAllowance] = useState(SPOUSE_ALLOWANCE); // 50,000 — المادة 14 من القانون 22 لسنة 2008 المعدلة
+  const [childAllowance, setChildAllowance] = useState(CHILD_ALLOWANCE); // 10,000 لكل طفل حتى الرابع
   const [spouseAllowanceStatus, setSpouseAllowanceStatus] = useState('فعال');
   const [childAllowanceStatus, setChildAllowanceStatus] = useState('فعال');
   const [savingFixed, setSavingFixed] = useState(false);
@@ -489,10 +489,10 @@ export default function FixedCustomAllowancesSettings() {
   const fetchFixedSettings = async () => {
     if (typeof window !== 'undefined') {
       const savedSpouse = localStorage.getItem('SPOUSE_ALLOWANCE');
-      if (savedSpouse !== null && savedSpouse !== '') setSpouseAllowance(parseInt(savedSpouse) || 0);
+      if (savedSpouse !== null && savedSpouse !== '') setSpouseAllowance(parseFloat(savedSpouse) || 0);
       
       const savedChild = localStorage.getItem('CHILD_ALLOWANCE');
-      if (savedChild !== null && savedChild !== '') setChildAllowance(parseInt(savedChild) || 0);
+      if (savedChild !== null && savedChild !== '') setChildAllowance(parseFloat(savedChild) || 0);
 
       const savedSpouseStatus = localStorage.getItem('SPOUSE_ALLOWANCE_STATUS');
       if (savedSpouseStatus) setSpouseAllowanceStatus(savedSpouseStatus);
@@ -504,19 +504,24 @@ export default function FixedCustomAllowancesSettings() {
     try {
       const allAllowances = await apiClient.entities.AllowanceDeduction.list();
       if (Array.isArray(allAllowances) && allAllowances.length > 0) {
-        const spouseRec = allAllowances.find(a => a.type === 'allowance' && (String(a.name).includes('زوجية') || String(a.name).includes('الزوجية')));
+        const spouseRec = allAllowances.find(a => a.type === 'allowance' && getItemCategory(a) === ITEM_CATEGORIES.SPOUSE);
         if (spouseRec) {
-          setSpouseAllowance(spouseRec.value !== undefined ? spouseRec.value : 75000);
+          setSpouseAllowance(spouseRec.value !== undefined ? spouseRec.value : SPOUSE_ALLOWANCE);
           setSpouseAllowanceStatus(spouseRec.status || 'فعال');
         }
-        const childRec = allAllowances.find(a => a.type === 'allowance' && (String(a.name).includes('أطفال') || String(a.name).includes('الاطفال') || String(a.name).includes('أولاد') || String(a.name).includes('الاولاد') || String(a.name).includes('طفل') || String(a.name).includes('ولد')));
+        const childRec = allAllowances.find(a => a.type === 'allowance' && getItemCategory(a) === ITEM_CATEGORIES.CHILD);
         if (childRec) {
-          setChildAllowance(childRec.value !== undefined ? childRec.value : 30000);
+          setChildAllowance(childRec.value !== undefined ? childRec.value : CHILD_ALLOWANCE);
           setChildAllowanceStatus(childRec.status || 'فعال');
         }
       }
     } catch (e) {
-      console.warn('Fallback loading fixed settings from storage');
+      console.warn('Fallback loading fixed settings from storage', e);
+      toast({
+        title: 'تعذّر تحميل المخصصات الثابتة من الخادم',
+        description: (e && e.message) || 'تُعرض القيم المحفوظة محلياً',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -524,8 +529,8 @@ export default function FixedCustomAllowancesSettings() {
     if (e && e.preventDefault) e.preventDefault();
     setSavingFixed(true);
     try {
-      const finalSpouse = spouseAllowance === '' ? 0 : (parseInt(spouseAllowance) || 0);
-      const finalChild = childAllowance === '' ? 0 : (parseInt(childAllowance) || 0);
+      const finalSpouse = spouseAllowance === '' ? 0 : (parseFloat(spouseAllowance) || 0);
+      const finalChild = childAllowance === '' ? 0 : (parseFloat(childAllowance) || 0);
 
       if (typeof window !== 'undefined') {
         localStorage.setItem('SPOUSE_ALLOWANCE', finalSpouse.toString());
@@ -535,13 +540,11 @@ export default function FixedCustomAllowancesSettings() {
       }
 
       // Synchronize with database allowances_deductions table
-      let allAllowances = [];
-      try {
-        allAllowances = await apiClient.entities.AllowanceDeduction.list();
-      } catch (err) {}
+      // أي خطأ هنا يُعرض للمستخدم (لا يُبلَّغ بنجاح الحفظ إذا فشل الحفظ في قاعدة البيانات)
+      const allAllowances = await apiClient.entities.AllowanceDeduction.list();
 
       if (Array.isArray(allAllowances)) {
-        const spouseRec = allAllowances.find(a => a.type === 'allowance' && (String(a.name).includes('زوجية') || String(a.name).includes('الزوجية')));
+        const spouseRec = allAllowances.find(a => a.type === 'allowance' && getItemCategory(a) === ITEM_CATEGORIES.SPOUSE);
         if (spouseRec) {
           await apiClient.entities.AllowanceDeduction.update(spouseRec.id, {
             name: spouseRec.name,
@@ -549,18 +552,19 @@ export default function FixedCustomAllowancesSettings() {
             calcType: spouseRec.calcType || spouseRec.calc_type || 'flat',
             value: finalSpouse,
             status: spouseAllowanceStatus
-          }).catch(() => {});
+          });
         } else {
           await apiClient.entities.AllowanceDeduction.create({
             name: 'مخصصات الزوجية المقطوعة',
+            category: ITEM_CATEGORIES.SPOUSE,
             type: 'allowance',
             calcType: 'flat',
             value: finalSpouse,
             status: spouseAllowanceStatus
-          }).catch(() => {});
+          });
         }
 
-        const childRec = allAllowances.find(a => a.type === 'allowance' && (String(a.name).includes('أطفال') || String(a.name).includes('الاطفال') || String(a.name).includes('أولاد') || String(a.name).includes('الاولاد') || String(a.name).includes('طفل') || String(a.name).includes('ولد')));
+        const childRec = allAllowances.find(a => a.type === 'allowance' && getItemCategory(a) === ITEM_CATEGORIES.CHILD);
         if (childRec) {
           await apiClient.entities.AllowanceDeduction.update(childRec.id, {
             name: childRec.name,
@@ -568,15 +572,16 @@ export default function FixedCustomAllowancesSettings() {
             calcType: childRec.calcType || childRec.calc_type || 'flat',
             value: finalChild,
             status: childAllowanceStatus
-          }).catch(() => {});
+          });
         } else {
           await apiClient.entities.AllowanceDeduction.create({
             name: 'مخصصات الأطفال (لكل طفل)',
+            category: ITEM_CATEGORIES.CHILD,
             type: 'allowance',
             calcType: 'flat',
             value: finalChild,
             status: childAllowanceStatus
-          }).catch(() => {});
+          });
         }
       }
 
@@ -623,7 +628,7 @@ export default function FixedCustomAllowancesSettings() {
         name: record.name,
         type: record.type || 'allowance',
         calcType: record.calcType || record.calc_type || 'flat',
-        value: parseInt(record.value || 0),
+        value: parseFloat(record.value || 0),
         status: newStatus,
       };
 
@@ -676,11 +681,12 @@ export default function FixedCustomAllowancesSettings() {
       // Filter only allowances (not deductions) and exclude standard marital/child ones and temporary ones
       const customOnly = data.filter(item => {
         if (!item) return false;
-        const name = String(item.name || '');
-        const isSpouse = (name.includes('زوجية') || name.includes('الزوجية'));
-        const isChild = (name.includes('أطفال') || name.includes('الاطفال') || name.includes('أولاد') || name.includes('الاولاد') || name.includes('طفل') || name.includes('ولد'));
-        const isDegree = (name.includes('شهادة') || name.includes('الشهادة') || name.includes('دكتوراه') || name.includes('ماجستير') || name.includes('دبلوم') || name.includes('بكالوريوس') || name.includes('إعدادية') || name.includes('متوسطة') || name.includes('ابتدائية'));
-        const isResponsibility = (name.includes('منصب') || name.includes('مسؤولية') || name.includes('إشرافية'));
+        // التصنيف بالفئة الصريحة (أو بالاسم الكامل المعروف)، لا بكلمات داخل الاسم
+        const category = getItemCategory(item);
+        const isSpouse = category === ITEM_CATEGORIES.SPOUSE;
+        const isChild = category === ITEM_CATEGORIES.CHILD;
+        const isDegree = category === ITEM_CATEGORIES.CERTIFICATE;
+        const isResponsibility = category === ITEM_CATEGORIES.POSITION;
         
         let isTemp = false;
         try {
@@ -785,7 +791,7 @@ export default function FixedCustomAllowancesSettings() {
         name: newName,
         type: 'allowance',
         calcType: newCalcType,
-        value: parseInt(newValue),
+        value: parseFloat(newValue),
         status: newStatus,
       };
 
@@ -840,7 +846,7 @@ export default function FixedCustomAllowancesSettings() {
         name: editName,
         type: 'allowance',
         calcType: editCalcType,
-        value: parseInt(editValue),
+        value: parseFloat(editValue),
         status: editStatus,
       };
 
@@ -1017,7 +1023,7 @@ export default function FixedCustomAllowancesSettings() {
                       setSpouseAllowance(val === '' ? '' : (parseInt(val.replace(/[^\d]/g, '')) || 0));
                     }}
                     className="w-full pl-12 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#1B3A6B] text-slate-800"
-                    placeholder="75000"
+                    placeholder="50000"
                   />
                   <div className="absolute left-3 top-2.5 text-[10px] font-bold text-slate-400">
                     د.ع
@@ -1052,7 +1058,7 @@ export default function FixedCustomAllowancesSettings() {
                       setChildAllowance(val === '' ? '' : (parseInt(val.replace(/[^\d]/g, '')) || 0));
                     }}
                     className="w-full pl-12 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#1B3A6B] text-slate-800"
-                    placeholder="30000"
+                    placeholder="10000"
                   />
                   <div className="absolute left-3 top-2.5 text-[10px] font-bold text-slate-400">
                     د.ع
@@ -1143,6 +1149,7 @@ export default function FixedCustomAllowancesSettings() {
                 <div className="relative">
                   <input
                     type="number"
+                    step="any"
                     value={newValue}
                     onChange={(e) => setNewValue(e.target.value)}
                     className="w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#1B3A6B]"
@@ -1304,6 +1311,7 @@ export default function FixedCustomAllowancesSettings() {
                             {isEditing ? (
                               <input
                                 type="number"
+                                step="any"
                                 value={editValue}
                                 onChange={(e) => setEditValue(e.target.value)}
                                 className="px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-center focus:ring-1 focus:ring-[#1B3A6B] w-24"
@@ -2199,6 +2207,7 @@ export default function FixedCustomAllowancesSettings() {
                       <label className="text-xs font-bold text-slate-700">القيمة *</label>
                       <input
                         type="number"
+                        step="any"
                         value={tempValue}
                         onChange={(e) => setTempValue(e.target.value)}
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#1B3A6B]"
