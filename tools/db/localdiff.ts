@@ -63,6 +63,48 @@ export const STORE_TABLES: Record<string, string | null> = {
   inMemoryGradeRequirements: null, // لا جدول له: يعيش في الملف فقط
 };
 
+// مخازن تُولَّد آلياً من محرك الترفيع عند إعادة الاحتساب: لا تُنقل، تُعاد توليدها من القاعدة
+const DERIVED: Record<string, string> = { inMemoryPromotionDelayReasons: 'يُعاد توليده من محرك الترفيع (إعادة احتساب)' };
+// جداول إعدادات/قوائم: «في الملف فقط» تُطابق بالاسم، لأن معرّفات القيم الافتراضية في الكود تختلف عن معرّفات القاعدة
+const NAME_KEYS = ['name', 'title', 'job_title', 'jobTitle'];
+const nameOf = (r: any) => { for (const k of NAME_KEYS) if (r && typeof r[k] === 'string' && r[k].trim()) return r[k].trim(); return null; };
+// القيم الشخصية لا تُطبع؛ أسماء البنود في هذه الجداول ليست بيانات شخصية
+const CONFIG_TABLES = new Set(['allowances_deductions', 'education_degrees', 'responsibility_allowances', 'work_locations', 'shift_systems', 'service_types', 'employee_statuses', 'leave_types', 'penalty_types', 'job_titles', 'commendation_types', 'grade_promotion_rules', 'org_units']);
+
+// أعمدة هوية السجل: اختلافها مع تطابق id يعني سجلاً آخر لا تعديلاً
+const IDENTITY_COLS = ['company_number', 'employee_id', 'training_id', 'name', 'title'];
+
+/** مقارنة مخزن على شكل كائن بجدوله. يعيد عدد الناقص في القاعدة وعدد المختلف وأسطر شرح. */
+export function compareObjectStore(key: string, val: any, rows: any[]) {
+  const lines: string[] = []; let missing = 0; let differ = 0;
+  if (key === 'inMemoryEmployeeAssignments') {
+    // { employeeId: assignment } ← جدول governing_course_employee_assignments بمفتاح employee_id
+    const dbEmp = new Set(rows.map((r: any) => String(r.employee_id)));
+    const ids = Object.keys(val || {});
+    const miss = ids.filter((k) => !dbEmp.has(String(k)));
+    missing = miss.length;
+    lines.push(`${ids.length} موظفاً لهم تعيين دورات في الملف، ${missing} منهم بلا سجل في القاعدة`);
+    return { missing, differ, lines, note: 'تعيينات الدورات لكل موظف' };
+  }
+  if (rows.length === 0) {
+    missing = Object.keys(val || {}).length ? 1 : 0;
+    lines.push(missing ? '⚠ الجدول فارغ والملف فيه إعدادات — تُنقل' : 'فارغ في الاثنين');
+    return { missing, differ, lines, note: 'إعدادات' };
+  }
+  // صف إعدادات واحد: قارن المفاتيح بأعمدة الصف الأول
+  const row = rows[0];
+  const keys: string[] = [];
+  for (const [k, v] of Object.entries<any>(val || {})) {
+    const col = k in row ? k : snake(k);
+    if (!(col in row) || ['id', 'created_at', 'updated_at'].includes(col)) continue;
+    const a = norm(v), b = norm(row[col]);
+    if (!(a === null && b === null) && String(a) !== String(b)) keys.push(col);
+  }
+  differ = keys.length;
+  if (keys.length) lines.push(`مفاتيح تختلف عن القاعدة: ${keys.slice(0, 10).join('، ')}`);
+  return { missing, differ, lines, note: 'صف إعدادات' };
+}
+
 const snake = (k: string) => k.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
 
 /** تطبيع قيمة للمقارنة: الفراغ = null، الأرقام أرقام، التواريخ بلا جزء الوقت إن كان صفراً. */
@@ -113,6 +155,7 @@ async function main() {
   const details: any = { generatedAt: new Date().toISOString(), stores: {} };
   const summary: { store: string; table: string; file: number; db: number; onlyFile: number; differ: number; fields: string }[] = [];
   const orphanStores: string[] = [];
+  const extraLines: string[] = [];
   let attention = 0;
 
   for (const [key, val] of Object.entries<any>(state)) {
@@ -129,29 +172,80 @@ async function main() {
     const rows = (await pool.query(`SELECT * FROM "${table}"`)).rows;
     const cols = new Set<string>(rows.length ? Object.keys(rows[0]) : (await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1`, [table])).rows.map((r: any) => r.column_name));
     if (!isArr) {
-      // مخزن إعدادات (كائن): يُعرض للمراجعة اليدوية فقط
-      summary.push({ store: key, table, file: n, db: rows.length, onlyFile: 0, differ: 0, fields: 'كائن إعدادات — مراجعة يدوية' });
-      details.stores[key] = { table, kind: 'object', file: val, db: rows };
+      // مخزن على شكل كائن: لا يُعدّ «آمناً» تلقائياً (مراجعة B2: B-1)
+      const r = compareObjectStore(key, val, rows);
+      summary.push({ store: key, table, file: n, db: rows.length, onlyFile: r.missing, differ: r.differ, fields: r.note });
+      for (const l of r.lines) extraLines.push(`  ${key}: ${l}`);
+      if (r.missing || r.differ) attention++;
+      details.stores[key] = { table, kind: 'object', file: val, db: rows, review: r };
+      continue;
+    }
+    if (DERIVED[key]) {
+      summary.push({ store: key, table, file: val.length, db: rows.length, onlyFile: 0, differ: 0, fields: 'مشتق: ' + DERIVED[key] });
+      continue;
+    }
+    if (table === 'leave_accrual_runs') {
+      // مفتاح الجدول هو الشهر لا id. لا تُنقل أبداً: نقل سجل شهر «نُفّذ في الذاكرة فقط» يعلّم الشهر
+      // منفّذاً في القاعدة دون أن تُزاد أرصدتها (مراجعة B2: M4)
+      const dbMonths = new Set(rows.map((x: any) => x.month));
+      const offline = val.filter((x: any) => !dbMonths.has(x.month));
+      for (const x of val) extraLines.push(`  ترحيل إجازات في الملف: الشهر ${x.month} · ${x.employeesCount ?? '?'} موظف · ${x.status ?? ''} · ${dbMonths.has(x.month) ? 'نفس الشهر موجود في القاعدة' : '⚠ غير موجود في القاعدة (نُفّذ في الذاكرة فقط؟)'}`);
+      summary.push({ store: key, table, file: val.length, db: rows.length, onlyFile: offline.length, differ: 0, fields: 'مطابقة بالشهر — لا تُنقل' });
+      if (offline.length) attention++;
       continue;
     }
     const byId = new Map(rows.map((r: any) => [String(r.id), r]));
-    const onlyFile: any[] = []; const differing: any[] = []; const fieldCount: Record<string, number> = {};
+    const onlyFile: any[] = []; const collisions: any[] = []; const differing: any[] = []; const fieldCount: Record<string, number> = {};
     for (const rec of val) {
       const id = rec?.id !== undefined && rec?.id !== null ? String(rec.id) : null;
       const dbRec = id ? byId.get(id) : undefined;
       if (!dbRec) { onlyFile.push(rec); continue; }
       const f = diffRecord(rec, dbRec, cols);
+      // نفس id لكن سجل آخر: الذاكرة تعطي max(id)+1 فيتصادم مع سجل حقيقي (مراجعة B2: B-2)
+      if (f.some((c) => IDENTITY_COLS.includes(c))) { collisions.push({ id, fields: f.filter((c) => IDENTITY_COLS.includes(c)) }); onlyFile.push(rec); continue; }
       if (f.length) { differing.push({ id, fields: f, file: Object.fromEntries(f.map((c) => [c, rec[c] ?? rec[c.replace(/_([a-z])/g, (_, x) => x.toUpperCase())]])), db: Object.fromEntries(f.map((c) => [c, dbRec[c]])) }); for (const c of f) fieldCount[c] = (fieldCount[c] || 0) + 1; }
     }
+    // مطابقة بالاسم لجداول الإعدادات
+    let matchedByName = 0; const missingNames: string[] = [];
+    if (CONFIG_TABLES.has(table) && onlyFile.length) {
+      const dbNames = new Set(rows.map((r: any) => nameOf(r)).filter(Boolean));
+      for (const r of onlyFile) { const n = nameOf(r); if (n && dbNames.has(n)) matchedByName++; else missingNames.push(n || `(بلا اسم id=${r?.id})`); }
+    }
+    // اتجاه الفرق للحقول الرقمية: هل قيمة الملف أكبر أم أصغر من القاعدة، وما الفرق الأكثر تكراراً
+    const direction: string[] = [];
+    for (const [c] of Object.entries(fieldCount).sort((a, b) => b[1] - a[1]).slice(0, 3)) {
+      let gt = 0, lt = 0; const deltas: Record<string, number> = {};
+      for (const d of differing) {
+        if (!d.fields.includes(c)) continue;
+        const a = norm(d.file[c]), b = norm(d.db[c]);
+        if (typeof a === 'number' && typeof b === 'number') {
+          if (a > b) gt++; else if (a < b) lt++;
+          const k = String(Math.round((a - b) * 100) / 100); deltas[k] = (deltas[k] || 0) + 1;
+        }
+      }
+      if (gt || lt) {
+        const top = Object.entries(deltas).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, n]) => `${Number(k) > 0 ? '+' : ''}${k}×${n}`).join('، ');
+        direction.push(`${c}: الملف أكبر ${gt}، أصغر ${lt} (الفرق: ${top})`);
+      }
+    }
     const topFields = Object.entries(fieldCount).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([c, k]) => `${c}×${k}`).join('، ');
-    summary.push({ store: key, table, file: val.length, db: rows.length, onlyFile: onlyFile.length, differ: differing.length, fields: topFields });
-    if (onlyFile.length) attention++;
-    details.stores[key] = { table, fileCount: val.length, dbCount: rows.length, onlyFile, differing };
+    const trulyMissing = CONFIG_TABLES.has(table) ? missingNames.length : onlyFile.length;
+    summary.push({ store: key, table, file: val.length, db: rows.length, onlyFile: trulyMissing, differ: differing.length, fields: topFields });
+    if (collisions.length) extraLines.push(`  ${key}: ⚠ ${collisions.length} سجل بنفس id لكنه سجل مختلف (${[...new Set(collisions.flatMap((c) => c.fields))].join('، ')}) — يُعدّ «في الملف فقط» ويُنقل بمعرّف جديد`);
+    if (matchedByName) extraLines.push(`  ${key}: ${matchedByName} من «في الملف فقط» موجودة في القاعدة بنفس الاسم (قيم افتراضية بمعرّف مختلف)`);
+    if (CONFIG_TABLES.has(table) && missingNames.length) extraLines.push(`  ${key}: غير موجودة في القاعدة بالاسم: ${missingNames.slice(0, 12).join('، ')}${missingNames.length > 12 ? '…' : ''}`);
+    for (const d of direction) extraLines.push(`  ${key} ← ${d}`);
+    if (trulyMissing) attention++;
+    details.stores[key] = { table, fileCount: val.length, dbCount: rows.length, onlyFile, collisions, differing };
   }
 
   console.log('المخزن ← الجدول | في الملف | في القاعدة | في الملف فقط | قيم مختلفة | أكثر الحقول اختلافاً');
   for (const s of summary.filter((x) => x.file || x.db)) {
     console.log(`${s.onlyFile ? '⚠' : '✔'} ${s.store} ← ${s.table} | ${s.file} | ${s.db} | ${s.onlyFile} | ${s.differ} | ${s.fields || '—'}`);
+  }
+  if (extraLines.length) {
+    console.log('\nتفاصيل للمراجعة:');
+    for (const l of extraLines) console.log(l);
   }
   if (orphanStores.length) {
     console.log('\n⚠ بيانات في الملف بلا جدول في القاعدة (تضيع إن أُوقف الملف قبل نقلها):');
