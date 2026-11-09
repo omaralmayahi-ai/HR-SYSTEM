@@ -1,4 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
+
+// The default vitest environment is `node` (no jsdom installed). ErrorBoundary
+// imports ui/button -> lib/utils.js, which reads `window.self`/`window.top` at
+// module load. Provide a minimal window stub before the import is evaluated.
+vi.hoisted(() => {
+  if (typeof globalThis.window === 'undefined') {
+    const stub = { location: { reload: () => {}, href: '/' } };
+    stub.self = stub;
+    stub.top = stub;
+    globalThis.window = stub;
+  }
+});
+
 import ErrorBoundary from './ErrorBoundary';
 
 describe('ErrorBoundary Isolated Component Safety Verification', () => {
