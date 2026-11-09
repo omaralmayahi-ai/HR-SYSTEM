@@ -13,6 +13,7 @@ import { calculateEmployeeGoverningFulfillment, getUnifiedEmployeeCourses, DEFAU
 import { useToast } from '@/components/ui/use-toast';
 import EmployeeQuickAccessQR from '@/components/employee/EmployeeQuickAccessQR';
 import { fetchEducationDegreesSorted, fetchPenaltyTypesSorted, subscribeToSettingsUpdates, notifySettingsChanged } from '@/lib/settingsUtils';
+import { consumedLeaveDays } from '@/components/employee/leaveStatus';
 
 function InfoRow({ label, value }) {
   if (!value && value !== 0) return null;
@@ -874,10 +875,11 @@ export default function EmployeeDetail() {
   const displayedNetSalary = salaryCalc.base_salary + displayedTotalAllowances - displayedTotalDeductions;
 
   // Compute leave balances dynamically
-  const approvedRegularLeaves = leaves.filter(l => l.leave_type === 'اعتيادية' && l.status === 'معتمد').reduce((sum, l) => sum + (l.days_count || 0), 0);
+  // الرصيد يُخصم بالإجازات المعتمدة فقط (المعلقة لا تُخصم)، مع توحيد «مقبولة» القديمة إلى «معتمد»
+  const approvedRegularLeaves = consumedLeaveDays(leaves, 'اعتيادية');
   const regularLeaveBalance = (employee?.initial_regular_leave_balance || 0) - approvedRegularLeaves;
 
-  const approvedSickLeaves = leaves.filter(l => l.leave_type === 'مرضية' && l.status === 'معتمد').reduce((sum, l) => sum + (l.days_count || 0), 0);
+  const approvedSickLeaves = consumedLeaveDays(leaves, 'مرضية');
   const sickLeaveBalance = (employee?.initial_sick_leave_balance || 0) - approvedSickLeaves;
 
   // Durations of service & Added Service records calculation
@@ -1531,23 +1533,8 @@ export default function EmployeeDetail() {
         payload.reason = modalForm.reason || '';
         payload.notes = modalForm.notes || '';
 
-        try {
-          await apiClient.entities.ServiceCredit.create({
-            employee_id: parseInt(id),
-            credit_type: modalForm.record_type || 'خدمة محتسبة',
-            calculated_years: y,
-            calculated_months: m,
-            calculated_days: d,
-            order_number: modalForm.order_number,
-            order_date: modalForm.order_date,
-            purpose: modalForm.purpose === 'pension_only' ? 'تقاعد_فقط' : 'علاوة_وترفيع',
-            is_counted_for_promotion: modalForm.purpose !== 'pension_only',
-            is_counted_for_retirement: true,
-            notes: modalForm.notes || modalForm.reason || ''
-          });
-        } catch (eErr) {
-          console.warn('Could not mirror to ServiceCredit table:', eErr);
-        }
+        // لا يُنسخ السجل إلى جدول service_credits: الخادم يجمع service_records و service_credits معاً،
+        // فالنسخ كان يحتسب المدة مرتين (R2 D1).
       }
       else if (activeModal === 'appreciation') {
         clientName = 'Appreciation';
