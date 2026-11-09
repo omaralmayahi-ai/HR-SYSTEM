@@ -390,6 +390,7 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
       serviceCredits: [
         {
           id: 801,
+          orderDate: '2022-06-01', // تاريخ أمر الاحتساب داخل الدورة الحالية
           employeeId: 8,
           calculatedYears: 1,
           calculatedMonths: 0,
@@ -454,6 +455,7 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
       serviceCredits: [
         {
           id: 902,
+          orderDate: '2021-06-01', // تاريخ أمر الاحتساب داخل الدورة الحالية
           employeeId: 9,
           calculatedYears: 2, // سنتان خدمة محتسبة
           calculatedMonths: 0,
@@ -503,8 +505,8 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
     expect(expectedNextCycleDate).toBe('2026-01-01');
   });
 
-  // 11. اختبار استبعاد موظف مرتبط بشهادة أثناء الخدمة
-  it('11. تصنيف الموظف الحاصل على شهادة أثناء الخدمة كـ "غير مدعوم حالياً" دون حساب خاطئ للمسار الاعتيادي', () => {
+  // 11. شهادة أثناء الخدمة بلا لقطة مسار نشطة: لا تخفي الموظف (قاعدة المالك المعتمدة)
+  it('11. شهادة أثناء الخدمة بلا لقطة مسار نشطة لا تحجب العلاوة ولا الترفيع الاعتيادي', () => {
     const employee = {
       id: 11,
       name: 'مهند صالح',
@@ -540,11 +542,11 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
 
     const result = recalculateEligibilitySync(employee, context);
 
-    // يجب أن تكون الحالة "غير_مدعوم_حاليا" وغير مدعومة
-    expect(result.isSupported).toBe(false);
-    expect(result.promotion.eligibilityStatus).toBe('غير_مدعوم_حاليا');
-    expect(result.promotion.isPromotionEligible).toBe(false);
-    expect(result.promotion.unsupportedReason).toContain('احتساب الشهادات أثناء الخدمة');
+    expect(result.isSupported).toBe(true);
+    expect(result.increment.eligibilityStatus).not.toBe('غير_مدعوم_حاليا');
+    expect(result.increment.nextIncrementDueDate).toBe('2026-01-01');
+    expect(result.promotion.eligibilityStatus).not.toBe('غير_مدعوم_حاليا');
+    expect(result.promotion.nextPromotionDueDate).toBe('2026-01-01');
   });
 
   // 12. اختبار تأثير احتساب الخدمة (service_credits) على العلاوة السنوية (next_increment_due_date) منفصلاً
@@ -570,6 +572,7 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
       serviceCredits: [
         {
           id: 1201,
+          orderDate: '2025-03-01', // تاريخ أمر الاحتساب داخل الدورة الحالية
           employeeId: 12,
           calculatedMonths: 6,
           purpose: 'علاوة_وترفيع',
@@ -625,6 +628,7 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
       serviceCredits: [
         {
           id: 1302,
+          orderDate: '2021-06-01', // تاريخ أمر الاحتساب داخل الدورة الحالية
           employeeId: 13,
           calculatedYears: 2, // تقديم سنتين
           purpose: 'تقاعد_وترقية_وعلاوة',
@@ -685,6 +689,7 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
       serviceCredits: [
         {
           id: 1402,
+          orderDate: '2021-06-01', // تاريخ أمر الاحتساب داخل الدورة الحالية
           employeeId: 14,
           calculatedYears: 2,
           purpose: 'علاوة_وترفيع',
@@ -736,6 +741,7 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
       serviceCredits: [
         {
           id: 1501,
+          orderDate: '2021-06-01', // تاريخ أمر الاحتساب داخل الدورة الحالية
           employeeId: 15,
           calculatedYears: 2,
           purpose: 'علاوة_وترفيع',
@@ -794,6 +800,7 @@ describe('Phase 2a: Promotion Engine (Standard Track) - محرك الترقيا�
       serviceCredits: [
         {
           id: 1601,
+          orderDate: '2021-06-01', // تاريخ أمر الاحتساب داخل الدورة الحالية
           employeeId: 16,
           calculatedYears: 2,
           purpose: 'علاوة_وترفيع',
