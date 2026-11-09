@@ -605,8 +605,8 @@ export const salaryAllowances = pgTable('salary_allowances', {
   bankAccount: text('bank_account'), // رقم الحساب المصرفي
   bankName: text('bank_name'), // اسم المصرف
   allowanceType: text('allowance_type'), // نوع المخصص المضاف
-  percentage: integer('percentage'), // النسبة المئوية %
-  amount: integer('amount'), // المبلغ الثابت
+  percentage: real('percentage'), // النسبة المئوية % (real: تقبل الكسور مثل 2.5)
+  amount: real('amount'), // المبلغ الثابت (real مطابقة لقاعدة التشغيل)
   orderNumber: text('order_number'), // رقم الأمر الإداري بالصرف
   status: text('status'), // الحالة (مستمر / موقوف)
   createdAt: timestamp('created_at').defaultNow(),
@@ -793,7 +793,7 @@ export const leaveTypes = pgTable('leave_types', {
   maxDays: integer('max_days'), // الحد الأقصى للأيام المسموح بها في السنة (اختياري)
   administrativeEffect: text('administrative_effect').default('لا_يؤثر'), // 'لا_يؤثر', 'يوقف_الترفيع', 'يؤخر_العلاوة'
   financialEffect: text('financial_effect').default('براتب_كامل'), // 'براتب_كامل', 'بدون_راتب', 'استقطاع_جزئي', 'براتب_ومخصصات_ثابتة'
-  financialDeductionPercentage: integer('financial_deduction_percentage').default(0), // نسبة الاستقطاع في حال استقطاع جزئي (0 - 100)
+  financialDeductionPercentage: real('financial_deduction_percentage').default(0), // نسبة الاستقطاع في حال استقطاع جزئي (0 - 100)
   affectsIncrement: boolean('affects_increment').default(false), // إيقاف / تأخير العلاوة السنوية
   affectsPromotion: boolean('affects_promotion').default(false), // إيقاف الترفيع واحتساب القدم
   affectsCommendations: boolean('affects_commendations').default(false), // توقف منح كتب الشكر والتقدير

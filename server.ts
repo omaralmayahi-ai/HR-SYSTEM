@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { db, schema, eq, and, or, desc, asc, getSchemaHealth, pool } from './src/db/index.ts';
 import { runMigrations, getMigrationStatus } from './server/migrate.ts';
+import { normalizeEmployeeIdentifiers } from './server/employeeIdentifiers.ts';
 import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
 import { requireAuth, requireAdmin, requireWriter, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
@@ -1048,6 +1049,7 @@ async function startServer() {
         clean[k] = v;
       }
     }
+    normalizeEmployeeIdentifiers(clean);
     return clean;
   }
 

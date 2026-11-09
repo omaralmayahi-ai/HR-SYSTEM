@@ -14,6 +14,7 @@
     "db:migrate": "tsx tools/db/migrate.ts",
     "db:status": "tsx tools/db/status.ts",
     "db:check": "tsx tools/db/check.ts",
+    "db:report": "tsx tools/db/report.ts",
     "test": "vitest run",
     "preview": "vite preview"
   },
