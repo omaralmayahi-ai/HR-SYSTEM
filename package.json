@@ -15,6 +15,7 @@
     "db:status": "tsx tools/db/status.ts",
     "db:check": "tsx tools/db/check.ts",
     "db:report": "tsx tools/db/report.ts",
+    "db:localdiff": "tsx tools/db/localdiff.ts",
     "test": "vitest run",
     "preview": "vite preview"
   },

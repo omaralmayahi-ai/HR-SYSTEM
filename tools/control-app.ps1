@@ -6,7 +6,7 @@
 #  -ScheduledBackup : يُستدعى من المهمة المجدولة HRSystemBackup لأخذ نسخة احتياطية بدون واجهة.
 #  -RestartNow      : يُعيد تشغيل الخادم مباشرة بصلاحية المدير بدون فتح الواجهة.
 #  -Action <اسم>    : وضع سطر الأوامر بدون واجهة (يستدعيه control-app.bat عند تمرير أمر):
-#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | dbreport | logs | help
+#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | dbreport | localdiff | logs | help
 #  -Yes             : موافقة تلقائية على أسئلة التأكيد في وضع سطر الأوامر.
 # =====================================================================
 param([switch]$ScheduledBackup, [switch]$RestartNow, [string]$Action = '', [switch]$Yes)
@@ -1702,6 +1702,11 @@ if ($script:Cli) {
                 if ($code -eq 3) { exit 3 } elseif ($code -ne 0) { throw 'فشل تطبيق الترحيلات. لم يتغير شيء في القاعدة (المعاملة أُلغيت).' }
             }
             'dbstatus' { Show-MigrationStatus }
+            'localdiff' {
+                $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
+                $code = Invoke-Logged $npm 'run -s db:localdiff' 'مقارنة التخزين المحلي بقاعدة البيانات (قراءة فقط)...'
+                if ($code -eq 3) { exit 3 } elseif ($code -eq 1) { exit 1 }
+            }
             'dbreport' {
                 $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
                 $code = Invoke-Logged $npm 'run -s db:report' 'تقرير بيانات القاعدة (قراءة فقط)...'
@@ -1720,6 +1725,7 @@ if ($script:Cli) {
                 Write-Host '  update    التحديث من GitHub (مع نسخة احتياطية)'
                 Write-Host '  migrate   نسخة احتياطية ثم تطبيق ترحيلات قاعدة البيانات المعلّقة'
                 Write-Host '  dbstatus  حالة الترحيلات وفروقات القاعدة (قراءة فقط)'
+                Write-Host '  localdiff مقارنة data\local_storage.json بقاعدة البيانات (قراءة فقط)'
                 Write-Host '  dbreport  تكرار المعرّفات الفريدة والأعمدة غير المعرّفة وبياناتها (قراءة فقط)'
                 Write-Host '  logs      آخر 80 سطراً من سجل الخادم'
                 if ($act -ne 'help') { exit 1 }
