@@ -54,14 +54,24 @@ export default function Settings() {
   const [workStartHour, setWorkStartHour] = useState('08:00');
   const [workEndHour, setWorkEndHour] = useState('15:00');
   const [restDays, setRestDays] = useState(['الجمعة', 'السبت']);
+  // العطل الرسمية وفق قانون العطل الرسمية رقم 12 لسنة 2024 (كما وردت في مراجعة R4):
+  // العطل الميلادية بتواريخ ثابتة (شهر-يوم)، والعطل الهجرية تُحدَّد تواريخها سنوياً بقرار رسمي.
+  // 14 تموز غير مدرج في القانون. 3 تشرين الأول «يُتحقق» من وجود تعديل يدرجه.
   const [holidays, setHolidays] = useState([
-    { name: 'عيد الجيش العراقي', date: '01-06' },
-    { name: 'عيد نوروز', date: '03-21' },
-    { name: 'عيد العمال العالمي', date: '05-01' },
-    { name: 'ثورة 14 تموز', date: '07-14' },
-    { name: 'عيد الاستقلال الوطني العراقي', date: '10-03' },
-    { name: 'يوم النصر العراقي', date: '12-10' },
-    { name: 'عيد الميلاد المجيد', date: '12-25' },
+    { name: 'رأس السنة الميلادية', date: '01-01', calendar: 'ميلادي' },
+    { name: 'عيد الجيش العراقي', date: '01-06', calendar: 'ميلادي' },
+    { name: 'ذكرى جرائم البعث', date: '03-16', calendar: 'ميلادي' },
+    { name: 'عيد نوروز', date: '03-21', calendar: 'ميلادي' },
+    { name: 'عيد العمال العالمي', date: '05-01', calendar: 'ميلادي' },
+    { name: 'اليوم الوطني العراقي (يُتحقق من إدراجه بتعديل لاحق)', date: '10-03', calendar: 'ميلادي', toVerify: true },
+    { name: 'يوم النصر العراقي', date: '12-10', calendar: 'ميلادي' },
+    { name: 'عيد الميلاد المجيد', date: '12-25', calendar: 'ميلادي' },
+    { name: 'رأس السنة الهجرية', date: '1 محرم', calendar: 'هجري' },
+    { name: 'ذكرى عاشوراء', date: '10 محرم', calendar: 'هجري' },
+    { name: 'المولد النبوي الشريف', date: '12 ربيع الأول', calendar: 'هجري' },
+    { name: 'عيد الفطر المبارك', date: '1-3 شوال', calendar: 'هجري' },
+    { name: 'عيد الأضحى المبارك', date: '10-13 ذي الحجة', calendar: 'هجري' },
+    { name: 'عيد الغدير', date: '18 ذي الحجة', calendar: 'هجري' },
   ]);
   const [newHolidayName, setNewHolidayName] = useState('');
   const [newHolidayDate, setNewHolidayDate] = useState('');
@@ -69,11 +79,8 @@ export default function Settings() {
   // Logs & Resets States
   const [logs, setLogs] = useState([]);
   const [filterAction, setFilterAction] = useState('');
-  const [passwordRequests, setPasswordRequests] = useState([
-    { id: 1, employeeName: 'حسين علي جاسم', department: 'قسم تقنية المعلومات', date: '2026-07-15 09:30', status: 'pending' },
-    { id: 2, employeeName: 'زينب محمد كمال', department: 'قسم الموارد البشرية', date: '2026-07-15 11:15', status: 'pending' },
-    { id: 3, employeeName: 'عبد الرحمن سعد', department: 'القسم المالي', date: '2026-07-14 14:02', status: 'approved' },
-  ]);
+  // طلبات إعادة تعيين كلمة المرور: لا يوجد مسار خادم لها بعد (محجوز للتكامل) — لا بيانات وهمية
+  const passwordRequests = [];
 
   // أرشيف المحذوفات (Soft Delete Archive): السجلات المنقولة إلى هنا بدلاً من حذفها نهائياً،
   // مع إمكانية استعادتها أو تأكيد حذفها بشكل نهائي ولا رجعة فيه.
@@ -105,19 +112,12 @@ export default function Settings() {
   const loadLogs = async () => {
     try {
       const dbLogs = await apiClient.logs.list();
-      if (dbLogs && dbLogs.length > 0) {
-        setLogs(dbLogs);
-      } else {
-        // Fallback simulated logs for visual fidelity if empty
-        setLogs([
-          { id: 1, action: 'تعديل الهوية البصرية', userEmail: 'admin@hr.gov.iq', details: 'تحديث شعار المنصة وتغيير درجات الألوان لتطابق المؤسسة المستفيدة', createdAt: new Date(Date.now() - 1000 * 60 * 15).toISOString() },
-          { id: 2, action: 'مزامنة مستخدمين', userEmail: 'admin@hr.gov.iq', details: 'تم استيراد حسابات الموظفين الجدد بنجاح ومطابقتها مع نظام المصادقة', createdAt: new Date(Date.now() - 1000 * 60 * 45).toISOString() },
-          { id: 3, action: 'إصدار كشف رواتب', userEmail: 'omar.almayahi@gmail.com', details: 'توليد التقارير المالية لرواتب الموظفين وفق سلم الرواتب الحالي', createdAt: new Date(Date.now() - 1000 * 60 * 120).toISOString() },
-          { id: 4, action: 'تحديث سجل الدوام والغياب', userEmail: 'system@hr.gov.iq', details: 'احتساب أوتوماتيكي لساعات الحضور وإدراج الغيابات والإجازات المرضية المعتمدة', createdAt: new Date(Date.now() - 1000 * 60 * 360).toISOString() }
-        ]);
-      }
+      // سجل التدقيق يعرض الأحداث الحقيقية فقط؛ الفارغ يبقى فارغاً
+      setLogs(Array.isArray(dbLogs) ? dbLogs : []);
     } catch (e) {
       console.error(e);
+      setLogs([]);
+      toast({ title: 'تعذر تحميل سجل النشاطات', description: e?.message || 'خطأ في الاتصال بالخادم', variant: 'destructive' });
     }
   };
 
@@ -285,29 +285,7 @@ export default function Settings() {
     });
   };
 
-  const handleApprovePassword = (id, employeeName) => {
-    setPasswordRequests(passwordRequests.map(r => r.id === id ? { ...r, status: 'approved' } : r));
-    
-    // Log action
-    apiClient.logs.create({
-      action: 'إعادة تعيين كلمة مرور',
-      details: `تمت الموافقة وتوليد كلمة مرور مؤقتة للموظف: ${employeeName}`
-    }).catch(() => {});
-    loadLogs();
 
-    toast({
-      title: 'تمت الموافقة وتوليد الرمز',
-      description: `تم توليد رمز مرور مؤقت وإرساله إلى ${employeeName} بنجاح.`,
-    });
-  };
-
-  const handleRejectPassword = (id, employeeName) => {
-    setPasswordRequests(passwordRequests.map(r => r.id === id ? { ...r, status: 'rejected' } : r));
-    toast({
-      title: 'تم رفض طلب كلمة المرور',
-      description: `تم رفض طلب إعادة التعيين المقدم من قبل ${employeeName}.`,
-    });
-  };
 
   const handleLogoUpload = (e) => {
     const file = e.target.files[0];
@@ -1058,7 +1036,12 @@ export default function Settings() {
                         {holidays.map((h, index) => (
                           <tr key={index} className="hover:bg-slate-50/50">
                             <td className="px-4 py-2.5 font-medium">{h.name}</td>
-                            <td className="px-4 py-2.5 text-center font-mono text-slate-600">{h.date}</td>
+                            <td className="px-4 py-2.5 text-center font-mono text-slate-600">
+                              {h.date}
+                              {h.calendar === 'هجري' && (
+                                <span className="block text-[10px] text-amber-700 font-sans">هجري — يُحدَّد تاريخه سنوياً بقرار رسمي</span>
+                              )}
+                            </td>
                             <td className="px-4 py-2.5 text-left">
                               <button
                                 type="button"
@@ -1271,6 +1254,13 @@ export default function Settings() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {passwordRequests.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                            غير متاح بعد — لا يوجد مسار لطلبات إعادة تعيين كلمة المرور في الخادم حالياً (محجوز للتكامل)
+                          </td>
+                        </tr>
+                      )}
                       {passwordRequests.map((req) => (
                         <tr key={req.id} className="hover:bg-slate-50/50">
                           <td className="px-4 py-3 font-semibold text-slate-800">{req.employeeName}</td>
@@ -1285,26 +1275,7 @@ export default function Settings() {
                             </span>
                           </td>
                           <td className="px-4 py-3 text-left">
-                            {req.status === 'pending' ? (
-                              <div className="flex gap-2 justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() => handleApprovePassword(req.id, req.employeeName)}
-                                  className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg transition-colors"
-                                >
-                                  توليد رمز جديد
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleRejectPassword(req.id, req.employeeName)}
-                                  className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold px-3 py-1.5 rounded-lg transition-colors"
-                                >
-                                  رفض
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="text-slate-400 text-[10px]">مكتمل</span>
-                            )}
+                            <span className="text-slate-400 text-[10px]">غير متاح بعد</span>
                           </td>
                         </tr>
                       ))}
