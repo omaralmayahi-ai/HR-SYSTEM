@@ -17,3 +17,19 @@ describe('localdiff normalisation', () => {
     expect(diffRecord({ derivedThing: 1 }, {}, new Set(['id']))).toEqual([]);
   });
 });
+
+import { compareObjectStore } from './localdiff.ts';
+
+describe('compareObjectStore (review B2: B-1)', () => {
+  it('flags course assignments that exist only in the file', () => {
+    const r = compareObjectStore('inMemoryEmployeeAssignments', { '5': {}, '6': {} }, [{ employee_id: 5 }]);
+    expect(r.missing).toBe(1);
+  });
+  it('flags a settings object when the table is empty', () => {
+    expect(compareObjectStore('inMemoryExemptionRules', { rules: [1] }, []).missing).toBe(1);
+  });
+  it('reports differing keys of a single settings row', () => {
+    const r = compareObjectStore('systemSettingsStore', { monthlyRegularLeaveDays: 3, maxRegularLeaveAccumulation: 200 }, [{ id: 1, monthly_regular_leave_days: 3, max_regular_leave_accumulation: 180 }]);
+    expect(r.differ).toBe(1);
+  });
+});
