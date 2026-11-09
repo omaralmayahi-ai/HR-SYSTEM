@@ -483,6 +483,8 @@ export const orgUnits = pgTable('org_units', {
   createdAt: timestamp('created_at').defaultNow(),
   code: text('code'),
   description: text('description'),
+  englishName: text('english_name'), // B1b: موجود في قاعدة التشغيل (24 وحدة فيها قيمة)
+  isCentral: boolean('is_central').default(false), // B1b: موجود في قاعدة التشغيل (26 وحدة مركزية)
 });
 
 export const orgUnitsRelations = relations(orgUnits, ({ one }) => ({
@@ -784,6 +786,11 @@ export const allowancesDeductions = pgTable('allowances_deductions', {
   status: text('status').default('فعال'), // فعال أو متوقف مؤقتاً
   deactivatedAt: text('deactivated_at'), // تاريخ إيقاف المخصص أو الاستقطاع
   createdAt: timestamp('created_at').defaultNow(),
+  // B1b: أعمدة كانت في قاعدة التشغيل من إصدار سابق ولم تكن معرّفة هنا (فكان الأرشفة تُتجاهل)
+  effectiveDate: text('effective_date'), // تاريخ نفاذ البند
+  notes: text('notes'),
+  isArchived: boolean('is_archived').default(false), // مؤرشف: لا يظهر ولا يُحتسب في الرواتب
+  archivedAt: timestamp('archived_at'),
 });
 
 // 24. Leave Types table

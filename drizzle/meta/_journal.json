@@ -15,6 +15,13 @@
       "when": 1794244869202,
       "tag": "0001_real_percentages_amounts",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794245377750,
+      "tag": "0002_keep_live_columns",
+      "breakpoints": true
     }
   ]
 }

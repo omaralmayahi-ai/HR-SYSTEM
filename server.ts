@@ -5589,14 +5589,20 @@ async function startServer() {
     return t ? t.slice(0, 50) : null;
   }
   app.get('/api/allowances-deductions', requireAuth, async (req, res) => {
+    // البنود المؤرشفة (is_archived) لا تظهر ولا تدخل حساب الرواتب إلا بطلب صريح ?include_archived=1.
+    // قبل B1b كان العمود غير معرّف في schema.ts فكانت البنود المؤرشفة تُعاد كأنها فعّالة.
+    const includeArchived = String(req.query.include_archived || '') === '1';
+    const notArchived = (r: any) => includeArchived || !(r?.isArchived === true || r?.is_archived === true);
     try {
-      const records = await db.select().from(schema.allowancesDeductions).orderBy(asc(schema.allowancesDeductions.id));
+      const records = await db.select().from(schema.allowancesDeductions)
+        .where(includeArchived ? undefined : sql`${schema.allowancesDeductions.isArchived} IS NOT TRUE`)
+        .orderBy(asc(schema.allowancesDeductions.id));
       if (records && records.length > 0) return res.json(records);
     } catch (error: any) {
       if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for allowances/deductions');
     }
-    res.json(inMemoryAllowancesDeductions);
+    res.json((inMemoryAllowancesDeductions || []).filter(notArchived));
   });
 
   app.post('/api/allowances-deductions', requireAuth, requireAdmin, async (req, res) => {
