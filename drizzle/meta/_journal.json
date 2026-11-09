@@ -22,6 +22,13 @@
       "when": 1794245377750,
       "tag": "0002_keep_live_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794245707640,
+      "tag": "0003_civil_number_not_unique",
+      "breakpoints": true
     }
   ]
 }

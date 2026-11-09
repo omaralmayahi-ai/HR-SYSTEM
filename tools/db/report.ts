@@ -22,10 +22,14 @@ try {
          FROM employees WHERE ${col} IS NOT NULL AND TRIM(${col}) <> ''
         GROUP BY TRIM(${col}) HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC, 1`);
     const [hasConstraint] = await q(`SELECT COUNT(*)::int AS n FROM pg_constraint WHERE conname = $1`, [`employees_${col}_unique`]);
-    console.log(`\n${label} (${col}): القيد ${hasConstraint.n ? 'موجود ✔' : 'غير موجود ✖'}`);
+    console.log(`\n${label} (${col}): القيد ${col === 'civil_service_number' ? 'غير مفروض (قرار)' : hasConstraint.n ? 'موجود ✔' : 'غير موجود ✖'}`);
     console.log(`  قيم فارغة '' (تتحول NULL تلقائياً عند الإقلاع): ${blank.n}`);
+    const enforced = col !== 'civil_service_number'; // قرار 2026-11-09: الرقم الوظيفي غير مفروض فريداً
     if (groups.length === 0) console.log('  ✔ لا تكرار في القيم الفعلية');
-    else {
+    else if (!enforced) {
+      console.log(`  ⓘ ${groups.length} قيمة مكررة (للمراجعة فقط؛ الرقم الوظيفي غير مفروض فريداً والمعرّف الموثوق رقم الشركة):`);
+      for (const g of groups.slice(0, 50)) console.log(`    - "${g.v}" × ${g.n}  ← رقم الشركة: ${g.companies.join('، ')}`);
+    } else {
       code = 2;
       console.log(`  ✖ ${groups.length} قيمة مكررة (تحتاج قرارك: أي الموظفين يحمل الرقم الصحيح):`);
       for (const g of groups.slice(0, 50)) {

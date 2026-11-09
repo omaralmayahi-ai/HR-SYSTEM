@@ -2071,8 +2071,17 @@ async function startServer() {
       }
     }
 
-    // الرقم الوظيفي (رقم وزارة التخطيط): منع التكرار عند التعديل أيضاً إن أُرسل فعلياً
+    // الرقم الوظيفي (رقم وزارة التخطيط): يُمنع إدخال رقم مستخدم لموظف آخر، لكن فقط إذا تغيّر الرقم.
+    // قرار 2026-11-09: المعرّف الموثوق هو رقم الشركة؛ الرقم الوظيفي غير مفروض فريداً في القاعدة
+    // (توجد تكرارات قديمة)، فلا يُقفل تعديل بقية بيانات موظف يحمل رقماً مكرراً قديماً.
+    let civilUnchanged = false;
     if (mappedData.civilServiceNumber !== undefined && mappedData.civilServiceNumber) {
+      try {
+        const [cur] = await db.select({ csn: schema.employees.civilServiceNumber }).from(schema.employees).where(eq(schema.employees.id, id));
+        civilUnchanged = !!cur && String(cur.csn ?? '').trim() === String(mappedData.civilServiceNumber).trim();
+      } catch { /* القاعدة غير متاحة: يُطبَّق الفحص كالمعتاد */ }
+    }
+    if (!civilUnchanged && mappedData.civilServiceNumber !== undefined && mappedData.civilServiceNumber) {
       const duplicateCivilServiceNumber = await findEmployeeByCivilServiceNumber(mappedData.civilServiceNumber, id);
       if (duplicateCivilServiceNumber) {
         return res.status(400).json({ error: `الرقم الوظيفي (${String(mappedData.civilServiceNumber).trim()}) مستخدم بالفعل من قبل موظف آخر` });
