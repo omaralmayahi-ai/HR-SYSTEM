@@ -6,7 +6,7 @@
 #  -ScheduledBackup : يُستدعى من المهمة المجدولة HRSystemBackup لأخذ نسخة احتياطية بدون واجهة.
 #  -RestartNow      : يُعيد تشغيل الخادم مباشرة بصلاحية المدير بدون فتح الواجهة.
 #  -Action <اسم>    : وضع سطر الأوامر بدون واجهة (يستدعيه control-app.bat عند تمرير أمر):
-#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | logs | help
+#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | dbreport | logs | help
 #  -Yes             : موافقة تلقائية على أسئلة التأكيد في وضع سطر الأوامر.
 # =====================================================================
 param([switch]$ScheduledBackup, [switch]$RestartNow, [string]$Action = '', [switch]$Yes)
@@ -19,7 +19,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 $script:IsAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if ($script:Cli -and -not $script:IsAdmin -and @('status','logs','help','dbstatus') -notcontains $Action.ToLower()) {
+if ($script:Cli -and -not $script:IsAdmin -and @('status','logs','help','dbstatus','dbreport') -notcontains $Action.ToLower()) {
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
     Write-Host 'هذا الأمر يحتاج صلاحية المدير: افتح موجه الأوامر بـ "Run as administrator" ثم أعد تنفيذه.' -ForegroundColor Yellow
     exit 2
@@ -1702,6 +1702,11 @@ if ($script:Cli) {
                 if ($code -eq 3) { exit 3 } elseif ($code -ne 0) { throw 'فشل تطبيق الترحيلات. لم يتغير شيء في القاعدة (المعاملة أُلغيت).' }
             }
             'dbstatus' { Show-MigrationStatus }
+            'dbreport' {
+                $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
+                $code = Invoke-Logged $npm 'run -s db:report' 'تقرير بيانات القاعدة (قراءة فقط)...'
+                if ($code -eq 3) { exit 3 } elseif ($code -eq 1) { exit 1 }
+            }
             'logs'    { if (Test-Path $script:ServerLog) { Get-Content -LiteralPath $script:ServerLog -Tail 80 -Encoding UTF8 } else { Write-Host 'لا يوجد سجل خادم بعد.' } }
             default {
                 Write-Host 'الاستخدام: control-app.bat [أمر] [-Yes]'
@@ -1715,6 +1720,7 @@ if ($script:Cli) {
                 Write-Host '  update    التحديث من GitHub (مع نسخة احتياطية)'
                 Write-Host '  migrate   نسخة احتياطية ثم تطبيق ترحيلات قاعدة البيانات المعلّقة'
                 Write-Host '  dbstatus  حالة الترحيلات وفروقات القاعدة (قراءة فقط)'
+                Write-Host '  dbreport  تكرار المعرّفات الفريدة والأعمدة غير المعرّفة وبياناتها (قراءة فقط)'
                 Write-Host '  logs      آخر 80 سطراً من سجل الخادم'
                 if ($act -ne 'help') { exit 1 }
             }

@@ -251,6 +251,11 @@ export async function ensureSchema() {
     // رقم الشركة هو المعرّف الفريد الأساسي للموظف: يمنع تكرار نفس الرقم بين موظفين.
     // ملاحظة: إن وُجدت بيانات قديمة متكررة فعلياً، سيفشل هذا القيد بصمت (نمط safeQuery)
     // ويجب عندها تنظيف التكرارات يدوياً ثم إعادة تشغيل الخادم لتفعيل القيد.
+    // الفراغ ليس قيمة: '' (أو مسافات) في المعرّفات الفريدة يُحوَّل NULL قبل إنشاء القيود. القيود تسمح بتعدد NULL،
+    // أما '' المكرر فكان يُفشل القيد (23505) على قاعدة التشغيل ويمنع تبنّي الترحيلات.
+    await safeQuery(`UPDATE employees SET company_number = NULL WHERE company_number IS NOT NULL AND TRIM(company_number) = '';`);
+    await safeQuery(`UPDATE employees SET civil_service_number = NULL WHERE civil_service_number IS NOT NULL AND TRIM(civil_service_number) = '';`);
+    await safeQuery(`UPDATE employees SET employee_id_number = NULL WHERE employee_id_number IS NOT NULL AND TRIM(employee_id_number) = '';`);
     await safeQuery(`ALTER TABLE employees ADD CONSTRAINT employees_company_number_unique UNIQUE (company_number);`);
     // الرقم الوظيفي (رقم وزارة التخطيط) رقم فريد أيضاً، رغم أن الاعتماد الأساسي في النظام على رقم الشركة
     await safeQuery(`ALTER TABLE employees ADD CONSTRAINT employees_civil_service_number_unique UNIQUE (civil_service_number);`);

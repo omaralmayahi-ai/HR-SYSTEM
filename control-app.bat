@@ -7,7 +7,7 @@ rem  control-app.bat <cmd>   : runs one command without the window, e.g.
 rem      control-app.bat status        (no admin needed)
 rem      control-app.bat restart       (run the console "as administrator")
 rem      control-app.bat backup -Yes   (-Yes answers confirmations automatically)
-rem  Commands: status start stop restart build backup update migrate dbstatus logs help
+rem  Commands: status start stop restart build backup update migrate dbstatus dbreport logs help
 rem  Exit codes: 0 ok, 1 failed, 2 needs administrator, 3 system not running (status)
 rem =====================================================================
 cd /d "%~dp0"
