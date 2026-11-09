@@ -4,6 +4,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { notifySettingsChanged } from '@/lib/settingsUtils';
 import { Plus, Trash2, Edit2, Check, X, RefreshCw, Play, Pause, TrendingUp, TrendingDown, Coins, GripVertical } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
+import { getItemCategory, ITEM_CATEGORIES } from '@/lib/salaryTable';
 
 export default function AllowancesSettings() {
   const { setAppPublicSettings } = useAuth();
@@ -67,7 +68,7 @@ export default function AllowancesSettings() {
       const currentSettings = await apiClient.settings.get() || {};
       const payload = {
         ...currentSettings,
-        maxChildrenCount: parseInt(maxChildrenCount) || 4,
+        maxChildrenCount: Number.isFinite(parseInt(maxChildrenCount, 10)) ? parseInt(maxChildrenCount, 10) : 4,
       };
 
       const updated = await apiClient.settings.update(payload);
@@ -104,10 +105,9 @@ export default function AllowancesSettings() {
       const data = await apiClient.entities.AllowanceDeduction.list();
       const filteredData = (data || []).filter(item => {
         if (!item) return false;
-        const name = String(item.name || '');
-        const isDegree = (name.includes('شهادة') || name.includes('الشهادة') || name.includes('دكتوراه') || name.includes('ماجستير') || name.includes('دبلوم') || name.includes('بكالوريوس') || name.includes('إعدادية') || name.includes('متوسطة') || name.includes('ابتدائية'));
-        const isResp = (name.includes('منصب') || name.includes('مسؤولية') || name.includes('إشرافية'));
-        return !isDegree && !isResp;
+        // الشهادة والمنصب تُدار من شاشاتها الخاصة (بحسب الفئة، لا بكلمات في الاسم)
+        const category = getItemCategory(item);
+        return category !== ITEM_CATEGORIES.CERTIFICATE && category !== ITEM_CATEGORIES.POSITION;
       });
       let sortedData = filteredData;
       const savedOrder = localStorage.getItem('ALLOWANCES_DEDUCTIONS_ORDER');
@@ -203,7 +203,7 @@ export default function AllowancesSettings() {
         name: newName,
         type: newType,
         calcType: newCalcType,
-        value: parseInt(newValue),
+        value: parseFloat(newValue),
         status: newStatus,
       };
       await apiClient.entities.AllowanceDeduction.create(payload);
@@ -248,7 +248,7 @@ export default function AllowancesSettings() {
         name: editName,
         type: editType,
         calcType: editCalcType,
-        value: parseInt(editValue),
+        value: parseFloat(editValue),
         status: editStatus,
       };
       await apiClient.entities.AllowanceDeduction.update(id, payload);
@@ -335,29 +335,39 @@ export default function AllowancesSettings() {
 
   // Seeding Standard Presets for Iraq
   const handleLoadStandardPresets = async () => {
-    if (!window.confirm('هل تريد إضافة الحزمة الافتراضية للمخصصات والاستقطاعات في العراق؟ (مخصصات شهادة، زوجية، أطفال، تقاعد، ضريبة).')) return;
+    if (!window.confirm('هل تريد إضافة الحزمة الافتراضية للمخصصات والاستقطاعات في العراق؟ (زوجية، أطفال، تقاعد، خطورة). مخصصات الشهادة والمنصب تُدار من شاشتيهما.')) return;
     setLoading(true);
     try {
+      // القيم وفق قانون رواتب موظفي الدولة 22 لسنة 2008 (المادة 14 المعدلة) وقانون التقاعد الموحد 9 لسنة 2014.
+      // لا تتضمن الحزمة:
+      //  - مخصصات الشهادة والمنصب: تُحتسب من جدولي الشهادات والمسؤوليات (إضافتها هنا تكرر الصرف).
+      //  - ضريبة الدخل: محرك الشرائح والسماحات غير منفذ بعد، ونسبة ثابتة من الاسمي خاطئة قانوناً.
       const presets = [
-        { name: 'مخصصات الزوجية المقطوعة', type: 'allowance', calcType: 'flat', value: 50000, status: 'فعال' },
-        { name: 'مخصصات الأطفال (لكل طفل)', type: 'allowance', calcType: 'flat', value: 10000, status: 'فعال' },
-        { name: 'مخصصات شهادة بكالوريوس', type: 'allowance', calcType: 'percentage', value: 45, status: 'فعال' },
-        { name: 'مخصصات شهادة ماجستير', type: 'allowance', calcType: 'percentage', value: 75, status: 'فعال' },
-        { name: 'مخصصات شهادة دكتوراه', type: 'allowance', calcType: 'percentage', value: 100, status: 'فعال' },
-        { name: 'مخصصات منصب / إشرافية', type: 'allowance', calcType: 'percentage', value: 15, status: 'فعال' },
-        { name: 'مخصصات خطورة مهنية', type: 'allowance', calcType: 'percentage', value: 20, status: 'فعال' },
-        { name: 'مخصصات شهادة دبلوم', type: 'allowance', calcType: 'percentage', value: 20, status: 'فعال' },
-        { name: 'استقطاع توفير التقاعد الوطني', type: 'deduction', calcType: 'percentage', value: 10, status: 'فعال' },
-        { name: 'استقطاع ضريبة الدخل المباشرة', type: 'deduction', calcType: 'percentage', value: 5, status: 'فعال' },
+        { name: 'مخصصات الزوجية المقطوعة', category: ITEM_CATEGORIES.SPOUSE, type: 'allowance', calcType: 'flat', value: 50000, status: 'فعال' },
+        { name: 'مخصصات الأطفال (لكل طفل)', category: ITEM_CATEGORIES.CHILD, type: 'allowance', calcType: 'flat', value: 10000, status: 'فعال' },
+        // الخطورة 20%–30% بقرار الوزير (المادة 13) لمواقع/أعمال محددة: تُضاف موقوفة حتى تُحدد شروطها
+        { name: 'مخصصات خطورة مهنية', category: ITEM_CATEGORIES.GENERAL, type: 'allowance', calcType: 'percentage', value: 20, status: 'متوقف مؤقتاً' },
+        { name: 'استقطاع توفير التقاعد الوطني', category: ITEM_CATEGORIES.RETIREMENT, type: 'deduction', calcType: 'percentage', value: 10, status: 'فعال' },
       ];
 
+      const existing = (await apiClient.entities.AllowanceDeduction.list()) || [];
+      const existingCategories = new Set(existing.map(getItemCategory));
+      const existingNames = new Set(existing.map(r => String(r.name || '').trim()));
+      let added = 0;
       for (const item of presets) {
+        const isFixedCategory = item.category !== ITEM_CATEGORIES.GENERAL;
+        if ((isFixedCategory && existingCategories.has(item.category)) || existingNames.has(item.name)) continue; // منع التكرار
         await apiClient.entities.AllowanceDeduction.create(item);
+        added++;
+      }
+      if (added === 0) {
+        toast({ title: 'الحزمة موجودة مسبقاً', description: 'بنود الحزمة الافتراضية معرّفة مسبقاً ولم يُضف شيء.' });
+        return;
       }
 
       toast({
         title: 'تم تعبئة الحزمة الافتراضية',
-        description: 'تمت إضافة مخصصات الزوجية والأطفال والشهادات والتقاعد والضريبة بنجاح.',
+        description: 'تمت إضافة مخصصات الزوجية والأطفال والتقاعد (والخطورة موقوفة لحين تحديد شروطها) بنجاح.',
         variant: 'success',
       });
       fetchRecords();
@@ -366,7 +376,7 @@ export default function AllowancesSettings() {
       // Log action
       await apiClient.logs.create({
         action: 'تعبئة مخصصات افتراضية',
-        details: 'تعبئة مخصصات الشهادات والزوجية والأطفال والاستقطاعات القانونية الافتراضية للرواتب بالعراق'
+        details: `تعبئة الحزمة الافتراضية (الزوجية والأطفال والتقاعد والخطورة الموقوفة): ${added} بند`
       }).catch(() => {});
     } catch (error) {
       toast({
@@ -577,6 +587,7 @@ export default function AllowancesSettings() {
               </label>
               <input
                 type="number"
+                step="any"
                 value={newValue}
                 onChange={(e) => setNewValue(e.target.value)}
                 placeholder={newCalcType === 'percentage' ? 'مثال: 15' : 'مثال: 50000'}
@@ -705,6 +716,7 @@ export default function AllowancesSettings() {
                       {isEditing ? (
                         <input
                           type="number"
+                          step="any"
                           value={editValue}
                           onChange={(e) => setEditValue(e.target.value)}
                           className="bg-white border border-slate-200 rounded p-1 text-xs w-24 text-center"
