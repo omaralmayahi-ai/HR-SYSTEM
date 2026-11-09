@@ -160,6 +160,7 @@ export const penalties = pgTable('penalties', {
   decisionDate: text('decision_date'), // تاريخ القرار
   implementationDate: text('implementation_date'), // تاريخ التنفيذ
   appealStatus: text('appeal_status').default('لا يوجد'), // حالة الاعتراض: لا يوجد / قيد الطعن / مرفوض الطعن / مقبول الطعن
+  daysCount: integer('days_count'), // عدد أيام القطع (لعقوبة قطع الراتب: م8/ثالثاً)
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -640,6 +641,7 @@ export const trainingCourses = pgTable('training_courses', {
   average: text('average'), // المعدل (0.00 – 100.00)
   grade: text('grade'), // ممتاز / جيد جدا / جيد / متوسط / مقبول / ضعيف
   rank: text('rank'), // الأول – الثاني – الثالث - مشارك
+  sourceTrainingId: integer('source_training_id'), // الدورة في موديول التدريب التي وُلِّد منها السجل (للمزامنة بلا تكرار)
   createdAt: timestamp('created_at').defaultNow(),
 });
 

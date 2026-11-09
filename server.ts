@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { db, schema, eq, and, or, desc, asc, ensureSchema, pool } from './src/db/index.ts';
+import { db, schema, eq, and, or, desc, asc, ensureSchema, getSchemaHealth, pool } from './src/db/index.ts';
 import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
 import { requireAuth, requireAdmin, requireWriter, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
@@ -43,7 +43,7 @@ async function startServer() {
     console.error('[DB-CHECK] error.cause:', dbCheckErr?.cause?.message || dbCheckErr?.cause);
     console.error('[DB-CHECK] ==========================================================');
   }
-  await ensureSchema().catch(() => {});
+  await ensureSchema().catch((schemaErr: any) => console.error('[SCHEMA] تعذّر تنفيذ تجهيز المخطط:', schemaErr?.message || schemaErr));
   const app = express();
   // يمنع تسجيل نفس METHOD+PATH مرتين (النسخة الثانية تكون ميتة دائماً في Express)
   const routeRegistry = installRouteRegistry(app);
@@ -1432,6 +1432,11 @@ async function startServer() {
       saveLocalDb();
     }
   }
+
+  // صحة تجهيز مخطط قاعدة البيانات: أوامر DDL التي فشلت عند الإقلاع (للمسؤول فقط)
+  app.get('/api/admin/schema-health', requireAuth, requireAdmin, async (req, res) => {
+    res.json(getSchemaHealth());
+  });
 
   app.post('/api/admin/reload-local-db', requireAuth, requireAdmin, async (req, res) => {
     loadLocalDb();
