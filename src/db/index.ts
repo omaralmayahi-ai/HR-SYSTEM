@@ -216,7 +216,8 @@ export async function ensureSchema() {
         type TEXT NOT NULL,
         calc_type TEXT NOT NULL,
         calculation_base TEXT DEFAULT 'nominal',
-        value REAL NOT NULL,
+        value NUMERIC(14,4) NOT NULL,
+        category TEXT,
         status TEXT DEFAULT 'فعال',
         deactivated_at TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -224,7 +225,9 @@ export async function ensureSchema() {
     `);
     await safeQuery(`ALTER TABLE allowances_deductions ADD COLUMN IF NOT EXISTS calculation_base TEXT DEFAULT 'nominal';`);
     await safeQuery(`ALTER TABLE allowances_deductions ADD COLUMN IF NOT EXISTS deactivated_at TEXT;`);
-    await safeQuery(`ALTER TABLE allowances_deductions ALTER COLUMN value TYPE REAL;`);
+    // value: exact decimal (numeric) instead of REAL/INTEGER; category: explicit item category sent by the salary engine
+    await safeQuery(`ALTER TABLE allowances_deductions ALTER COLUMN value TYPE NUMERIC(14,4) USING value::numeric;`);
+    await safeQuery(`ALTER TABLE allowances_deductions ADD COLUMN IF NOT EXISTS category TEXT;`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS work_locations (

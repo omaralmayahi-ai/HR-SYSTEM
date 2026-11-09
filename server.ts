@@ -5393,11 +5393,18 @@ async function startServer() {
   });
 
   // --- Allowances and Deductions API ---
+  // فئة البند الصريحة يرسلها محرك الرواتب (src/lib/salaryTable.js ITEM_CATEGORIES). نص حر صغير؛ الفارغ = NULL.
+  function normalizeAllowanceCategory(v: any): string | null {
+    if (v === undefined || v === null) return null;
+    const t = String(v).trim();
+    return t ? t.slice(0, 50) : null;
+  }
   app.get('/api/allowances-deductions', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.allowancesDeductions).orderBy(asc(schema.allowancesDeductions.id));
       if (records && records.length > 0) return res.json(records);
     } catch (error: any) {
+      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
       console.warn('Database fallback for allowances/deductions');
     }
     res.json(inMemoryAllowancesDeductions);
@@ -5407,18 +5414,25 @@ async function startServer() {
     const { name, type, calcType, value, status, calculationBase, calculation_base, deactivatedAt, deactivated_at } = req.body;
     const calcBase = calculationBase || calculation_base || 'nominal';
     const deactAt = deactivatedAt || deactivated_at || null;
+    const category = normalizeAllowanceCategory(req.body?.category ?? req.body?.item_category ?? req.body?.itemCategory);
+    const numValue = parseFloat(value);
+    if (!name || !type || !calcType || !Number.isFinite(numValue)) {
+      return res.status(400).json({ error: 'بيانات ناقصة: الاسم والنوع وطريقة الاحتساب والقيمة (رقم عشري) مطلوبة' });
+    }
     try {
       const [newRecord] = await db.insert(schema.allowancesDeductions).values({
         name,
         type,
         calcType,
-        value: parseFloat(value),
+        value: numValue,
+        category,
         calculationBase: calcBase,
         deactivatedAt: deactAt,
         status: status || 'فعال',
       }).returning();
       if (newRecord) return res.status(201).json(newRecord);
     } catch (error: any) {
+      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
       console.warn('Database fallback for create allowance');
     }
     const memItem = {
@@ -5426,7 +5440,8 @@ async function startServer() {
       name,
       type,
       calcType,
-      value: parseFloat(value),
+      value: numValue,
+      category,
       calculationBase: calcBase,
       calculation_base: calcBase,
       deactivatedAt: deactAt,
@@ -5444,6 +5459,11 @@ async function startServer() {
     const { name, type, calcType, value, status, calculationBase, calculation_base, deactivatedAt, deactivated_at } = req.body;
     const calcBase = calculationBase !== undefined ? calculationBase : calculation_base;
     const deactAt = deactivatedAt !== undefined ? deactivatedAt : deactivated_at;
+    const rawCategory = req.body?.category !== undefined ? req.body.category : (req.body?.item_category !== undefined ? req.body.item_category : req.body?.itemCategory);
+    const category = rawCategory !== undefined ? normalizeAllowanceCategory(rawCategory) : undefined;
+    if (value !== undefined && !Number.isFinite(parseFloat(value))) {
+      return res.status(400).json({ error: 'قيمة البند يجب أن تكون رقماً (يُسمح بالكسور العشرية)' });
+    }
 
     if (status === 'موقوف' || status === 'غير فعال' || status === 'معطل') {
       const refCheck = checkReferentialUsage('allowances_deductions', id, true, buildRefContext());
@@ -5479,6 +5499,7 @@ async function startServer() {
         value: value !== undefined ? parseFloat(value) : inMemoryAllowancesDeductions[idx].value,
         calculationBase: calcBase !== undefined ? calcBase : inMemoryAllowancesDeductions[idx].calculationBase,
         calculation_base: calcBase !== undefined ? calcBase : inMemoryAllowancesDeductions[idx].calculation_base,
+        category: category !== undefined ? category : (inMemoryAllowancesDeductions[idx].category ?? null),
         deactivatedAt: deactAt !== undefined ? deactAt : inMemoryAllowancesDeductions[idx].deactivatedAt,
         deactivated_at: deactAt !== undefined ? deactAt : inMemoryAllowancesDeductions[idx].deactivated_at,
         status: status || inMemoryAllowancesDeductions[idx].status

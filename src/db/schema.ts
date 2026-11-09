@@ -1,6 +1,6 @@
 // src/db/schema.ts
 import { relations } from 'drizzle-orm';
-import { boolean, integer, pgTable, real, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, integer, numeric, pgTable, real, serial, text, timestamp } from 'drizzle-orm/pg-core';
 
 // 1. Users table (Custom Username and Password)
 export const users = pgTable('users', {
@@ -720,7 +720,8 @@ export const allowancesDeductions = pgTable('allowances_deductions', {
   type: text('type').notNull(), // allowance (مخصصات) or deduction (استقطاع)
   calcType: text('calc_type').notNull(), // percentage (نسبة من الراتب الاسمي) or flat (مبلغ مقطوع)
   calculationBase: text('calculation_base').default('nominal'), // nominal | gross | net
-  value: real('value').notNull(), // قيمة النسبة أو المبلغ المقطوع (تدعم الكسور العشرية مثل 5.25)
+  value: numeric('value', { precision: 14, scale: 4, mode: 'number' }).notNull(), // قيمة النسبة أو المبلغ المقطوع (عشري دقيق مثل 5.25)
+  category: text('category'), // فئة البند الصريحة (spouse/child/retirement/certificate/position/tax/general...) — NULL للسجلات القديمة
   status: text('status').default('فعال'), // فعال أو متوقف مؤقتاً
   deactivatedAt: text('deactivated_at'), // تاريخ إيقاف المخصص أو الاستقطاع
   createdAt: timestamp('created_at').defaultNow(),
