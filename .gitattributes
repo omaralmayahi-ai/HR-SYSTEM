@@ -1,0 +1,3 @@
+# ملفات الترحيلات تُحسب بصمتها (sha256) على النص كما هو: لا تحويل لنهايات الأسطر على Windows
+drizzle/** text eol=lf
+*.bat text eol=crlf

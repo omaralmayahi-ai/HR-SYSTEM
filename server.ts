@@ -5,7 +5,8 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { db, schema, eq, and, or, desc, asc, ensureSchema, getSchemaHealth, pool } from './src/db/index.ts';
+import { db, schema, eq, and, or, desc, asc, getSchemaHealth, pool } from './src/db/index.ts';
+import { runMigrations, getMigrationStatus } from './server/migrate.ts';
 import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
 import { requireAuth, requireAdmin, requireWriter, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
@@ -43,7 +44,19 @@ async function startServer() {
     console.error('[DB-CHECK] error.cause:', dbCheckErr?.cause?.message || dbCheckErr?.cause);
     console.error('[DB-CHECK] ==========================================================');
   }
-  await ensureSchema().catch((schemaErr: any) => console.error('[SCHEMA] تعذّر تنفيذ تجهيز المخطط:', schemaErr?.message || schemaErr));
+  // B1: الترحيلات (تتضمن خطوة التبنّي التي تشغّل ensureSchema مرة واحدة لكل قاعدة)
+  {
+    const first = await runMigrations();
+    // القاعدة غير متاحة عند الإقلاع: إعادة المحاولة في الخلفية بدل انتظار إعادة تشغيل قد لا تحدث
+    if (first.status === 'offline') {
+      let delay = 30_000;
+      const retry = async () => {
+        const st = await runMigrations();
+        if (st.status === 'offline') { delay = Math.min(delay * 2, 10 * 60_000); setTimeout(retry, delay).unref(); }
+      };
+      setTimeout(retry, delay).unref();
+    }
+  }
   const app = express();
   // يمنع تسجيل نفس METHOD+PATH مرتين (النسخة الثانية تكون ميتة دائماً في Express)
   const routeRegistry = installRouteRegistry(app);
@@ -1470,7 +1483,7 @@ async function startServer() {
 
   // صحة تجهيز مخطط قاعدة البيانات: أوامر DDL التي فشلت عند الإقلاع (للمسؤول فقط)
   app.get('/api/admin/schema-health', requireAuth, requireAdmin, async (req, res) => {
-    res.json(getSchemaHealth());
+    res.json({ ...getSchemaHealth(), migrations: getMigrationStatus() });
   });
 
   app.post('/api/admin/reload-local-db', requireAuth, requireAdmin, async (req, res) => {

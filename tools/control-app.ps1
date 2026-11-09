@@ -6,7 +6,7 @@
 #  -ScheduledBackup : يُستدعى من المهمة المجدولة HRSystemBackup لأخذ نسخة احتياطية بدون واجهة.
 #  -RestartNow      : يُعيد تشغيل الخادم مباشرة بصلاحية المدير بدون فتح الواجهة.
 #  -Action <اسم>    : وضع سطر الأوامر بدون واجهة (يستدعيه control-app.bat عند تمرير أمر):
-#                     status | start | stop | restart | build | backup | update | logs | help
+#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | logs | help
 #  -Yes             : موافقة تلقائية على أسئلة التأكيد في وضع سطر الأوامر.
 # =====================================================================
 param([switch]$ScheduledBackup, [switch]$RestartNow, [string]$Action = '', [switch]$Yes)
@@ -19,7 +19,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 $script:IsAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if ($script:Cli -and -not $script:IsAdmin -and @('status','logs','help') -notcontains $Action.ToLower()) {
+if ($script:Cli -and -not $script:IsAdmin -and @('status','logs','help','dbstatus') -notcontains $Action.ToLower()) {
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
     Write-Host 'هذا الأمر يحتاج صلاحية المدير: افتح موجه الأوامر بـ "Run as administrator" ثم أعد تنفيذه.' -ForegroundColor Yellow
     exit 2
@@ -783,6 +783,9 @@ function Invoke-UpdateFromGitHub {
         Assert-Step (Invoke-Logged $git ('stash push -m "control-panel before update ' + $stamp + '"') 'حفظ التعديلات المحلية في git stash...') 'تعذّر حفظ التعديلات المحلية. لم يتغير شيء.'
     }
 
+    # نسخة احتياطية إلزامية قبل أي تغيير: التحديث قد يحمل ترحيلات قاعدة بيانات (drizzle/)
+    Write-Log 'نسخة احتياطية قبل التحديث (للرجوع إن لزم)...'
+    [void](New-Backup 'before-update')
     if ($wasRunning) { Stop-App }
     Assert-Step (Invoke-Logged $git ('reset --hard origin/' + $script:Branch) 'تطبيق التحديث...') 'فشل تطبيق التحديث.'
     $null = Invoke-Logged $git ('branch --set-upstream-to=origin/' + $script:Branch + ' ' + $script:Branch) ''
@@ -1317,6 +1320,19 @@ function Invoke-UnprotectFolders {
 # ---------------------------------------------------------------------
 # فحص النظام
 # ---------------------------------------------------------------------
+# حالة ترحيلات قاعدة البيانات (npm run db:status، قراءة فقط)
+function Show-MigrationStatus {
+    $npm = Get-NpmCmd
+    if (-not $npm -or -not (Test-Path (Join-Path $script:AppDir 'drizzle'))) { return }
+    $code = Invoke-Logged $npm 'run -s db:status' 'فحص ترحيلات قاعدة البيانات...'
+    switch ($code) {
+        0 { Write-Log '✔ ترحيلات قاعدة البيانات مطبّقة ولا فروقات' }
+        2 { Write-Log '⚠ توجد ترحيلات معلّقة أو فروقات (تُطبَّق تلقائياً عند تشغيل النظام، أو بالأمر: control-app.bat migrate)' }
+        3 { Write-Log '⚠ تعذّر فحص الترحيلات: قاعدة البيانات غير متاحة' }
+        default { Write-Log '✘ مشكلة في ترحيلات قاعدة البيانات — راجع الأسطر أعلاه' }
+    }
+}
+
 function Invoke-SystemCheck {
     $ErrorActionPreference = 'Continue'
     Write-Log '════ فحص النظام ════'
@@ -1366,6 +1382,7 @@ function Invoke-SystemCheck {
     if (Test-Path (Join-Path $script:AppDir 'node_modules')) { Write-Log "$ok المكتبات منصّبة" } else { Write-Log "$bad المكتبات غير منصّبة" }
     if (Test-Built) { Write-Log "$ok النظام مبني (آخر بناء: $((Get-Item (Join-Path $script:AppDir $script:ServerFile)).LastWriteTime.ToString('yyyy-MM-dd HH:mm')))" } else { Write-Log "$bad النظام غير مبني" }
     if (Get-FolderProtection) { Write-Log "$ok مجلدات النظام محمية بصلاحيات Windows" } else { Write-Log "$warn مجلدات النظام غير محمية (زر ""حماية المجلدات"")" }
+    Show-MigrationStatus
     $as = Get-AdminStatus
     if ($as.Users -gt 0) { Write-Log "$ok عدد الحسابات في النظام: $($as.Users)" }
     elseif ($as.Users -eq 0) { Write-Log "$warn لا يوجد أي حساب بعد (يُنشأ admin تلقائياً عند أول تشغيل)" }
@@ -1678,6 +1695,13 @@ if ($script:Cli) {
             'build'   { $was = Test-AppActive; if ($was) { Stop-App }; Install-Dependencies $false; Invoke-Build; if ($was) { Start-App } }
             'backup'  { [void](New-Backup 'cli') }
             'update'  { Invoke-UpdateFromGitHub }
+            'migrate' {
+                $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
+                [void](New-Backup 'before-migrate')
+                $code = Invoke-Logged $npm 'run -s db:migrate' 'تطبيق ترحيلات قاعدة البيانات...'
+                if ($code -eq 3) { exit 3 } elseif ($code -ne 0) { throw 'فشل تطبيق الترحيلات. لم يتغير شيء في القاعدة (المعاملة أُلغيت).' }
+            }
+            'dbstatus' { Show-MigrationStatus }
             'logs'    { if (Test-Path $script:ServerLog) { Get-Content -LiteralPath $script:ServerLog -Tail 80 -Encoding UTF8 } else { Write-Host 'لا يوجد سجل خادم بعد.' } }
             default {
                 Write-Host 'الاستخدام: control-app.bat [أمر] [-Yes]'
@@ -1689,6 +1713,8 @@ if ($script:Cli) {
                 Write-Host '  build     تنصيب المكتبات عند تغيّرها ثم إعادة البناء'
                 Write-Host '  backup    نسخة احتياطية الآن'
                 Write-Host '  update    التحديث من GitHub (مع نسخة احتياطية)'
+                Write-Host '  migrate   نسخة احتياطية ثم تطبيق ترحيلات قاعدة البيانات المعلّقة'
+                Write-Host '  dbstatus  حالة الترحيلات وفروقات القاعدة (قراءة فقط)'
                 Write-Host '  logs      آخر 80 سطراً من سجل الخادم'
                 if ($act -ne 'help') { exit 1 }
             }
