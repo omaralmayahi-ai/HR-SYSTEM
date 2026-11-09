@@ -9001,20 +9001,21 @@ async function startServer() {
         return res.json(parsed);
       }
     } catch (err) {
-      console.error('Error reading exemption rules from database:', err);
+      return sendRouteError(res, err, 'قراءة قواعد الإعفاء');
     }
+    // لا صف بعد: القواعد الافتراضية الموثقة في الكود
     return res.json(inMemoryExemptionRules);
   });
 
   app.post('/api/governing-courses/exemption-rules', requireAuth, requireAdmin, async (req, res) => {
     const data = req.body;
-    inMemoryExemptionRules = { ...inMemoryExemptionRules, ...data };
+    const merged = { ...inMemoryExemptionRules, ...data };
 
     try {
-      const rulesJson = JSON.stringify(inMemoryExemptionRules.rules || []);
-      const qualsJson = JSON.stringify(inMemoryExemptionRules.qualificationsExemptions || []);
-      const gradeJson = JSON.stringify(inMemoryExemptionRules.gradeTitleExemptions || []);
-      const autoApply = inMemoryExemptionRules.autoApplyRules !== false;
+      const rulesJson = JSON.stringify(merged.rules || []);
+      const qualsJson = JSON.stringify(merged.qualificationsExemptions || []);
+      const gradeJson = JSON.stringify(merged.gradeTitleExemptions || []);
+      const autoApply = merged.autoApplyRules !== false;
 
       const existing = await db.select().from(schema.governingCourseExemptionRules)
         .where(eq(schema.governingCourseExemptionRules.configKey, 'default_exemption_rules'));
@@ -9039,10 +9040,12 @@ async function startServer() {
         });
       }
     } catch (err) {
-      console.error('Error persisting exemption rules to database:', err);
+      // B2: لا نجاح كاذب — الحفظ فشل فلا يُعاد كأنه نجح
+      return sendRouteError(res, err, 'حفظ قواعد الإعفاء');
     }
 
-    return res.json(inMemoryExemptionRules);
+    inMemoryExemptionRules = merged;
+    return res.json(merged);
   });
 
   // --- Promotion Paths & Required Governing Courses Matrix ---
@@ -9112,16 +9115,34 @@ async function startServer() {
     }
   ];
 
+  // B2: الإعدادات الكاملة في جدول app_settings_documents (كانت في الذاكرة فقط وتضيع عند إعادة التشغيل).
+  // لا صف بعد ← تُعاد القيمة الافتراضية الموثقة في الكود (لا تُكتب حتى يحفظ المسؤول).
+  async function readSettingsDoc(key: string, fallback: any) {
+    const [row] = await db.select().from(schema.appSettingsDocuments).where(eq(schema.appSettingsDocuments.key, key));
+    return row ? row.value : fallback;
+  }
+  async function writeSettingsDoc(key: string, value: any, user: string | null) {
+    const [row] = await db.insert(schema.appSettingsDocuments)
+      .values({ key, value, source: 'user', updatedAt: new Date(), updatedBy: user })
+      .onConflictDoUpdate({ target: schema.appSettingsDocuments.key, set: { value, source: 'user', updatedAt: new Date(), updatedBy: user } })
+      .returning();
+    return row.value;
+  }
+
   app.get('/api/governing-courses/matrix', requireAuth, async (req, res) => {
-    res.json(inMemoryPromotionPathsMatrix);
+    try {
+      res.json(await readSettingsDoc('promotion_paths_matrix', inMemoryPromotionPathsMatrix));
+    } catch (err) {
+      sendRouteError(res, err, 'قراءة مصفوفة مسارات الترفيع');
+    }
   });
 
-  app.post('/api/governing-courses/matrix', requireAuth, requireAdmin, async (req, res) => {
-    if (Array.isArray(req.body)) {
-      inMemoryPromotionPathsMatrix = req.body;
-      res.json(inMemoryPromotionPathsMatrix);
-    } else {
-      res.status(400).json({ error: 'Invalid matrix data' });
+  app.post('/api/governing-courses/matrix', requireAuth, requireAdmin, async (req: any, res) => {
+    if (!Array.isArray(req.body)) return res.status(400).json({ error: 'بيانات المصفوفة غير صالحة' });
+    try {
+      res.json(await writeSettingsDoc('promotion_paths_matrix', req.body, req.user?.username || null));
+    } catch (err) {
+      sendRouteError(res, err, 'حفظ مصفوفة مسارات الترفيع');
     }
   });
 
@@ -9165,16 +9186,20 @@ async function startServer() {
   };
 
   app.get('/api/governing-courses/grade-requirements', requireAuth, async (req, res) => {
-    res.json(inMemoryGradeRequirements);
+    try {
+      res.json(await readSettingsDoc('grade_requirements', inMemoryGradeRequirements));
+    } catch (err) {
+      sendRouteError(res, err, 'قراءة متطلبات الدرجات');
+    }
   });
 
-  app.post('/api/governing-courses/grade-requirements', requireAuth, requireAdmin, async (req, res) => {
-    if (req.body && typeof req.body === 'object') {
-      inMemoryGradeRequirements = req.body;
-      saveLocalDb();
-      return res.json(inMemoryGradeRequirements);
+  app.post('/api/governing-courses/grade-requirements', requireAuth, requireAdmin, async (req: any, res) => {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) return res.status(400).json({ error: 'بيانات متطلبات الدرجات غير صالحة' });
+    try {
+      res.json(await writeSettingsDoc('grade_requirements', req.body, req.user?.username || null));
+    } catch (err) {
+      sendRouteError(res, err, 'حفظ متطلبات الدرجات');
     }
-    return res.status(400).json({ error: 'Invalid grade requirements data' });
   });
 
   app.get('/api/governing-courses/employee-assignments', requireAuth, async (req, res) => {

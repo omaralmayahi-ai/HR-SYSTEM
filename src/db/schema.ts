@@ -1,6 +1,6 @@
 // src/db/schema.ts
 import { relations, sql } from 'drizzle-orm';
-import { boolean, foreignKey, index, integer, numeric, pgTable, real, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, foreignKey, index, integer, jsonb, numeric, pgTable, real, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 // 1. Users table (Custom Username and Password)
 export const users = pgTable('users', {
@@ -1224,3 +1224,12 @@ export const promotionDelayReasonsRelations = relations(promotionDelayReasons, (
   }),
 }));
 
+// B2: وثائق إعدادات كاملة (JSONB) كانت تعيش في الذاكرة أو في local_storage.json فقط.
+// المفاتيح: 'grade_requirements' (متطلبات الدورات لكل درجة)، 'promotion_paths_matrix' (مصفوفة مسارات الترفيع).
+export const appSettingsDocuments = pgTable('app_settings_documents', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  source: text('source').default('user'), // user | default | imported-local-storage
+  updatedAt: timestamp('updated_at').defaultNow(),
+  updatedBy: text('updated_by'),
+});

@@ -6,7 +6,7 @@
 #  -ScheduledBackup : يُستدعى من المهمة المجدولة HRSystemBackup لأخذ نسخة احتياطية بدون واجهة.
 #  -RestartNow      : يُعيد تشغيل الخادم مباشرة بصلاحية المدير بدون فتح الواجهة.
 #  -Action <اسم>    : وضع سطر الأوامر بدون واجهة (يستدعيه control-app.bat عند تمرير أمر):
-#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | dbreport | localdiff | logs | help
+#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | dbreport | localdiff | importlocal | logs | help
 #  -Yes             : موافقة تلقائية على أسئلة التأكيد في وضع سطر الأوامر.
 # =====================================================================
 param([switch]$ScheduledBackup, [switch]$RestartNow, [string]$Action = '', [switch]$Yes)
@@ -1707,6 +1707,22 @@ if ($script:Cli) {
                 $code = Invoke-Logged $npm 'run -s db:localdiff' 'مقارنة التخزين المحلي بقاعدة البيانات (قراءة فقط)...'
                 if ($code -eq 3) { exit 3 } elseif ($code -eq 1) { exit 1 }
             }
+            'importlocal' {
+                # B2 (ق-1): نقل ما وافق عليه المالك من local_storage.json. تجربة أولاً، ثم إيقاف ونسخة ونقل وتشغيل.
+                $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
+                $code = Invoke-Logged $npm 'run -s db:import-local' 'تجربة النقل (لا يُكتب شيء)...'
+                if ($code -eq 3) { exit 3 } elseif ($code -ne 0) { throw 'التجربة كشفت عناصر ستفشل. لم يُنقل شيء.' }
+                if (-not (Confirm-Action 'سيُوقف النظام، وتُؤخذ نسخة احتياطية، ثم تُنقل العناصر أعلاه إلى قاعدة البيانات، ثم يُعاد التشغيل. متابعة؟' 'نقل التخزين المحلي')) { Write-Host 'أُلغي. لم يتغير شيء.'; exit 0 }
+                $was = Test-AppActive
+                [void](New-Backup 'before-import-local')
+                if ($was) { Stop-App }
+                try {
+                    $code = Invoke-Logged $npm 'run -s db:import-local -- --apply' 'نقل البيانات إلى قاعدة البيانات...'
+                    if ($code -ne 0) { throw 'فشل النقل. المعاملة أُلغيت ولم يُكتب شيء.' }
+                } finally {
+                    if ($was) { Start-App }
+                }
+            }
             'dbreport' {
                 $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
                 $code = Invoke-Logged $npm 'run -s db:report' 'تقرير بيانات القاعدة (قراءة فقط)...'
@@ -1726,6 +1742,7 @@ if ($script:Cli) {
                 Write-Host '  migrate   نسخة احتياطية ثم تطبيق ترحيلات قاعدة البيانات المعلّقة'
                 Write-Host '  dbstatus  حالة الترحيلات وفروقات القاعدة (قراءة فقط)'
                 Write-Host '  localdiff مقارنة data\local_storage.json بقاعدة البيانات (قراءة فقط)'
+                Write-Host '  importlocal نقل ما وُوفق عليه من local_storage.json إلى القاعدة (تجربة ثم نسخة ثم نقل)'
                 Write-Host '  dbreport  تكرار المعرّفات الفريدة والأعمدة غير المعرّفة وبياناتها (قراءة فقط)'
                 Write-Host '  logs      آخر 80 سطراً من سجل الخادم'
                 if ($act -ne 'help') { exit 1 }
