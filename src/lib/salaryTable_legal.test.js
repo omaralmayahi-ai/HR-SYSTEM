@@ -222,3 +222,35 @@ describe('Decimal percentages', () => {
     expect(r.retirement_deduction).toBe(63000);
   });
 });
+
+describe('Shared payroll settings helpers', () => {
+  it('treats "مستمر" (the DB default) as active and excludes other statuses', async () => {
+    const { isPayrollActiveEmployee } = await import('./salaryTable.js');
+    expect(isPayrollActiveEmployee({ status: 'مستمر' })).toBe(true);
+    expect(isPayrollActiveEmployee({ status: 'فعال' })).toBe(true);
+    expect(isPayrollActiveEmployee({ status: 'مستقيل' })).toBe(false);
+    expect(isPayrollActiveEmployee({ status: 'متقاعد' })).toBe(false);
+    expect(isPayrollActiveEmployee({})).toBe(false);
+  });
+
+  it('loadPayrollSettings builds the scale map and surfaces errors instead of swallowing them', async () => {
+    const { loadPayrollSettings } = await import('./salaryTable.js');
+    const api = {
+      entities: {
+        SalaryScale: { list: async () => [{ grade: 5, step: 1, amount: 500000 }] },
+        AllowanceDeduction: { list: async () => [] },
+        EducationDegree: { list: async () => { throw new Error('500'); } },
+        ResponsibilityAllowance: { list: async () => [] },
+        WorkLocation: { list: async () => [] },
+      },
+      settings: { get: async () => ({ maxChildrenCount: 3 }) },
+    };
+    const { options, errors } = await loadPayrollSettings(api);
+    expect(options.customSalaryTable[5][1]).toBe(500000);
+    expect(options.systemSettings.maxChildrenCount).toBe(3);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('جدول الشهادات');
+    const r = calculateSalary({ grade: 5, step: 1 }, options);
+    expect(r.base_salary).toBe(500000);
+  });
+});

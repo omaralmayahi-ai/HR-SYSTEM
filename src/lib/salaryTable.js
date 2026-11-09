@@ -1015,6 +1015,69 @@ export function calculateSalary(employee, ...args) {
   };
 }
 
+// ============================================================================
+// إعدادات الرواتب المشتركة بين شاشة الرواتب والتقارير
+// ============================================================================
+
+// حالات الموظف التي يُولَّد لها راتب. "مستمر" هي الحالة الافتراضية في قاعدة البيانات،
+// و"فعال"/"مستمر بالخدمة" قيم قديمة مكافئة. الحالات الأخرى (منسب، مجاز، متقاعد، مستقيل، موقوف)
+// لا يُولَّد لها راتب تلقائياً.
+export const PAYROLL_ACTIVE_STATUSES = ['مستمر', 'مستمر بالخدمة', 'فعال'];
+
+export function isPayrollActiveEmployee(employee) {
+  const status = String(employee?.status ?? employee?.employeeStatus ?? '').trim();
+  return PAYROLL_ACTIVE_STATUSES.includes(status);
+}
+
+export function buildSalaryScaleMap(records) {
+  if (!Array.isArray(records) || records.length === 0) return null;
+  const scaleMap = {};
+  records.forEach(r => {
+    const g = r.grade;
+    const st = r.step;
+    const amount = toNumber(r.amount);
+    if (g === undefined || g === null || st === undefined || st === null || !Number.isFinite(amount)) return;
+    if (!scaleMap[g]) scaleMap[g] = {};
+    scaleMap[g][st] = amount;
+  });
+  return Object.keys(scaleMap).length > 0 ? scaleMap : null;
+}
+
+/**
+ * تحميل كل إعدادات الاحتساب من الـ API (سلم الرواتب، البنود، الشهادات، المسؤوليات، المواقع، إعدادات النظام).
+ * لا يبتلع الأخطاء: كل فشل يُضاف إلى `errors` برسالة عربية لعرضها في الواجهة.
+ * @param {object} api - apiClient
+ * @returns {Promise<{ options: object, errors: string[] }>}
+ */
+export async function loadPayrollSettings(api) {
+  const errors = [];
+  const safe = async (label, fn) => {
+    try {
+      return await fn();
+    } catch (e) {
+      errors.push(`تعذّر تحميل ${label}: ${e?.message || e}`);
+      return null;
+    }
+  };
+  const [scale, items, degrees, resps, locations, settings] = await Promise.all([
+    safe('سلم الرواتب', () => api.entities.SalaryScale.list()),
+    safe('المخصصات والاستقطاعات', () => api.entities.AllowanceDeduction.list()),
+    safe('جدول الشهادات', () => api.entities.EducationDegree.list()),
+    safe('مخصصات المسؤولية', () => api.entities.ResponsibilityAllowance.list()),
+    safe('مواقع العمل', () => api.entities.WorkLocation.list()),
+    safe('إعدادات النظام', () => api.settings.get()),
+  ]);
+  const options = {
+    customSalaryTable: buildSalaryScaleMap(scale),
+    allowancesDeductions: Array.isArray(items) ? items : undefined,
+    customEducationDegrees: Array.isArray(degrees) && degrees.length > 0 ? degrees : undefined,
+    responsibilityAllowances: Array.isArray(resps) && resps.length > 0 ? resps : undefined,
+    customWorkLocations: Array.isArray(locations) ? locations : undefined,
+    systemSettings: settings && typeof settings === 'object' ? settings : undefined,
+  };
+  return { options, errors };
+}
+
 export function formatCurrency(amount) {
   if (amount === null || amount === undefined || amount === '' || !Number.isFinite(Number(amount))) return 'بيانات ناقصة';
   return new Intl.NumberFormat('ar-IQ').format(Number(amount)) + ' د.ع';
