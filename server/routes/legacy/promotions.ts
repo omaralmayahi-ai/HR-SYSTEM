@@ -9,12 +9,13 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
     findMatchingJobTitleForPromotion, formatDateString, genericMemoryStores, inArray, isDateOnOrAfter, isDbConnectionFailure,
     isNotNull, jobTitlesCache, loadAllEngineContexts, loadPenaltyTypesForEngine, mapKeys, mem,
     processBatchDegreeTrackAutoSettlement, requireAdmin, requireAuth, requireWriter, resolveTargetJobTitle, saveLocalDb,
-    schema, sendRouteError, settingsLists, sql, toEngineLeave, triggerRecalculateEligibility,
+    schema, sendRouteError, settingsLists, sql, toEngineLeave, triggerRecalculateEligibility, dueListCache, writeDueDatesBulk,
   } = deps;
 
   // 4. Promotions, Increments & Degree Recognition Due List (قوائم المستحقين الثلاث مع كافة المؤثرات والتواريخ)
-  app.get('/api/promotions/due-list', requireAuth, async (req, res) => {
-    try {
+  // أداء: الاحتساب لكل الموظفين يُنفَّذ مرة وحدة ويشترك به كل الطلبات المتزامنة (لوحة التحكم + صفحة
+  // المستحقين)، والنتيجة تُحفظ دقيقتين وتُبطل عند أي عملية كتابة ناجحة (dueListCache.invalidate).
+  async function computeDueList() {
       const dueForIncrement: any[] = [];
       const dueForPromotion: any[] = [];
       const dueForSettlement: any[] = [];
@@ -22,6 +23,7 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
       // إصلاح عاجل: الموظفون ومدخلات المحرك من القاعدة بقراءة واحدة لكل جدول (كانت من الذاكرة ← قائمة فارغة بعد B2e)
       const bulk = await loadAllEngineContexts(db, schema);
       const penaltyTypes = await loadPenaltyTypesForEngine();
+      const dueDateWrites: any[] = [];
       for (const rawEmp of bulk.employees) {
         try {
           const emp: any = bothCases(rawEmp);
@@ -35,7 +37,7 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
           }
 
           // Recalculate standard eligibility
-          const eligibility = await triggerRecalculateEligibility(empId, bulk.get(empId), { penaltyTypes, penaltyTypesLoaded: true });
+          const eligibility = await triggerRecalculateEligibility(empId, bulk.get(empId), { penaltyTypes, penaltyTypesLoaded: true, collectDueDateWrites: dueDateWrites });
 
           const currentTitle = emp.jobTitle || emp.job_title || 'موظف';
           const basePromotionDate = emp.lastPromotionDate || emp.last_promotion_date || emp.gradeDate || emp.grade_date || emp.currentAppointmentDate || emp.current_appointment_date || emp.appointmentDate || emp.appointment_date || emp.firstAppointmentDate || emp.first_appointment_date || '';
@@ -330,6 +332,12 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
         }
       }
 
+      try {
+        await writeDueDatesBulk(dueDateWrites);
+      } catch (e: any) {
+        console.warn('[DUE_LIST_WARN] تعذّر حفظ تواريخ الاستحقاق:', e?.message || e);
+      }
+
       const summary = {
         totalIncrement: dueForIncrement.length,
         totalPromotion: dueForPromotion.length,
@@ -337,10 +345,7 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
         totalDue: dueForIncrement.length + dueForPromotion.length + dueForSettlement.length
       };
 
-      // أداء: لوحة التحكم تحتاج العدد فقط (القائمة الكاملة ~17 ميغابايت لـ 6000 موظف)
-      if (req.query.summary === '1') return res.json({ summary });
-
-      res.json({
+      return {
         dueForIncrement,
         dueForPromotion,
         dueForSettlement,
@@ -348,7 +353,16 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
         due_for_promotion: dueForPromotion,
         due_for_settlement: dueForSettlement,
         summary
-      });
+      };
+  }
+  dueListCache.setCompute(computeDueList);
+
+  app.get('/api/promotions/due-list', requireAuth, async (req, res) => {
+    try {
+      const result = await dueListCache.get();
+      // أداء: لوحة التحكم تحتاج العدد فقط (القائمة الكاملة ~17 ميغابايت لـ 6000 موظف)
+      if (req.query.summary === '1') return res.json({ summary: result.summary });
+      res.json(result);
     } catch (err: any) {
       console.error('Error fetching promotion due list:', err);
       res.json({

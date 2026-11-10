@@ -2,6 +2,8 @@
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
 
+import { employeeListColumns } from '../../util/employeeColumns.ts';
+
 export function registerEmployeesRoutes(app: Express, deps: any) {
   const {
     EMPLOYEE_SORT_COLUMNS, SALARY_TABLE, and, asc, bothCases, buildEmployeeFilterConditions,
@@ -13,6 +15,7 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
     validateCompanyNumberFormat, validateEmployeeImportRow,
   } = deps;
 
+  // أداء: القائمة بلا الصورة الشخصية (has_photo بدلها)؛ الصورة بـ GET /api/employees/:id
   app.get('/api/employees', requireAuth, async (req, res) => {
 
     // مسار الترقيم والفلترة من جهة الخادم: يُفعَّل فقط عند وجود معامل page في الطلب، حفاظاً على
@@ -39,8 +42,8 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
           // مهم: .where() يجب أن يُستدعى مباشرة بعد .from() وقبل .orderBy()/.limit()/.offset() -
           // بناء الاستعلام بترتيب مختلف يفشل بصمت في Drizzle ويؤدي لسقوط الاستعلام كاملاً إلى catch (dbErr)
           rows = whereClause
-            ? await db.select().from(schema.employees).where(whereClause).orderBy(sortDir(sortCol)).limit(pageSize).offset((page - 1) * pageSize)
-            : await db.select().from(schema.employees).orderBy(sortDir(sortCol)).limit(pageSize).offset((page - 1) * pageSize);
+            ? await db.select(employeeListColumns(schema)).from(schema.employees).where(whereClause).orderBy(sortDir(sortCol)).limit(pageSize).offset((page - 1) * pageSize)
+            : await db.select(employeeListColumns(schema)).from(schema.employees).orderBy(sortDir(sortCol)).limit(pageSize).offset((page - 1) * pageSize);
         } catch (dbErr: any) {
           console.warn('Database fallback for paginated employees list:', dbErr?.message);
           // احتياطي: فلترة/ترقيم على نسخة الذاكرة عند فشل الاستعلام المباشر لقاعدة البيانات
@@ -63,8 +66,8 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
     const statusFilter = req.query.status && req.query.status !== 'all' ? String(req.query.status) : null;
     try {
       const allEmployees = statusFilter
-        ? await db.select().from(schema.employees).where(eq(schema.employees.status, statusFilter)).orderBy(desc(schema.employees.createdAt))
-        : await db.select().from(schema.employees).orderBy(desc(schema.employees.createdAt));
+        ? await db.select(employeeListColumns(schema)).from(schema.employees).where(eq(schema.employees.status, statusFilter)).orderBy(desc(schema.employees.createdAt))
+        : await db.select(employeeListColumns(schema)).from(schema.employees).orderBy(desc(schema.employees.createdAt));
       { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         return res.json(allEmployees.map(enhanceEmployeeRecord));
       }

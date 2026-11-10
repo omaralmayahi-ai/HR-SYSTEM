@@ -1,3 +1,4 @@
+import { employeeColumnsWithoutPhoto } from './util/employeeColumns.ts';
 // server/engineContext.ts — مدخلات محرك الاستحقاق من القاعدة (إصلاح عاجل بعد B2، مراجعة B3: Blocker)
 //
 // كان triggerRecalculateEligibility يبني سياق المحرك (العقوبات، الإجازات، التقييمات، كتب الشكر، الشهادات،
@@ -122,7 +123,7 @@ export async function loadEngineContext(db: any, schema: any, empId: number): Pr
  */
 export async function loadAllEngineContexts(db: any, schema: any) {
   const results = await Promise.all([
-    db.select().from(schema.employees),
+    (employeeColumnsWithoutPhoto(schema) ? db.select(employeeColumnsWithoutPhoto(schema)) : db.select()).from(schema.employees), // أداء: بلا الصورة
     ...PER_EMPLOYEE.map(([, tbl]) => db.select().from(schema[tbl])),
     db.select().from(schema.governingCourses),
     db.select().from(schema.gradePromotionRules),
