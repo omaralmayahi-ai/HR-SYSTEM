@@ -2,6 +2,8 @@
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
 
+import { archivedEmployeeHasRecords } from '../../employeeDeletion.ts';
+
 export function registerArchiveRoutes(app: Express, deps: any) {
   const {
     EMPLOYEE_RESTORE_MEMKEY_BY_KEY, EMPLOYEE_RESTORE_ORDER, EMPLOYEE_RESTORE_TABLE_BY_KEY, camelToSnake, db, eq,
@@ -146,6 +148,12 @@ export function registerArchiveRoutes(app: Express, deps: any) {
       // طُلب: أي ملف كان مشتركاً مع موظفين آخرين (كملف "مدرّب" داخلي مرتبط بدورات تدريبية سُجّلت
       // لموظفين آخرين) سبق حذفه من الجداول الحية عند الأرشفة، بينما تبقى بيانات وسجلات الموظفين
       // الآخرين المرتبطة به (كاسم المدرّب المحفوظ ضمن كل دورة تدريبية) محفوظة دون أي مساس بها.
+      // B4a (ق-15): موظف مؤرشف عنده سجلات ما يُتلف نهائياً؛ يبقى قابلاً للاسترجاع.
+      const [archived] = await db.select().from(schema.archivedItems).where(eq(schema.archivedItems.id, id));
+      if (!archived) return res.status(404).json({ error: 'السجل غير موجود في الأرشيف' });
+      if (archivedEmployeeHasRecords(archived)) {
+        return res.status(403).json({ error: 'لا يمكن الحذف النهائي لموظف مؤرشف عنده سجلات؛ يمكن استرجاعه فقط.', code: 'EMPLOYEE_PURGE_FORBIDDEN' });
+      }
       const deletedRows = await db.delete(schema.archivedItems).where(eq(schema.archivedItems.id, id)).returning({ id: schema.archivedItems.id });
       if (!deletedRows || deletedRows.length === 0) {
         return res.status(404).json({ error: 'السجل غير موجود في الأرشيف' });

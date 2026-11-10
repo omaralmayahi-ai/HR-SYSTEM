@@ -254,3 +254,20 @@ describe('Shared payroll settings helpers', () => {
     expect(r.base_salary).toBe(500000);
   });
 });
+
+describe('B4a: payroll eligibility from the status table', () => {
+  it('reads payroll_eligible and keeps empty status excluded', async () => {
+    const { isPayrollActiveEmployee } = await import('./salaryTable.js');
+    const statuses = [
+      { name: 'مستمر', payroll_eligible: true, is_default: true },
+      { name: 'مجاز', payroll_eligible: true },
+      { name: 'منسب', payroll_eligible: false },
+    ];
+    expect(isPayrollActiveEmployee({ status: 'مجاز' }, statuses)).toBe(true);
+    expect(isPayrollActiveEmployee({ status: 'منسب' }, statuses)).toBe(false);
+    expect(isPayrollActiveEmployee({ status: 'فعال' }, statuses)).toBe(false);
+    expect(isPayrollActiveEmployee({}, statuses)).toBe(false);
+    // نداء filter يمرّر الفهرس كوسيط ثانٍ: ما يكسر السلوك القديم
+    expect([{ status: 'مستمر' }].filter(isPayrollActiveEmployee)).toHaveLength(1);
+  });
+});

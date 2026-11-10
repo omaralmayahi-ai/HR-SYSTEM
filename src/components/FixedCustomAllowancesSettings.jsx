@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
+import { useEmployeeStatuses, statusNames } from '@/lib/employeeStatuses';
 import { apiClient } from '@/api/apiClient';
 import { fetchEducationDegreesSorted, fetchResponsibilityAllowancesSorted, subscribeToSettingsUpdates, notifySettingsChanged } from '@/lib/settingsUtils';
 import { useToast } from '@/components/ui/use-toast';
@@ -54,6 +55,7 @@ const STANDARD_DEPARTMENTS = [
 
 
 export default function FixedCustomAllowancesSettings() {
+  const employeeStatusList = useEmployeeStatuses(); // B4a: الحالات من الخادم
   const { toast } = useToast();
   const { user } = useAuth();
 
@@ -1719,7 +1721,7 @@ export default function FixedCustomAllowancesSettings() {
                                       <div>
                                         <span className="text-[10px] text-slate-400 block mb-1">حالة الموظف:</span>
                                         <div className="flex flex-col gap-1 max-h-24 overflow-y-auto">
-                                          {['مستمر', 'منسب', 'منقول', 'متقاعد', 'مستقيل', 'موقوف', 'مجاز'].map(st => {
+                                          {Array.from(new Set([...statusNames(employeeStatusList), ...(currentRule.employeeStatuses || [])])).map(st => {
                                             const active = currentRule.employeeStatuses.includes(st);
                                             return (
                                               <label key={st} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">
@@ -2909,7 +2911,7 @@ export default function FixedCustomAllowancesSettings() {
                                             <div>
                                               <span className="text-[10px] text-slate-400 block mb-1">حالة الموظف:</span>
                                               <div className="flex flex-col gap-1 max-h-24 overflow-y-auto">
-                                                {['مستمر', 'منسب', 'منقول', 'متقاعد', 'مستقيل', 'موقوف', 'مجاز'].map(st => {
+                                                {Array.from(new Set([...statusNames(employeeStatusList), ...(currentRule.employeeStatuses || [])])).map(st => {
                                                   const active = (currentRule.employeeStatuses || []).includes(st);
                                                   return (
                                                     <label key={st} className="flex items-center gap-1.5 cursor-pointer text-[10px] font-semibold text-slate-600">

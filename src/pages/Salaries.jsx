@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { loadEmployeeStatuses } from '@/lib/employeeStatuses';
 import { calculateSalary, formatCurrency, SALARY_TABLE, PROMOTION_YEARS, ANNUAL_INCREMENTS, loadPayrollSettings, isPayrollActiveEmployee } from '@/lib/salaryTable';
 import { Plus, CheckCircle, AlertTriangle } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
@@ -25,8 +26,9 @@ export default function Salaries() {
   useEffect(() => {
     setLoadErrors([]);
     // الموظفون المستمرون فعلاً (الحالة الافتراضية "مستمر")
-    apiClient.entities.Employee.list()
-      .then(list => setEmployees((Array.isArray(list) ? list : []).filter(isPayrollActiveEmployee)))
+    // B4a: من يُولَّد له راتب يحدده علم «راتب تلقائي» بإعدادات حالات الموظف
+    Promise.all([apiClient.entities.Employee.list(), loadEmployeeStatuses()])
+      .then(([list, statuses]) => setEmployees((Array.isArray(list) ? list : []).filter(e => isPayrollActiveEmployee(e, statuses))))
       .catch(err => setLoadErrors(prev => [...prev, `تعذّر تحميل الموظفين: ${err?.message || err}`]));
     loadSalaries();
 
