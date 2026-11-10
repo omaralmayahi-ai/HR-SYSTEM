@@ -1218,7 +1218,13 @@ export const specializationCourseCredits = pgTable('specialization_course_credit
   provider: text('provider'), // الجهة المنظمة
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
+  // B6 (ق-13): الرصيد الآلي من دورة اختصاص مجتازة بموديول التدريب، وإلغاؤه من المسؤول
+  sourceTrainingId: integer('source_training_id'),
+  source: text('source').default('يدوي'), // يدوي | آلي من التدريب
+  isCancelled: boolean('is_cancelled').notNull().default(false),
+  cancelledReason: text('cancelled_reason'),
 }, (t) => [
+  uniqueIndex('specialization_credits_training_unique').on(t.employeeId, t.sourceTrainingId).where(sql`${t.sourceTrainingId} IS NOT NULL`),
   foreignKey({ name: 'specialization_course_credits_employee_id_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('cascade'),
   foreignKey({ name: 'specialization_course_credits_snapshot_id_fkey', columns: [t.snapshotId], foreignColumns: [degreeTrackSnapshots.id] }).onDelete('set null'),
 ]);

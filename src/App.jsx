@@ -12,6 +12,7 @@ import ScrollToTop from './components/ScrollToTop';
 import AppLayout from '@/components/layout/AppLayout';
 import Login from '@/pages/Login';
 import DbStatusBanner from '@/components/system/DbStatusBanner';
+import SharedSettingsBanner from '@/components/system/SharedSettingsBanner';
 
 // Lazy-loaded Pages
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -112,6 +113,7 @@ function App() {
         <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <ScrollToTop />
           <DbStatusBanner />
+          <SharedSettingsBanner />
           <AuthenticatedApp />
         </Router>
         <Toaster />

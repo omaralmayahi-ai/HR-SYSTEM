@@ -16,6 +16,7 @@ import { registerWorkLocationRoutes } from './server/routes/workLocations.ts';
 import { registerLookupRoutes } from './server/routes/lookups.ts';
 import { registerCareerHistoryRoutes } from './server/routes/careerHistory.ts';
 import { registerSalaryScaleRoutes } from './server/routes/salaryScale.ts';
+import { registerSharedSettingsRoutes } from './server/routes/sharedSettings.ts';
 import { startDueMovementsJob } from './server/careerMovements.ts';
 import { registerAnnualPlanRoutes } from './server/routes/annualPlans.ts';
 import { registerSalaryRoutes } from './server/routes/salaries.ts';
@@ -2036,7 +2037,8 @@ async function startServer() {
       // قواعد الترفيع: من القاعدة؛ إن كانت فارغة فالقواعد القانونية الافتراضية
       gradeRules: loaded.gradeRules.length ? loaded.gradeRules : settingsLists.getGradePromotionRulesDefaults(),
       // أنواع العقوبات من الإعدادات (جدول penalty_types) بدل الجدول الثابت في المحرك
-      penaltyTypes: opts.penaltyTypesLoaded ? opts.penaltyTypes : await loadPenaltyTypesForEngine()
+      penaltyTypes: opts.penaltyTypesLoaded ? opts.penaltyTypes : await loadPenaltyTypesForEngine(),
+      weeksPerPromotion: loaded.weeksPerPromotion, // B6 (ق-13)
     } as EngineContextData;
 
     const fullResult = recalculateEligibilitySync(emp, context);
@@ -2054,7 +2056,8 @@ async function startServer() {
           specializationCredits,
           penalties,
           leaves,
-          attendances
+          attendances,
+          weeksPerPromotion: loaded?.weeksPerPromotion, // B6 (ق-13)
         });
         activeDegreeSimResult = simResult;
 
@@ -2271,7 +2274,7 @@ async function startServer() {
   registerArchiveRoutes(app, { EMPLOYEE_RESTORE_MEMKEY_BY_KEY, EMPLOYEE_RESTORE_ORDER, EMPLOYEE_RESTORE_TABLE_BY_KEY, camelToSnake, db, eq, genericMemoryStores, inArray, mapKeys, mem, requireAdmin, requireAuth, saveLocalDb, schema, snakeToCamel, syncEmployeeRecord });
   registerLeavesRoutes(app, { LEAVE_STATUS, and, db, desc, eq, genericMemoryStores, inArray, isNull, leaveStatusVariants, mem, normalizeLeaveStatus, or, presentLeave, requireAuth, schema, sendRouteError });
   registerLeaves2Routes(app, { LEAVE_STATUS, adjustLeaveBalance, and, camelToSnake, db, deductLeaveBalanceOnApproval, desc, eq, genericMemoryStores, getTableColumns, isApprovedLeaveStatus, isRejectedOrCancelledLeaveStatus, logRecalcError, mapKeys, mem, normalizeLeaveStatus, presentLeave, requireAuth, requireWriter, respondIfDbWriteError, schema, sendRouteError, snakeToCamel, syncEntityRecord, triggerRecalculateEligibility });
-  registerTrainingsRoutes(app, { and, db, desc, enhanceEnrollmentRecord, enhanceTrainingRecord, eq, mapKeys, mem, requireAuth, requireWriter, respondIfDbWriteError, saveLocalDb, schema, sendRouteError, snakeToCamel, syncEnrollmentToTrainingCourses });
+  registerTrainingsRoutes(app, { and, db, desc, enhanceEnrollmentRecord, enhanceTrainingRecord, eq, mapKeys, mem, requireAuth, requireWriter, respondIfDbWriteError, saveLocalDb, schema, sendRouteError, snakeToCamel, syncEnrollmentToTrainingCourses, triggerRecalculateEligibility, logRecalcError });
   registerTrainerRoutes(app, routeCtx);
   registerAnnualPlanRoutes(app, routeCtx);
   registerSalaryRoutes(app, routeCtx);
@@ -2279,6 +2282,7 @@ async function startServer() {
   registerOrgUnitRoutes(app, routeCtx);
   registerCareerHistoryRoutes(app, routeCtx); // B4b
   registerSalaryScaleRoutes(app, routeCtx); // B4d
+  registerSharedSettingsRoutes(app, routeCtx); // B6
   const settingsLists = registerSettingsListRoutes(app, {
     SALARY_TABLE, asc, bothCases, camelToSnake, checkReferentialUsage, db, desc, eq, inMemoryEmployees: mem.inMemoryEmployees, jobTitlesCache,
     logRecalcError, mapKeys, registerLookupRoutes, registerWorkLocationRoutes, requireAdmin, requireAuth, requireWriter,

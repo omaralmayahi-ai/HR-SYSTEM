@@ -485,6 +485,9 @@ export function getUnifiedEmployeeCourses(emp, trainingCourses = [], trainingsLi
     if (!sc) return;
     const scEmpId = String(sc.employee_id || sc.employeeId || '');
     if (scEmpId && scEmpId !== empId) return;
+    // B6 (ق-13): الرصيد الآلي من التدريب نفس الدورة المسجلة أعلاه؛ ما يُحسب مرتين. والملغى ما يُحسب.
+    if (sc.source_training_id != null || sc.sourceTrainingId != null) return;
+    if (sc.is_cancelled === true || sc.isCancelled === true) return;
 
     const name = sc.course_name || sc.courseName || 'دورة اختصاص';
     const sDate = sc.start_date || sc.startDate || '';

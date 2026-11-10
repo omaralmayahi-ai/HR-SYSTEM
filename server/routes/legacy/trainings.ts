@@ -2,12 +2,19 @@
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
 
+import { syncSpecializationCredit, resyncTrainingCredits } from '../../trainingSync.ts';
+
 export function registerTrainingsRoutes(app: Express, deps: any) {
   const {
     and, db, desc, enhanceEnrollmentRecord, enhanceTrainingRecord, eq,
     mapKeys, mem, requireAuth, requireWriter, respondIfDbWriteError, saveLocalDb,
     schema, sendRouteError, snakeToCamel, syncEnrollmentToTrainingCourses,
+    triggerRecalculateEligibility, logRecalcError,
   } = deps;
+  // B6 (ق-13): بعد تغيّر رصيد الاختصاص تُعاد أهلية الموظف
+  const recalc = (ids: Array<number | undefined>) => {
+    for (const id of new Set(ids.filter(Boolean))) triggerRecalculateEligibility?.(id).catch?.(logRecalcError);
+  };
 
   // Training Courses API
   app.get('/api/trainings', requireAuth, async (req, res) => {
@@ -86,8 +93,13 @@ export function registerTrainingsRoutes(app: Express, deps: any) {
 
     let updatedFromDb: any = null;
     try {
-      const [updated] = await db.update(schema.trainings).set(data).where(eq(schema.trainings.id, id)).returning();
-      updatedFromDb = updated;
+      const affected = await db.transaction(async (tx: any) => {
+        const [updated] = await tx.update(schema.trainings).set(data).where(eq(schema.trainings.id, id)).returning();
+        updatedFromDb = updated;
+        // B6 (ق-13): فئة الدورة أو مدتها ممكن تغيّرت
+        return updated ? resyncTrainingCredits(tx, schema, { eq, and }, id) : [];
+      });
+      recalc(affected);
     } catch (error: any) {
       if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
       console.warn('Database fallback for update training');
@@ -108,7 +120,12 @@ export function registerTrainingsRoutes(app: Express, deps: any) {
   app.delete('/api/trainings/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     try {
-      await db.delete(schema.trainings).where(eq(schema.trainings.id, id));
+      const affected = await db.transaction(async (tx: any) => {
+        await tx.delete(schema.trainings).where(eq(schema.trainings.id, id));
+        // B6 (ق-13): الدورة انحذفت؛ الأرصدة الآلية منها تنحذف (إلا الملغاة)
+        return resyncTrainingCredits(tx, schema, { eq, and }, id);
+      });
+      recalc(affected);
     } catch (error: any) {
       if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete training');
@@ -153,8 +170,10 @@ export function registerTrainingsRoutes(app: Express, deps: any) {
       newEnroll = await db.transaction(async (tx) => {
         const [inserted] = await tx.insert(schema.trainingEnrollments).values(data).returning();
         if (inserted) await syncEnrollmentToTrainingCourses(tx, schema, { eq, and }, inserted);
+        if (inserted) await syncSpecializationCredit(tx, schema, { eq, and }, inserted); // B6 (ق-13)
         return inserted;
       });
+      recalc([newEnroll?.employeeId]);
     } catch (error: any) {
       if (respondIfDbWriteError(res, error, 'تسجيل المتدرب في الدورة')) return;
     }
@@ -184,9 +203,11 @@ export function registerTrainingsRoutes(app: Express, deps: any) {
       updatedFromDb = await db.transaction(async (tx) => {
         const [updated] = await tx.update(schema.trainingEnrollments).set(data).where(eq(schema.trainingEnrollments.id, id)).returning();
         if (updated) await syncEnrollmentToTrainingCourses(tx, schema, { eq, and }, updated);
+        if (updated) await syncSpecializationCredit(tx, schema, { eq, and }, updated); // B6 (ق-13)
         return updated;
       });
       dbAnswered = true;
+      recalc([updatedFromDb?.employeeId]);
     } catch (error: any) {
       if (respondIfDbWriteError(res, error, 'تعديل نتيجة المتدرب')) return;
     }
@@ -210,7 +231,14 @@ export function registerTrainingsRoutes(app: Express, deps: any) {
   app.delete('/api/trainings/enrollments/:id', requireAuth, requireWriter, async (req, res) => {
     const id = parseInt(req.params.id);
     try {
-      await db.delete(schema.trainingEnrollments).where(eq(schema.trainingEnrollments.id, id));
+      const removedEnr = await db.transaction(async (tx: any) => {
+        const [enr] = await tx.select().from(schema.trainingEnrollments).where(eq(schema.trainingEnrollments.id, id));
+        await tx.delete(schema.trainingEnrollments).where(eq(schema.trainingEnrollments.id, id));
+        // B6 (ق-13): حذف التسجيل يحذف رصيد الاختصاص الآلي المرتبط (ما لم يكن ملغى من المسؤول)
+        if (enr) await syncSpecializationCredit(tx, schema, { eq, and }, enr);
+        return enr;
+      });
+      recalc([removedEnr?.employeeId]);
     } catch (error: any) {
       if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
       console.warn('Database fallback for delete enrollment');

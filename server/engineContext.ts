@@ -28,6 +28,7 @@ const parseJson = (v: any, fallback: any) => {
 
 export interface LoadedEngineContext {
   employee: any | null;
+  weeksPerPromotion?: number; // B6 (ق-13)
   commendations: any[];
   penalties: any[];
   attendances: any[];
@@ -109,12 +110,13 @@ export async function loadEngineContext(db: any, schema: any, empId: number): Pr
     db.select().from(schema.governingCourses),
     db.select().from(schema.gradePromotionRules),
     db.select().from(schema.commendationRulesSettings).limit(1),
+    loadWeeksPerPromotion(db, schema),
   ]);
   const t: any = { emps: results[0] };
   PER_EMPLOYEE.forEach(([key], i) => { t[key] = results[i + 1]; });
   const n = PER_EMPLOYEE.length + 1;
   t.courses = results[n]; t.gradeRules = results[n + 1]; t.commendationRules = results[n + 2];
-  return assemble(t as RawTables);
+  return { ...assemble(t as RawTables), weeksPerPromotion: results[n + 3] };
 }
 
 /**
@@ -128,6 +130,7 @@ export async function loadAllEngineContexts(db: any, schema: any) {
     db.select().from(schema.governingCourses),
     db.select().from(schema.gradePromotionRules),
     db.select().from(schema.commendationRulesSettings).limit(1),
+    loadWeeksPerPromotion(db, schema),
   ]);
   const employees: any[] = results[0];
   const grouped: Record<string, Map<number, any[]>> = {};
@@ -144,7 +147,36 @@ export async function loadAllEngineContexts(db: any, schema: any) {
     get(empId: number): LoadedEngineContext {
       const t: any = { emps: byId.has(empId) ? [byId.get(empId)] : [], ...shared };
       for (const [key] of PER_EMPLOYEE) t[key] = grouped[key].get(empId) || [];
-      return assemble(t as RawTables);
+      return { ...assemble(t as RawTables), weeksPerPromotion: results[n + 3] };
     },
   };
+}
+
+/**
+ * مدخلات محاكاة مسار الشهادة من سياق القاعدة (بدل مخازن الذاكرة الفارغة منذ B2).
+ * `mapLeave` = toEngineLeave (يُمرَّر لتجنب استيراد دائري).
+ */
+export function degreeTrackInputs(ctx: LoadedEngineContext | null | undefined, mapLeave: (l: any) => any) {
+  const snaps = ctx?.degreeTrackSnapshots || [];
+  const activeSnap = snaps.find((s: any) => s.status === 'نشط' || !s.status) || null;
+  return {
+    activeSnap,
+    inputs: {
+      specializationCredits: ctx?.specializationCredits || [],
+      penalties: ctx?.penalties || [],
+      leaves: (ctx?.leaves || []).map(mapLeave),
+      attendances: ctx?.attendances || [],
+      weeksPerPromotion: ctx?.weeksPerPromotion ?? 2,
+    },
+  };
+}
+
+export const WEEKS_PER_PROMOTION_KEY = 'degree_track.weeks_per_promotion';
+
+/** B6 (ق-13): أسابيع دورة الاختصاص لكل ترفيع من الإعدادات (الافتراضي 2). */
+export async function loadWeeksPerPromotion(db: any, schema: any): Promise<number> {
+  if (!schema?.appSettingsDocuments) return 2;
+  const [row] = await db.select().from(schema.appSettingsDocuments).where(eq(schema.appSettingsDocuments.key, WEEKS_PER_PROMOTION_KEY));
+  const w = Number(row?.value?.weeks);
+  return Number.isFinite(w) && w >= 0 ? w : 2;
 }

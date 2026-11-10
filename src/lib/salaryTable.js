@@ -67,6 +67,14 @@ if (isClient) {
     console.error('Error loading PROMOTION_YEARS', e);
   }
 
+  // B6: سنوات الترفيع مشتركة من الخادم؛ تُعاد قراءتها بعد التحميل
+  window.addEventListener?.('shared-settings-hydrated', () => {
+    try {
+      const v = localStorage.getItem('PROMOTION_YEARS');
+      if (v) Object.assign(PROMOTION_YEARS, JSON.parse(v));
+    } catch { /* ignore */ }
+  });
+
   try {
     const savedIncrements = localStorage.getItem('ANNUAL_INCREMENTS');
     if (savedIncrements) {

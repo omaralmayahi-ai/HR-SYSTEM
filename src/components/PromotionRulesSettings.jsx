@@ -1,3 +1,4 @@
+import React from 'react';
 import { useState, useEffect } from 'react';
 import { 
   TrendingUp, Award, Clock, Save, Plus, Edit2, Trash2, 
@@ -616,6 +617,9 @@ export default function PromotionRulesSettings() {
             </div>
           </div>
 
+          {/* B6 (ق-13): أسابيع دورة الاختصاص لكل ترفيع */}
+          <DegreeTrackWeeksSetting />
+
           {/* Warning / Guidance Alert */}
           <div className="p-4 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-3 text-xs text-amber-900 leading-relaxed">
             <AlertCircle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
@@ -884,6 +888,40 @@ export default function PromotionRulesSettings() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// B6 (ق-13): «أسبوعين لكل ترفيع» صار إعداداً؛ رصيد دورة الاختصاص يتولّد آلياً من الدورات المجتازة
+function DegreeTrackWeeksSetting() {
+  const [weeks, setWeeks] = React.useState('');
+  const [msg, setMsg] = React.useState('');
+  React.useEffect(() => {
+    apiClient.degreeTrackSettings.get().then(r => setWeeks(String(r.weeks_per_promotion))).catch(e => setMsg(e.message));
+  }, []);
+  const save = async () => {
+    setMsg('');
+    try {
+      if (String(weeks).trim() === '' || !Number.isInteger(Number(weeks))) { setMsg('أدخل عدداً صحيحاً من الأسابيع'); return; }
+      const r = await apiClient.degreeTrackSettings.put(Number(weeks));
+      setWeeks(String(r.weeks_per_promotion));
+      setMsg('حُفظ');
+    } catch (e) { setMsg(e.message || 'تعذّر الحفظ'); }
+  };
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200/80 gap-3">
+      <div className="space-y-1">
+        <div className="text-sm font-bold text-slate-900">أسابيع دورة الاختصاص المطلوبة لكل ترفيع</div>
+        <p className="text-xs text-slate-600">
+          رصيد دورة الاختصاص يتولّد آلياً عند اجتياز دورة فئتها «اختصاص» بموديول التدريب (الأسبوع = 5 أيام عمل). حذف الرصيد الآلي من ملف الموظف يلغيه ولا يرجع.
+        </p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <input type="number" min={0} max={52} value={weeks} onChange={e => setWeeks(e.target.value)} className="w-20 h-9 border rounded-lg px-2 text-sm text-center" />
+        <span className="text-xs text-slate-500">أسبوع</span>
+        <button type="button" onClick={save} className="h-9 px-3 rounded-lg bg-[#1B3A6B] text-white text-xs font-bold">حفظ</button>
+        {msg && <span className="text-xs text-slate-500">{msg}</span>}
+      </div>
     </div>
   );
 }
