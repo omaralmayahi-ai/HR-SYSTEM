@@ -73,6 +73,7 @@ export const employees = pgTable('employees', {
   graduationYear: integer('graduation_year'),
   educationOrder: text('education_order'),
   evaluationOrder: text('evaluation_order'),
+  orgUnitId: integer('org_unit_id'), // B5: الوحدة التنظيمية (department/section نصوص عرض مشتقة منها)
   workLocation: text('work_location'), // موقع العمل (مثل المقر الرئيسي، الحقول النفطية، إلخ)
   workNature: text('work_nature').default('مكتبي'), // طبيعة العمل (مكتبي، ميداني)
   workShiftType: text('work_shift_type').default('صباحي'), // نوع عمل الموظف (صباحي، مناوب)
@@ -485,6 +486,9 @@ export const orgUnits = pgTable('org_units', {
   description: text('description'),
   englishName: text('english_name'), // B1b: موجود في قاعدة التشغيل (24 وحدة فيها قيمة)
   isCentral: boolean('is_central').default(false), // B1b: موجود في قاعدة التشغيل (26 وحدة مركزية)
+  // B5: تواريخ النفاذ بدل الحذف؛ valid_to فارغ = قائمة
+  validFrom: date('valid_from', { mode: 'string' }),
+  validTo: date('valid_to', { mode: 'string' }),
 });
 
 export const orgUnitsRelations = relations(orgUnits, ({ one }) => ({
@@ -1038,6 +1042,11 @@ export const jobTitles = pgTable('job_titles', {
   minStep: integer('min_step').default(1), // المرحلة الوظيفية الأساسية المقترحة
   nextTitleId: integer('next_title_id'), // العنوان الوظيفي التالي في الترقية / التدرج الهرمي
   status: text('status').default('فعال'), // فعال / معطل
+  // B5 (ق-7): مدى الدرجة والسند وتواريخ النفاذ؛ القيم الحالية تبقى ويكملها المستخدم
+  gradeMax: integer('grade_max'), // الدرجة العليا للعنوان (رقمها ≤ min_grade لأن الدرجة 1 أعلى درجة)
+  legalBasis: text('legal_basis'), // جدول الملاك / تعديل 19 لسنة 2024 / أمر ...
+  validFrom: date('valid_from', { mode: 'string' }),
+  validTo: date('valid_to', { mode: 'string' }),
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),

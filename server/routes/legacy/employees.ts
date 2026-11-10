@@ -3,6 +3,7 @@
 import type { Express } from 'express';
 
 import { employeeListColumns } from '../../util/employeeColumns.ts';
+import { attachOrgUnit, loadUnits } from '../../orgUnitsService.ts';
 import { sql } from 'drizzle-orm';
 
 export function registerEmployeesRoutes(app: Express, deps: any) {
@@ -118,6 +119,8 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
       mappedData.employeeIdNumber = await generateUniqueEmployeeIdNumber();
 
       const cleanData = sanitizeEmployeeData(mappedData);
+      // B5: ربط الموظف بوحدته التنظيمية (org_unit_id صريح أو من نصّي القسم والشعبة)
+      try { await attachOrgUnit(db, schema, cleanData, req.body || {}); } catch (e: any) { if (e?.status) return res.status(e.status).json({ error: e.message }); throw e; }
 
       if (mappedData.jobTitle || data.job_title) {
         const rawTitle = String(mappedData.jobTitle || data.job_title || '').trim();
@@ -183,6 +186,7 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
   });
 
   app.post('/api/employees/bulk-import', requireAuth, requireAdmin, async (req, res) => {
+    let importUnits: any = null; // B5: الوحدات تُحمَّل مرة لكل الاستيراد
     try {
       const { employees } = req.body;
       if (!Array.isArray(employees) || employees.length === 0) {
@@ -239,6 +243,8 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
         // لا تُختلق قيم افتراضية للحالة أو نوع الخدمة أو الجنس: الحقل الفارغ يبقى فارغاً («بيانات ناقصة»).
 
         const cleanData = sanitizeEmployeeData(mappedData);
+        // B5: ربط الموظف بوحدته التنظيمية من نصّي القسم والشعبة
+        try { await attachOrgUnit(db, schema, cleanData, { department: mappedData.department, section: mappedData.section }, { units: importUnits ??= await loadUnits(db, schema) }); } catch (e: any) { if (!e?.status) throw e; }
         let handled = false;
 
         try {
@@ -429,6 +435,11 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
     delete mappedData.employeeIdNumber;
 
     const cleanData = sanitizeEmployeeData(mappedData);
+    // B5: ربط الموظف بوحدته التنظيمية (org_unit_id صريح أو من نصّي القسم والشعبة)
+    try {
+      const [cur] = await db.select({ orgUnitId: schema.employees.orgUnitId }).from(schema.employees).where(eq(schema.employees.id, id));
+      await attachOrgUnit(db, schema, cleanData, req.body || {}, { currentOrgUnitId: cur?.orgUnitId ?? null });
+    } catch (e: any) { if (e?.status) return res.status(e.status).json({ error: e.message }); throw e; }
 
     if (mappedData.jobTitle || data.job_title) {
       const rawTitle = String(mappedData.jobTitle || data.job_title || '').trim();

@@ -374,22 +374,9 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
       let records = await query;
       if (records && records.length > 0) {
         return res.json(records.map(r => mapKeys(r, camelToSnake)));
-      } else if (!statusParam) {
-        // Auto-seed canonical job titles to database if empty
-        for (const t of DEFAULT_JOB_TITLES) {
-          await db.insert(schema.jobTitles).values({
-            name: t.name,
-            category: t.category,
-            minGrade: t.min_grade,
-            minStep: t.min_step,
-            status: t.status,
-            notes: t.notes
-          }).catch(() => {});
-        }
-        records = await db.select().from(schema.jobTitles).orderBy(asc(schema.jobTitles.name));
-        if (records && records.length > 0) {
-          return res.json(records.map(r => mapKeys(r, camelToSnake)));
-        }
+      } else {
+        // B5 (ق-7): ما تُزرع عناوين من الكود؛ الدليل يُبنى من العناوين المعتمدة ويُكمَّل يدوياً
+        return res.json([]);
       }
     } catch (error: any) {
       return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
@@ -439,6 +426,8 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
     const mStep = min_step !== undefined ? parseInt(min_step) : (minStep !== undefined ? parseInt(minStep) : 1);
     const nxtId = next_title_id !== undefined ? (next_title_id ? parseInt(next_title_id) : null) : (nextTitleId !== undefined ? (nextTitleId ? parseInt(nextTitleId) : null) : null);
 
+    const extras = parseTitleExtras(req.body || {}, mGrade);
+    if (extras.error) return res.status(400).json({ error: extras.error });
     try {
       const [newRecord] = await db.insert(schema.jobTitles).values({
         name: trimmedName,
@@ -448,6 +437,7 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
         nextTitleId: nxtId,
         status: status || 'فعال',
         notes: notes || '',
+        ...extras.values,
       }).returning();
       if (newRecord) {
         saveLocalDb();
@@ -568,6 +558,13 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
         if (nxtId !== undefined) updateData.nextTitleId = nxtId;
         if (status !== undefined) updateData.status = status;
         if (notes !== undefined) updateData.notes = notes;
+        const extras = parseTitleExtras(req.body || {}, mGrade !== undefined ? mGrade : (oldTitle?.minGrade ?? oldTitle?.min_grade));
+        const effMax = extras.values.gradeMax !== undefined ? extras.values.gradeMax : (oldTitle?.gradeMax ?? oldTitle?.grade_max ?? null);
+        if (mGrade !== undefined && effMax != null && effMax > mGrade) {
+          return res.status(400).json({ error: `الدرجة الدنيا (${mGrade}) لازم رقمها أكبر من أو يساوي الدرجة العليا المسجلة للعنوان (${effMax})` });
+        }
+        if (extras.error) return res.status(400).json({ error: extras.error });
+        Object.assign(updateData, extras.values);
 
         // تعديل العنوان + تحديث العنوان الحالي للموظفين الحاملين للاسم القديم داخل معاملة واحدة.
         // ملاحظة: لا تُعدَّل سجلات job_assignments إطلاقاً؛ فهي أوامر تاريخية صدرت بالاسم القديم.
@@ -703,6 +700,24 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
       sendRouteError(res, err, 'حذف العنوان الوظيفي');
     }
   });
+
+
+  // B5 (ق-7): مدى الدرجة والسند وتواريخ النفاذ للعنوان الوظيفي
+  function parseTitleExtras(body: any, minGradeVal: number | undefined): { error?: string; values: any } {
+    const values: any = {};
+    const iso = (v: any) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+    if (body.grade_max !== undefined || body.gradeMax !== undefined) {
+      const raw = body.grade_max ?? body.gradeMax;
+      const g = raw === '' || raw === null ? null : parseInt(raw);
+      if (g !== null && (isNaN(g) || g < 1 || g > 13)) return { error: 'أعلى درجة للعنوان بين 1 و13', values };
+      if (g !== null && minGradeVal !== undefined && !isNaN(minGradeVal) && g > minGradeVal) return { error: 'الدرجة العليا للعنوان رقمها أصغر من أو يساوي درجته الدنيا (الدرجة 1 أعلى درجة)', values };
+      values.gradeMax = g;
+    }
+    if (body.legal_basis !== undefined || body.legalBasis !== undefined) values.legalBasis = String(body.legal_basis ?? body.legalBasis ?? '').trim() || null;
+    if (body.valid_from !== undefined) values.validFrom = iso(body.valid_from);
+    if (body.valid_to !== undefined) values.validTo = iso(body.valid_to);
+    return { values };
+  }
 
   // B4d: مسارات سلّم الرواتب انتقلت إلى server/routes/salaryScale.ts (إصدارات)
 

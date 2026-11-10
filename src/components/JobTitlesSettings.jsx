@@ -95,7 +95,8 @@ export default function JobTitlesSettings() {
     category: 'عام',
     min_grade: 7,
     status: 'فعال',
-    notes: ''
+    notes: '',
+    legal_basis: '', valid_from: '', valid_to: ''
   });
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [customCategoryName, setCustomCategoryName] = useState('');
@@ -189,7 +190,8 @@ export default function JobTitlesSettings() {
       category: 'عام',
       min_grade: 7,
       status: 'فعال',
-      notes: ''
+      notes: '',
+      legal_basis: '', valid_from: '', valid_to: ''
     });
     setModalOpen(true);
   };
@@ -205,7 +207,11 @@ export default function JobTitlesSettings() {
       category: cat,
       min_grade: titleItem.min_grade || titleItem.minGrade || 7,
       status: titleItem.status || 'فعال',
-      notes: titleItem.notes || ''
+      notes: titleItem.notes || '',
+      // B5 (ق-7): السند وتواريخ النفاذ
+      legal_basis: titleItem.legal_basis || '',
+      valid_from: titleItem.valid_from ? String(titleItem.valid_from).slice(0, 10) : '',
+      valid_to: titleItem.valid_to ? String(titleItem.valid_to).slice(0, 10) : ''
     });
     setModalOpen(true);
   };
@@ -687,6 +693,8 @@ export default function JobTitlesSettings() {
                         <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-black bg-slate-100 text-slate-800 border border-slate-200/80">
                           الدرجة {item.min_grade || item.minGrade || 7}
                         </span>
+                        {item.legal_basis && <span className="block text-[10px] text-slate-400 mt-1 max-w-[180px] truncate" title={item.legal_basis}>{item.legal_basis}</span>}
+                        {item.valid_to && <span className="block text-[10px] text-red-500 mt-0.5">ملغى من {String(item.valid_to).slice(0, 10)}</span>}
                       </td>
 
                       {/* Number of Occupant Employees with quick preview */}
@@ -872,6 +880,22 @@ export default function JobTitlesSettings() {
               <p className="text-[10px] text-slate-400 mt-1">
                 يرتبط كل عنوان وظيفي بالدرجة الوظيفية حصراً، لكي يتغير العنوان تلقائياً عند ترفيع الموظف إلى هذه الدرجة.
               </p>
+            </div>
+
+            {/* B5 (ق-7): السند القانوني وتواريخ النفاذ */}
+            <div>
+              <Label className="text-xs font-bold text-slate-700">السند القانوني</Label>
+              <Input className="mt-1 rounded-xl text-xs" placeholder="مثل: جدول الملاك / تعديل قانون الملاك 19 لسنة 2024 / أمر إداري..." value={form.legal_basis || ''} onChange={e => setForm(prev => ({ ...prev, legal_basis: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs font-bold text-slate-700">نافذ من</Label>
+                <Input type="date" className="mt-1 rounded-xl text-xs" value={form.valid_from || ''} onChange={e => setForm(prev => ({ ...prev, valid_from: e.target.value }))} />
+              </div>
+              <div>
+                <Label className="text-xs font-bold text-slate-700">ملغى من (إن وُجد)</Label>
+                <Input type="date" className="mt-1 rounded-xl text-xs" value={form.valid_to || ''} onChange={e => setForm(prev => ({ ...prev, valid_to: e.target.value }))} />
+              </div>
             </div>
 
             <div>

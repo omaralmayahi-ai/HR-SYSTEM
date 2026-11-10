@@ -4,6 +4,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { 
   Network, Plus, Edit2, Trash2, ChevronDown, ChevronRight, 
   User, CornerDownLeft, Loader2, RefreshCw, Layers, MapPin
+  , CalendarX
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -333,6 +334,21 @@ export default function OrgChart() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // B5: إنهاء الوحدة وفروعها بتاريخ اليوم؛ الخادم يرفض إذا بيها موظفون
+  const handleEndUnit = async (node) => {
+    if (!window.confirm(`إنهاء «${node.name}» وكل فروعها بتاريخ اليوم؟ تبقى ظاهرة بالسجل كوحدة منتهية.`)) return;
+    try {
+      setLoading(true);
+      const res = await apiClient.orgUnits.end(node.id, {});
+      toast({ title: 'انتهت الوحدة التنظيمية', description: `${res.units_ended} وحدة بتاريخ ${res.valid_to}` });
+      fetchData();
+    } catch (err) {
+      toast({ title: 'تعذّر الإنهاء', description: err.message, variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDelete = (id, name) => {
     const hasChildren = orgUnits.some(u => u.parentId === id);
     setDeleteConfirm({
@@ -498,6 +514,15 @@ export default function OrgChart() {
             <span className="w-5 h-5 rounded-full bg-slate-100 border border-slate-200 text-slate-500 font-mono text-[10px] flex items-center justify-center">
               {node.children ? node.children.length : 0}
             </span>
+
+            {/* B5: الرمز الثابت وعدد الموظفين وحالة الإنهاء */}
+            {node.code && <span className="text-[10px] font-mono text-slate-400">{node.code}</span>}
+            <span className="text-[10px] font-bold text-slate-500 bg-slate-50 border border-slate-100 rounded-full px-2 py-0.5" title="موظفون مرتبطون بهذه الوحدة مباشرة">
+              {node.employee_count || 0} موظف
+            </span>
+            {node.is_ended && (
+              <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-full px-2 py-0.5">منتهية {String(node.valid_to || '').slice(0, 10)}</span>
+            )}
           </div>
 
           <div className="flex items-center justify-between md:justify-end gap-3 mt-2 md:mt-0">
@@ -532,10 +557,20 @@ export default function OrgChart() {
               >
                 <Edit2 size={14} />
               </button>
+              {!node.is_ended && (
+                <button
+                  type="button"
+                  onClick={() => handleEndUnit(node)}
+                  title="إنهاء التشكيل بتاريخ (بدل الحذف)"
+                  className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 hover:text-amber-700 transition-colors"
+                >
+                  <CalendarX size={14} />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => handleDelete(node.id, node.name)}
-                title="حذف التشكيل الإداري"
+                title="حذف التشكيل الإداري (للمضاف بالخطأ وبلا موظفين)"
                 className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 hover:text-red-600 transition-colors"
               >
                 <Trash2 size={14} />

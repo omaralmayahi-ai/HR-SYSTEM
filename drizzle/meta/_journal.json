@@ -71,6 +71,13 @@
       "when": 1794305212702,
       "tag": "0009_salary_scale_versions",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794305742134,
+      "tag": "0010_org_units_titles_b5",
+      "breakpoints": true
     }
   ]
 }
