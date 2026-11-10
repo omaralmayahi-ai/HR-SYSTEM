@@ -54,6 +54,7 @@ import { respondIfDbWriteError, sendRouteError, HttpError, classifyDbError, setD
 import { installRouteRegistry } from './server/routeRegistry.ts';
 import { syncEnrollmentToTrainingCourses } from './server/trainingSync.ts';
 import { resolveAccrualParams, accrueBalance, isValidAccrualMonth, ACCRUAL_ELIGIBLE_STATUSES, ACCRUAL_UPDATE_SQL, ACCRUAL_CLAIM_SQL, LEGAL_MONTHLY_REGULAR_LEAVE_DAYS, LEGAL_MAX_REGULAR_LEAVE_ACCUMULATION, DEFAULT_MONTHLY_SICK_LEAVE_DAYS, DEFAULT_MAX_SICK_LEAVE_ACCUMULATION } from './server/leaveAccrual.ts';
+import { createSingleFlightCache } from './server/singleFlightCache.ts';
 import { createStatusRegistry, dbStatusLoader } from './server/statusRegistry.ts';
 import { LEAVE_STATUS, normalizeLeaveStatus, isApprovedLeaveStatus, isRejectedOrCancelledLeaveStatus, leaveStatusVariants, toEngineLeave } from './server/leaveStatus.ts';
 
@@ -116,6 +117,16 @@ async function startServer() {
     res.status(up ? 200 : 503).json({ status: up ? 'ok' : 'db_unavailable', db: up ? 'up' : 'down', migrations: getMigrationStatus().status });
   });
   app.use('/api', dbGate.middleware);
+  // أداء: قائمة المستحقين تُحسب مرة وتُحفظ دقيقتين؛ أي كتابة ناجحة تبطلها
+  const dueListCache = createSingleFlightCache<any>({ ttlMs: 120_000 });
+  // تسخين: أول احتساب بعد الإقلاع بالخلفية، فأول فتح للوحة التحكم ما ينتظر
+  setTimeout(() => { dueListCache.get().catch(() => {}); }, 15_000).unref?.();
+  app.use('/api', function invalidateDueListOnWrite(req, res, next) {
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+      res.on('finish', () => { if (res.statusCode < 400) dueListCache.invalidate(); });
+    }
+    next();
+  });
 
   // B3: سياق مسارات المجالات المنقولة إلى server/routes/
   // B4a (ق-14): معنى حالات الموظف من القاعدة
@@ -1975,7 +1986,22 @@ async function startServer() {
   }
 
   // أداء (لوحة التحكم): opts.penaltyTypes يُحمَّل مرة واحدة للحساب الجماعي بدل استعلام لكل موظف
-  async function triggerRecalculateEligibility(employeeId: number | string, preloaded?: LoadedEngineContext, opts: { penaltyTypes?: any[] | undefined; penaltyTypesLoaded?: boolean } = {}) {
+  // أداء: كتابة تواريخ الاستحقاق المتغيرة بمعاملة واحدة (دفعات 500)
+  async function writeDueDatesBulk(rows: Array<{ id: number; nextPromotionDueDate: any; nextIncrementDueDate: any }>) {
+    if (rows.length === 0) return 0;
+    const txt = (v: any) => (v === null || v === undefined || v === '' ? null : String(v));
+    await db.transaction(async (tx: any) => {
+      for (let i = 0; i < rows.length; i += 500) {
+        const chunk = rows.slice(i, i + 500);
+        const values = sql.join(chunk.map(r => sql`(${r.id}::int, ${txt(r.nextPromotionDueDate)}::text, ${txt(r.nextIncrementDueDate)}::text)`), sql`, `);
+        await tx.execute(sql`UPDATE employees AS e SET next_promotion_due_date = v.p, next_increment_due_date = v.i
+          FROM (VALUES ${values}) AS v(id, p, i) WHERE e.id = v.id`);
+      }
+    });
+    return rows.length;
+  }
+
+  async function triggerRecalculateEligibility(employeeId: number | string, preloaded?: LoadedEngineContext, opts: { penaltyTypes?: any[] | undefined; penaltyTypesLoaded?: boolean; collectDueDateWrites?: Array<{ id: number; nextPromotionDueDate: any; nextIncrementDueDate: any }> } = {}) {
     if (!employeeId) return null;
     const empIdNum = parseInt(String(employeeId));
     if (isNaN(empIdNum)) return null;
@@ -2141,7 +2167,10 @@ async function startServer() {
 
     // أداء: الكتابة فقط إذا تغيّر التاريخ (كانت تكتب لكل موظف بكل فتح للوحة التحكم)
     const sameDate = (a: any, b: any) => String(a ?? '') === String(b ?? '');
-    if (!sameDate(emp.nextPromotionDueDate, promoDue) || !sameDate(emp.nextIncrementDueDate, incrDue)) {
+    if ((!sameDate(emp.nextPromotionDueDate, promoDue) || !sameDate(emp.nextIncrementDueDate, incrDue)) && opts.collectDueDateWrites) {
+      // أداء: الاحتساب الجماعي يجمع التحديثات ويكتبها بمعاملة واحدة بدل كتابة لكل موظف
+      opts.collectDueDateWrites.push({ id: empIdNum, nextPromotionDueDate: promoDue, nextIncrementDueDate: incrDue });
+    } else if (!sameDate(emp.nextPromotionDueDate, promoDue) || !sameDate(emp.nextIncrementDueDate, incrDue)) {
       try {
         await db.update(schema.employees)
           .set({
@@ -2257,7 +2286,7 @@ async function startServer() {
   registerGoverningCourses3Routes(app, { mem, readSettingsDoc, requireAdmin, requireAuth, sendRouteError, writeSettingsDoc });
   registerGoverningCourses4Routes(app, { db, eq, mem, readSettingsDoc, requireAdmin, requireAuth, requireWriter, saveLocalDb, schema, sendRouteError, writeSettingsDoc });
   registerGenericEntitiesRoutes(app, { calculateDegreeTrackSimulation, camelToSnake, db, eq, genericEntitiesMap, genericMemoryStores, getTableColumns, jobTitlesCache, loadEngineContext, loadPenaltyTypesForEngine, logRecalcError, mapKeys, mem, requireAuth, requireWriter, respondIfDbWriteError, routeRegistry, saveLocalDb, schema, sendRouteError, snakeToCamel, toEngineLeave, triggerRecalculateEligibility, updateEmployeeCentralRecord });
-  registerPromotionsRoutes(app, { and, bothCases, calculateDegreeTrackSimulation, camelToSnake, db, eq, findMatchingJobTitleForPromotion, formatDateString, genericMemoryStores, inArray, isDateOnOrAfter, isDbConnectionFailure, isNotNull, jobTitlesCache, loadAllEngineContexts, loadPenaltyTypesForEngine, mapKeys, mem, processBatchDegreeTrackAutoSettlement, requireAdmin, requireAuth, requireWriter, resolveTargetJobTitle, saveLocalDb, schema, sendRouteError, settingsLists, sql, toEngineLeave, triggerRecalculateEligibility });
+  registerPromotionsRoutes(app, { and, bothCases, calculateDegreeTrackSimulation, camelToSnake, db, eq, findMatchingJobTitleForPromotion, formatDateString, genericMemoryStores, inArray, isDateOnOrAfter, isDbConnectionFailure, isNotNull, jobTitlesCache, loadAllEngineContexts, loadPenaltyTypesForEngine, mapKeys, mem, processBatchDegreeTrackAutoSettlement, requireAdmin, requireAuth, requireWriter, resolveTargetJobTitle, saveLocalDb, schema, sendRouteError, settingsLists, sql, toEngineLeave, triggerRecalculateEligibility, dueListCache, writeDueDatesBulk });
 
 
   // --- Vite & Asset Serving Middleware ---
