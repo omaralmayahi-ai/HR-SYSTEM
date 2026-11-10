@@ -17,6 +17,7 @@ import { registerLookupRoutes } from './server/routes/lookups.ts';
 import { registerCareerHistoryRoutes } from './server/routes/careerHistory.ts';
 import { registerSalaryScaleRoutes } from './server/routes/salaryScale.ts';
 import { registerSharedSettingsRoutes } from './server/routes/sharedSettings.ts';
+import { registerOfficialHolidaysRoutes } from './server/routes/officialHolidays.ts';
 import { startDueMovementsJob } from './server/careerMovements.ts';
 import { registerAnnualPlanRoutes } from './server/routes/annualPlans.ts';
 import { registerSalaryRoutes } from './server/routes/salaries.ts';
@@ -127,7 +128,14 @@ async function startServer() {
   setTimeout(() => { dueListCache.get().catch(() => {}); }, 15_000).unref?.();
   app.use('/api', function invalidateDueListOnWrite(req, res, next) {
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
-      res.on('finish', () => { if (res.statusCode < 400) dueListCache.invalidate(); });
+      res.on('finish', () => {
+        if (res.statusCode >= 400) return;
+        dueListCache.invalidate();
+        // B7: تغيير قواعد الاستحقاق (أنواع الشكر وسقفها، أنواع العقوبات) يعيد احتساب الكل بالخلفية فتتحدث التواريخ المخزونة
+        if (/^\/(commendation-types|commendation-rules-settings|penalty-types)(\/|$)/.test(req.path)) {
+          setTimeout(() => { dueListCache.get().catch(() => {}); }, 1_000).unref?.();
+        }
+      });
     }
     next();
   });
@@ -2039,6 +2047,8 @@ async function startServer() {
       // أنواع العقوبات من الإعدادات (جدول penalty_types) بدل الجدول الثابت في المحرك
       penaltyTypes: opts.penaltyTypesLoaded ? opts.penaltyTypes : await loadPenaltyTypesForEngine(),
       weeksPerPromotion: loaded.weeksPerPromotion, // B6 (ق-13)
+      commendationTypes: loaded.commendationTypes, // B7 (ق-9)
+      commendationMaxPerYear: commendationRulesNow?.maxPerYear ?? (commendationRulesNow as any)?.max_per_year ?? 3,
     } as EngineContextData;
 
     const fullResult = recalculateEligibilitySync(emp, context);
@@ -2283,6 +2293,7 @@ async function startServer() {
   registerCareerHistoryRoutes(app, routeCtx); // B4b
   registerSalaryScaleRoutes(app, routeCtx); // B4d
   registerSharedSettingsRoutes(app, routeCtx); // B6
+  registerOfficialHolidaysRoutes(app, routeCtx); // B7
   const settingsLists = registerSettingsListRoutes(app, {
     SALARY_TABLE, asc, bothCases, camelToSnake, checkReferentialUsage, db, desc, eq, inMemoryEmployees: mem.inMemoryEmployees, jobTitlesCache,
     logRecalcError, mapKeys, registerLookupRoutes, registerWorkLocationRoutes, requireAdmin, requireAuth, requireWriter,

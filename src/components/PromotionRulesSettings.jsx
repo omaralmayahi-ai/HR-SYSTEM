@@ -57,7 +57,7 @@ export default function PromotionRulesSettings() {
   const [loadingTypes, setLoadingTypes] = useState(true);
   const [typeModalOpen, setTypeModalOpen] = useState(false);
   const [editingType, setEditingType] = useState(null);
-  const [typeForm, setTypeForm] = useState({ name: '', credit_months: 1, status: 'فعال', notes: '' });
+  const [typeForm, setTypeForm] = useState({ name: '', credit_months: 1, status: 'فعال', notes: '', applies_to: 'كلاهما', annual_cap: '' });
   const [savingType, setSavingType] = useState(false);
   const [deleteTypeConfirm, setDeleteTypeConfirm] = useState({ open: false, id: null, name: '' });
 
@@ -178,7 +178,7 @@ export default function PromotionRulesSettings() {
   // Commendation Types Modal Handlers
   const handleOpenAddType = () => {
     setEditingType(null);
-    setTypeForm({ name: '', credit_months: 1, status: 'فعال', notes: '' });
+    setTypeForm({ name: '', credit_months: 1, status: 'فعال', notes: '', applies_to: 'كلاهما', annual_cap: '' });
     setTypeModalOpen(true);
   };
 
@@ -188,7 +188,9 @@ export default function PromotionRulesSettings() {
       name: item.name || '',
       credit_months: item.credit_months || item.creditMonths || 1,
       status: item.status || 'فعال',
-      notes: item.notes || ''
+      notes: item.notes || '',
+      applies_to: item.applies_to || 'كلاهما',
+      annual_cap: item.annual_cap ?? ''
     });
     setTypeModalOpen(true);
   };
@@ -206,7 +208,9 @@ export default function PromotionRulesSettings() {
         name: typeForm.name.trim(),
         credit_months: parseInt(typeForm.credit_months) || 1,
         status: typeForm.status || 'فعال',
-        notes: typeForm.notes || ''
+        notes: typeForm.notes || '',
+        applies_to: typeForm.applies_to || 'كلاهما',
+        annual_cap: typeForm.annual_cap === '' ? null : parseInt(typeForm.annual_cap)
       };
 
       if (editingType) {
@@ -440,6 +444,8 @@ export default function PromotionRulesSettings() {
               <tr>
                 <th className="px-4 py-3">اسم نوع كتاب الشكر</th>
                 <th className="px-4 py-3 text-center">أشهر القدَم الممنوحة</th>
+                <th className="px-4 py-3 text-center">يُحتسب لـ</th>
+                <th className="px-4 py-3 text-center">السقف السنوي</th>
                 <th className="px-4 py-3">الملاحظات والشروط</th>
                 <th className="px-4 py-3 text-center">الحالة</th>
                 <th className="px-4 py-3 text-center w-24">الإجراءات</th>
@@ -460,6 +466,8 @@ export default function PromotionRulesSettings() {
                       +{t.credit_months || t.creditMonths || 1} شهر قدَم
                     </span>
                   </td>
+                  <td className="px-4 py-3 text-center">{t.applies_to || 'كلاهما'}</td>
+                  <td className="px-4 py-3 text-center font-mono">{t.annual_cap ?? <span className="text-slate-400 font-sans">العام</span>}</td>
                   <td className="px-4 py-3 text-slate-500">
                     {t.notes || '—'}
                   </td>
@@ -825,6 +833,32 @@ export default function PromotionRulesSettings() {
                 </select>
               </div>
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs font-bold text-slate-700">يُحتسب لـ</Label>
+                <select
+                  value={typeForm.applies_to}
+                  onChange={(e) => setTypeForm(prev => ({ ...prev, applies_to: e.target.value }))}
+                  className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800"
+                >
+                  <option value="كلاهما">العلاوة والترفيع</option>
+                  <option value="علاوة">العلاوة فقط</option>
+                  <option value="ترفيع">الترفيع فقط</option>
+                </select>
+              </div>
+              <div>
+                <Label className="text-xs font-bold text-slate-700">السقف السنوي لهذا النوع</Label>
+                <input
+                  type="number" min={1} max={50}
+                  value={typeForm.annual_cap}
+                  placeholder="فارغ = السقف العام"
+                  onChange={(e) => setTypeForm(prev => ({ ...prev, annual_cap: e.target.value }))}
+                  className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800"
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-500 -mt-1">يُحفظ الشمول مع كل كتاب وقت تسجيله، فتغييره هنا لا يغيّر الكتب المسجلة سابقاً.</p>
 
             <div>
               <Label className="text-xs font-bold text-slate-700">ملاحظات وسند المنح</Label>

@@ -183,6 +183,12 @@ export const penalties = pgTable('penalties', {
   appealStatus: text('appeal_status').default('لا يوجد'), // حالة الاعتراض: لا يوجد / قيد الطعن / مرفوض الطعن / مقبول الطعن
   daysCount: integer('days_count'), // عدد أيام القطع (لعقوبة قطع الراتب: م8/ثالثاً)
   createdAt: timestamp('created_at').defaultNow(),
+  // B7: لقطة أشهر التأخير وقت فرض العقوبة (تعديل أنواع العقوبات لاحقاً ما يغيّر الماضي)
+  delayMonths: integer('delay_months'),
+  // B7 (ق-10): الإلغاء بأمر إداري
+  cancelOrderNumber: text('cancel_order_number'),
+  cancelOrderDate: text('cancel_order_date'),
+  cancelReason: text('cancel_reason'),
 });
 
 // Appreciations / Thank You Letters table (كتب الشكر والتقدير)
@@ -1067,6 +1073,9 @@ export const commendationTypes = pgTable('commendation_types', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم نوع كتاب الشكر (مثلاً: كتاب شكر وزاري، كتاب شكر رئاسي)
   creditMonths: integer('credit_months').notNull().default(1), // عدد أشهر القدم الممنوحة (1 أو 6)
+  // B7 (ق-9): يشمل العلاوة أو الترفيع أو كلاهما، وسقف سنوي خاص بالنوع (فارغ = السقف العام)
+  appliesTo: text('applies_to').notNull().default('كلاهما'),
+  annualCap: integer('annual_cap'),
   status: text('status').default('فعال'), // فعال / معطل
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
@@ -1080,6 +1089,7 @@ export const employeeCommendations = pgTable('employee_commendations', {
     .notNull(),
   commendationTypeId: integer('commendation_type_id'),
   creditMonthsSnapshot: integer('credit_months_snapshot').notNull().default(1), // لقطة جامدة لعدد شهور القدم وقت المنح
+  appliesToSnapshot: text('applies_to_snapshot').notNull().default('كلاهما'), // B7 (ق-9): لقطة الشمول وقت المنح
   orderNumber: text('order_number'), // رقم الأمر الإداري
   orderDate: text('order_date'), // تاريخ الأمر الإداري
   issuer: text('issuer'), // الجهة المانحة (الوزير، المدير العام، رئيس مجلس الوزراء)
@@ -1320,4 +1330,18 @@ export const employeeFieldHistory = pgTable('employee_field_history', {
   foreignKey({ name: 'employee_field_history_supersedes_fkey', columns: [t.supersedesId], foreignColumns: [t.id] }).onDelete('restrict'),
   index('employee_field_history_emp_field').on(t.employeeId, t.field, t.validFrom),
   index('employee_field_history_order').on(t.orderId),
+]);
+
+// B7 (ق-12): تقويم العطل الرسمية (قانون العطل الرسمية 12 لسنة 2024 + العطل الهجرية والطارئة سنوياً)
+export const officialHolidays = pgTable('official_holidays', {
+  id: serial('id').primaryKey(),
+  holidayDate: date('holiday_date', { mode: 'string' }).notNull(),
+  name: text('name').notNull(),
+  kind: text('kind').notNull().default('ميلادي ثابت'), // ميلادي ثابت | هجري | طارئ | ديني خاص
+  legalBasis: text('legal_basis'),
+  notes: text('notes'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex('official_holidays_date_name').on(t.holidayDate, t.name),
 ]);

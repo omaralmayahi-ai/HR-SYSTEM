@@ -191,6 +191,9 @@ export interface EngineContextData {
   penalties?: PenaltyRecord[];
   penaltyTypes?: PenaltyTypesInput; // خريطة { 'إنذار': 6 } أو سجلات penalty_types من الإعدادات
   weeksPerPromotion?: number; // B6 (ق-13): أسابيع دورة الاختصاص لكل ترفيع بمسار الشهادة
+  /** B7 (ق-9): أنواع كتب الشكر (الشمول والسقف السنوي) والسقف العام */
+  commendationTypes?: Array<{ id?: number | string; name?: string; appliesTo?: string; applies_to?: string; annualCap?: number | null; annual_cap?: number | null }>;
+  commendationMaxPerYear?: number | null;
   attendances?: AttendanceRecord[];
   evaluations?: EvaluationRecord[];
   leaves?: LeaveRecord[];
@@ -480,6 +483,16 @@ export function salaryCutDelayMonths(days: number | null | undefined): number {
   const d = Number(days);
   if (!Number.isFinite(d) || d <= 0) return SALARY_CUT_BASE_DELAY_MONTHS;
   return SALARY_CUT_BASE_DELAY_MONTHS + Math.max(0, Math.ceil(d) - SALARY_CUT_BASE_DAYS);
+}
+
+/**
+ * B7 (ق-10): أشهر التأخير التي تُثبَّت مع العقوبة وقت فرضها، بنفس مطابقة المحرك للأسماء.
+ * قطع الراتب وتنزيل الدرجة لا لقطة لهما (يُحسبان بطريقتهما). null = لا نوع مطابق بالإعدادات.
+ */
+export function snapshotPenaltyDelayMonths(pType: string, penaltyTypes: Array<{ name?: string; delayMonths?: number | null; delay_months?: number | null }>): number | null {
+  if (!pType || isSalaryCutPenalty(pType) || isDemotionPenalty(pType)) return null;
+  const found = lookupPenaltyType(pType, penaltyTypes as any);
+  return found && found.delayMonths !== undefined && Number.isFinite(found.delayMonths) ? found.delayMonths : null;
 }
 
 function lookupPenaltyType(pType: string, penaltyTypes: PenaltyTypesInput): { delayMonths?: number; deductionDays?: number } | null {
@@ -905,6 +918,97 @@ function isValidDateString(d: any): boolean {
   return !isNaN(new Date(str).getTime());
 }
 
+// أشهر القدَم للكتاب: اللقطة أولاً، وإلا تُستنتج من وصف الأثر (نفس منطق الاحتساب أدناه)
+function commendationMonthsOf(c: any): number {
+  let months = c.creditMonthsSnapshot !== undefined ? c.creditMonthsSnapshot : c.credit_months_snapshot;
+  if (months === undefined || months === null) {
+    const impact = c.seniorityImpact || c.seniority_impact || '';
+    if (impact.includes('شهرين') || impact.includes('2')) months = 2;
+    else if (impact.includes('6') || impact.includes('ستة')) months = 6;
+    else if (impact.includes('شهر') || impact.includes('1')) months = 1;
+    else months = 0;
+  }
+  return Number(months) || 0;
+}
+
+const isoYearOf = (d: any): string => {
+  const v = String(d || '').trim();
+  let m = v.match(/^(\d{4})-\d{1,2}-\d{1,2}/);
+  if (m) return m[1];
+  m = v.match(/^\d{1,2}[\/-]\d{1,2}[\/-](\d{4})$/);
+  return m ? m[1] : '';
+};
+
+/**
+ * B7 (ق-9): شمول كتاب الشكر (علاوة/ترفيع/كلاهما) وسقفه السنوي.
+ * - الكتاب المسجل بجدولين (employee_commendations و appreciations) يُحتسب مرة واحدة،
+ *   ويُفضَّل السجل الذي يحمل النوع ولقطة الشمول.
+ * - الكتب المخفية وكتب الشكر المعنوي (صفر أشهر) لا تستهلك من السقف.
+ * - السقف العام يشمل كل الكتب؛ سقف النوع قيد إضافي على ذلك النوع (يُحتسب الكتاب إذا لم يتجاوز أياً منهما).
+ * - السنة = السنة الميلادية لتاريخ الكتاب، والأقدم يُحتسب أولاً.
+ */
+export function applyCommendationRules(
+  commendations: CommendationRecord[],
+  purpose: 'increment' | 'promotion',
+  context: EngineContextData = {},
+): { eligible: CommendationRecord[]; excluded: Array<{ c: CommendationRecord; reason: string }> } {
+  const types = context.commendationTypes || [];
+  const typeIdOf = (c: any) => c.commendationTypeId ?? c.commendation_type_id;
+  const typeOf = (c: any) => types.find(t => String(t.id) === String(typeIdOf(c)));
+  const globalCapRaw = Number(context.commendationMaxPerYear);
+  const globalCap = Number.isFinite(globalCapRaw) && globalCapRaw > 0 ? globalCapRaw : Infinity;
+
+  // إزالة التكرار بين الجدولين
+  const richness = (c: any) => (typeIdOf(c) != null ? 2 : 0) + ((c.appliesToSnapshot ?? c.applies_to_snapshot) ? 1 : 0);
+  const byKey = new Map<string, any>();
+  const unique: any[] = [];
+  for (const c of commendations as any[]) {
+    const num = String(c.orderNumber || c.order_number || '').trim();
+    const date = String(c.orderDate || c.order_date || '').trim();
+    if (!num || !date) { unique.push(c); continue; }
+    const key = `${c.employeeId ?? c.employee_id ?? ''}|${num}|${date}`;
+    const prev = byKey.get(key);
+    if (!prev) { byKey.set(key, c); unique.push(c); continue; }
+    if (richness(c) > richness(prev)) { unique[unique.indexOf(prev)] = c; byKey.set(key, c); }
+  }
+
+  const eligible: CommendationRecord[] = [];
+  const excluded: Array<{ c: CommendationRecord; reason: string }> = [];
+  const usedAll = new Map<string, number>();
+  const usedType = new Map<string, number>();
+  const sorted = [...unique].sort((a: any, b: any) =>
+    String(a.orderDate || a.order_date || '').localeCompare(String(b.orderDate || b.order_date || '')) || Number(a.id || 0) - Number(b.id || 0));
+  for (const c of sorted as any[]) {
+    const t = typeOf(c);
+    const applies = String(c.appliesToSnapshot ?? c.applies_to_snapshot ?? t?.appliesTo ?? t?.applies_to ?? 'كلاهما');
+    if ((purpose === 'increment' && applies === 'ترفيع') || (purpose === 'promotion' && applies === 'علاوة')) {
+      excluded.push({ c, reason: `كتاب الشكر يشمل ${applies} فقط` });
+      continue;
+    }
+    const hidden = c.isHidden === true || c.is_hidden === true;
+    if (hidden || commendationMonthsOf(c) <= 0) { eligible.push(c); continue; } // لا يستهلك من السقف
+    const year = isoYearOf(c.orderDate || c.order_date);
+    if (!year) { eligible.push(c); continue; }
+    const typeCapRaw = Number(t?.annualCap ?? t?.annual_cap);
+    const typeCap = Number.isFinite(typeCapRaw) && typeCapRaw > 0 ? typeCapRaw : Infinity;
+    const nAll = usedAll.get(year) || 0;
+    const tKey = `${year}|${t?.id ?? ''}`;
+    const nType = usedType.get(tKey) || 0;
+    if (nAll >= globalCap) {
+      excluded.push({ c, reason: `تجاوز السقف السنوي لكتب الشكر (${globalCap}) لسنة ${year}` });
+      continue;
+    }
+    if (t && nType >= typeCap) {
+      excluded.push({ c, reason: `تجاوز السقف السنوي لنوع «${t.name || ''}» (${typeCap}) لسنة ${year}` });
+      continue;
+    }
+    usedAll.set(year, nAll + 1);
+    if (t) usedType.set(tKey, nType + 1);
+    eligible.push(c);
+  }
+  return { eligible, excluded };
+}
+
 export function calculateIncrementEligibility(
   employee: EmployeeEntity,
   context: EngineContextData = {}
@@ -963,7 +1067,18 @@ export function calculateIncrementEligibility(
   });
 
   // 4. Modifiers: Commendations since lastIncrementDate
-  const commendations = context.commendations || [];
+  // B7 (ق-9): الشمول والسقف السنوي
+  const commendationRules = applyCommendationRules(context.commendations || [], 'increment', context);
+  const commendations = commendationRules.eligible;
+  for (const { c, reason } of commendationRules.excluded) {
+    const od = c.orderDate || c.order_date;
+    if (!od || !isDateOnOrAfter(od, lastIncr)) continue;
+    deferredItems.push({
+      id: c.id, type: 'commendation', originalDate: od, effect: 'كتاب شكر غير محتسب',
+      reason: `كتاب شكر رقم (${c.orderNumber || c.order_number || '—'}): ${reason}`,
+      status: 'غير_محتسب', description: `كتاب شكر رقم (${c.orderNumber || c.order_number || '—'}) بتاريخ (${od}): ${reason}`,
+    } as any);
+  }
   let commendationMonths = 0;
   let appliedCommendationsCount = 0;
 
@@ -1027,7 +1142,8 @@ export function calculateIncrementEligibility(
         description: `عقوبة (${pType}) بتاريخ (${pDate}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
       });
     } else {
-      penaltyDelayMonths += delay;
+      // B7 (ق-10): تعدد العقوبات بنفس الدورة = الأشد فقط (أطول تأخير)، مو المجموع
+      penaltyDelayMonths = Math.max(penaltyDelayMonths, delay);
       appliedPenaltiesCount++;
     }
   });
@@ -1336,7 +1452,18 @@ export function calculatePromotionEligibility(
   });
 
   // 6. Evaluate Commendations for Promotion (Modifier 1)
-  const commendations = context.commendations || [];
+  // B7 (ق-9): الشمول والسقف السنوي
+  const commendationRules = applyCommendationRules(context.commendations || [], 'promotion', context);
+  const commendations = commendationRules.eligible;
+  for (const { c, reason } of commendationRules.excluded) {
+    const od = c.orderDate || c.order_date;
+    if (!od || !isDateOnOrAfter(od, lastPromo)) continue;
+    deferredItems.push({
+      id: c.id, type: 'commendation', originalDate: od, effect: 'كتاب شكر غير محتسب',
+      reason: `كتاب شكر رقم (${c.orderNumber || c.order_number || '—'}): ${reason}`,
+      status: 'غير_محتسب', description: `كتاب شكر رقم (${c.orderNumber || c.order_number || '—'}) بتاريخ (${od}): ${reason}`,
+    } as any);
+  }
   let commendationMonths = 0;
   let appliedCommendationsCount = 0;
 
@@ -1400,7 +1527,8 @@ export function calculatePromotionEligibility(
         description: `عقوبة (${pType}) بتاريخ (${pDate}) مؤجلة لدورة الاستحقاق التالية لاكتمال الاستحقاق الحالي باحتساب الخدمة.`,
       });
     } else {
-      penaltyDelayMonths += delay;
+      // B7 (ق-10): تعدد العقوبات بنفس الدورة = الأشد فقط (أطول تأخير)، مو المجموع
+      penaltyDelayMonths = Math.max(penaltyDelayMonths, delay);
       appliedPenaltiesCount++;
     }
   });

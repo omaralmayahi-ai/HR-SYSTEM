@@ -702,6 +702,24 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
   });
 
 
+
+  // B7 (ق-9): شمول كتاب الشكر (علاوة/ترفيع/كلاهما) وسقفه السنوي الخاص
+  function parseCommendationTypeExtras(body: any): { error?: string; values: any } {
+    const values: any = {};
+    const applies = body.applies_to ?? body.appliesTo;
+    if (applies !== undefined) {
+      if (!['كلاهما', 'علاوة', 'ترفيع'].includes(String(applies))) return { error: 'الشمول: كلاهما أو علاوة أو ترفيع', values };
+      values.appliesTo = String(applies);
+    }
+    const cap = body.annual_cap ?? body.annualCap;
+    if (cap !== undefined) {
+      const n = cap === '' || cap === null ? null : parseInt(cap);
+      if (n !== null && (isNaN(n) || n < 1 || n > 50)) return { error: 'السقف السنوي رقم بين 1 و50 أو فارغ', values };
+      values.annualCap = n;
+    }
+    return { values };
+  }
+
   // B5 (ق-7): مدى الدرجة والسند وتواريخ النفاذ للعنوان الوظيفي
   function parseTitleExtras(body: any, minGradeVal: number | undefined): { error?: string; values: any } {
     const values: any = {};
@@ -830,10 +848,13 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
   app.post('/api/commendation-types', requireAuth, requireAdmin, async (req, res) => {
     const { name, credit_months, creditMonths, status, notes } = req.body;
     const cMonths = parseInt(credit_months ?? creditMonths ?? 1);
+    const extras = parseCommendationTypeExtras(req.body || {});
+    if (extras.error) return res.status(400).json({ error: extras.error });
     try {
       const [inserted] = await db.insert(schema.commendationTypes).values({
         name,
         creditMonths: cMonths,
+        ...extras.values,
         status: status || 'فعال',
         notes: notes || '',
       }).returning();
@@ -861,6 +882,9 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
       const updateData: any = { updatedAt: new Date() };
       if (name !== undefined) updateData.name = name;
       if (cMonths !== undefined) updateData.creditMonths = cMonths;
+      const extras = parseCommendationTypeExtras(req.body || {});
+      if (extras.error) return res.status(400).json({ error: extras.error });
+      Object.assign(updateData, extras.values);
       if (status !== undefined) updateData.status = status;
       if (notes !== undefined) updateData.notes = notes;
 
@@ -931,18 +955,24 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
 
     let creditMonthsSnapshot = data.credit_months_snapshot !== undefined ? parseInt(data.credit_months_snapshot) : (data.creditMonthsSnapshot !== undefined ? parseInt(data.creditMonthsSnapshot) : undefined);
-    if (creditMonthsSnapshot === undefined && (data.commendation_type_id || data.commendationTypeId)) {
+    // B7: نوع الكتاب من القاعدة (كان من مخزن ذاكرة فارغ منذ B2، فكل كتاب ياخذ شهراً واحداً)
+    let appliesToSnapshot = 'كلاهما';
+    if (data.commendation_type_id || data.commendationTypeId) {
       const typeId = parseInt(data.commendation_type_id || data.commendationTypeId);
-      const foundType = inMemoryCommendationTypes.find(t => t.id === typeId);
-      creditMonthsSnapshot = foundType ? (foundType.credit_months || foundType.creditMonths || 1) : 1;
+      const [foundType] = await db.select().from(schema.commendationTypes).where(eq(schema.commendationTypes.id, typeId));
+      if (!foundType) return res.status(400).json({ error: 'نوع كتاب الشكر غير موجود' });
+      // أشهر القدَم من النوع؛ تجاوزها يدوياً للمدير فقط
+      if (creditMonthsSnapshot === undefined || isNaN(creditMonthsSnapshot) || (req as any).user?.role !== 'admin') creditMonthsSnapshot = foundType.creditMonths ?? 1;
+      appliesToSnapshot = foundType.appliesTo || 'كلاهما';
     }
-    if (creditMonthsSnapshot === undefined) creditMonthsSnapshot = 1;
+    if (creditMonthsSnapshot === undefined || isNaN(creditMonthsSnapshot) || creditMonthsSnapshot < 0 || creditMonthsSnapshot > 24) creditMonthsSnapshot = 1;
 
     try {
       const [inserted] = await db.insert(schema.employeeCommendations).values({
         employeeId,
         commendationTypeId: data.commendation_type_id ? parseInt(data.commendation_type_id) : (data.commendationTypeId ? parseInt(data.commendationTypeId) : null),
         creditMonthsSnapshot,
+        appliesToSnapshot,
         orderNumber: data.order_number || data.orderNumber,
         orderDate: data.order_date || data.orderDate,
         issuer: data.issuer || 'الوزارة',
@@ -979,7 +1009,12 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
       if (data.reason !== undefined) updateData.reason = data.reason;
       if (data.is_hidden !== undefined || data.isHidden !== undefined) updateData.isHidden = data.is_hidden ?? data.isHidden;
       if (data.notes !== undefined) updateData.notes = data.notes;
-      if (data.credit_months_snapshot !== undefined || data.creditMonthsSnapshot !== undefined) updateData.creditMonthsSnapshot = parseInt(data.credit_months_snapshot || data.creditMonthsSnapshot);
+      if ((data.credit_months_snapshot !== undefined || data.creditMonthsSnapshot !== undefined) && (req as any).user?.role === 'admin') {
+        const m = parseInt(data.credit_months_snapshot ?? data.creditMonthsSnapshot);
+        if (isNaN(m) || m < 0 || m > 24) return res.status(400).json({ error: 'أشهر القدَم بين 0 و24' });
+        updateData.creditMonthsSnapshot = m; // B7: تصحيح اللقطة للمدير فقط
+      }
+      if (Object.keys(updateData).length === 0) return res.status(400).json({ error: 'لا حقول للتعديل' });
 
       const [updated] = await db.update(schema.employeeCommendations)
         .set(updateData)

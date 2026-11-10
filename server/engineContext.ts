@@ -29,6 +29,7 @@ const parseJson = (v: any, fallback: any) => {
 export interface LoadedEngineContext {
   employee: any | null;
   weeksPerPromotion?: number; // B6 (ق-13)
+  commendationTypes?: any[]; // B7 (ق-9)
   commendations: any[];
   penalties: any[];
   attendances: any[];
@@ -111,12 +112,13 @@ export async function loadEngineContext(db: any, schema: any, empId: number): Pr
     db.select().from(schema.gradePromotionRules),
     db.select().from(schema.commendationRulesSettings).limit(1),
     loadWeeksPerPromotion(db, schema),
+    schema.commendationTypes ? db.select().from(schema.commendationTypes) : Promise.resolve([]),
   ]);
   const t: any = { emps: results[0] };
   PER_EMPLOYEE.forEach(([key], i) => { t[key] = results[i + 1]; });
   const n = PER_EMPLOYEE.length + 1;
   t.courses = results[n]; t.gradeRules = results[n + 1]; t.commendationRules = results[n + 2];
-  return { ...assemble(t as RawTables), weeksPerPromotion: results[n + 3] };
+  return { ...assemble(t as RawTables), weeksPerPromotion: results[n + 3], commendationTypes: (results[n + 4] || []).map(bothCases) };
 }
 
 /**
@@ -131,6 +133,7 @@ export async function loadAllEngineContexts(db: any, schema: any) {
     db.select().from(schema.gradePromotionRules),
     db.select().from(schema.commendationRulesSettings).limit(1),
     loadWeeksPerPromotion(db, schema),
+    schema.commendationTypes ? db.select().from(schema.commendationTypes) : Promise.resolve([]),
   ]);
   const employees: any[] = results[0];
   const grouped: Record<string, Map<number, any[]>> = {};
@@ -147,7 +150,7 @@ export async function loadAllEngineContexts(db: any, schema: any) {
     get(empId: number): LoadedEngineContext {
       const t: any = { emps: byId.has(empId) ? [byId.get(empId)] : [], ...shared };
       for (const [key] of PER_EMPLOYEE) t[key] = grouped[key].get(empId) || [];
-      return { ...assemble(t as RawTables), weeksPerPromotion: results[n + 3] };
+      return { ...assemble(t as RawTables), weeksPerPromotion: results[n + 3], commendationTypes: (results[n + 4] || []).map(bothCases) };
     },
   };
 }
