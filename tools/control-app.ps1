@@ -6,7 +6,7 @@
 #  -ScheduledBackup : يُستدعى من المهمة المجدولة HRSystemBackup لأخذ نسخة احتياطية بدون واجهة.
 #  -RestartNow      : يُعيد تشغيل الخادم مباشرة بصلاحية المدير بدون فتح الواجهة.
 #  -Action <اسم>    : وضع سطر الأوامر بدون واجهة (يستدعيه control-app.bat عند تمرير أمر):
-#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | dbreport | localdiff | importlocal | logs | help
+#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | dbreport | localdiff | importlocal | retirelocal | logs | help
 #  -Yes             : موافقة تلقائية على أسئلة التأكيد في وضع سطر الأوامر.
 # =====================================================================
 param([switch]$ScheduledBackup, [switch]$RestartNow, [string]$Action = '', [switch]$Yes)
@@ -513,7 +513,7 @@ function Start-App {
     $h = Wait-ForServer 40
     if ($h.Running) {
         Write-Log "✔ النظام يعمل على $(Get-AppUrl)"
-        if (-not $h.Db) { Write-Log '⚠ تنبيه: قاعدة البيانات غير متصلة — النظام يعمل بالتخزين المحلي الاحتياطي. استخدم "فحص النظام".' }
+        if (-not $h.Db) { Write-Log '⚠ تنبيه: قاعدة البيانات غير متصلة — النظام متوقف عن الحفظ والعرض حتى تعود (لا تخزين احتياطي). استخدم "فحص النظام".' }
     } else {
         throw 'لم يبدأ النظام خلال 40 ثانية. راجع "عرض سجلّ الخادم".'
     }
@@ -1377,7 +1377,7 @@ function Invoke-SystemCheck {
     }
 
     $localFile = Join-Path $script:DataDir 'local_storage.json'
-    if (Test-Path $localFile) { Write-Log ("   التخزين المحلي الاحتياطي: " + [math]::Round((Get-Item $localFile).Length / 1MB, 1) + ' MB') }
+    if (Test-Path $localFile) { Write-Log ("⚠ ملف التخزين البديل القديم ما زال موجوداً (" + [math]::Round((Get-Item $localFile).Length / 1MB, 1) + ' MB) ولم يعد يُستعمل — بعد النقل: control-app.bat retirelocal') }
 
     if (Test-Path (Join-Path $script:AppDir 'node_modules')) { Write-Log "$ok المكتبات منصّبة" } else { Write-Log "$bad المكتبات غير منصّبة" }
     if (Test-Built) { Write-Log "$ok النظام مبني (آخر بناء: $((Get-Item (Join-Path $script:AppDir $script:ServerFile)).LastWriteTime.ToString('yyyy-MM-dd HH:mm')))" } else { Write-Log "$bad النظام غير مبني" }
@@ -1723,6 +1723,18 @@ if ($script:Cli) {
                     if ($was) { Start-App }
                 }
             }
+            'retirelocal' {
+                # B2e: تقاعد data\local_storage.json (نقل إلى data\retired، لا حذف)
+                $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
+                if (-not (Confirm-Action 'سيُوقف النظام، وتُؤخذ نسخة احتياطية، ثم يُنقل local_storage.json إلى data\retired (لا يُحذف)، ثم يُعاد التشغيل. متابعة؟' 'تقاعد التخزين البديل')) { Write-Host 'أُلغي.'; exit 0 }
+                $was = Test-AppActive
+                [void](New-Backup 'before-retire-local')
+                if ($was) { Stop-App }
+                try {
+                    $code = Invoke-Logged $npm 'run -s db:retire-local' 'تقاعد التخزين البديل...'
+                    if ($code -ne 0) { throw 'لم يتم التقاعد (راجع الرسالة أعلاه).' }
+                } finally { if ($was) { Start-App } }
+            }
             'dbreport' {
                 $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
                 $code = Invoke-Logged $npm 'run -s db:report' 'تقرير بيانات القاعدة (قراءة فقط)...'
@@ -1743,6 +1755,7 @@ if ($script:Cli) {
                 Write-Host '  dbstatus  حالة الترحيلات وفروقات القاعدة (قراءة فقط)'
                 Write-Host '  localdiff مقارنة data\local_storage.json بقاعدة البيانات (قراءة فقط)'
                 Write-Host '  importlocal نقل ما وُوفق عليه من local_storage.json إلى القاعدة (تجربة ثم نسخة ثم نقل)'
+                Write-Host '  retirelocal نقل local_storage.json إلى data\retired بعد النقل (لا حذف)'
                 Write-Host '  dbreport  تكرار المعرّفات الفريدة والأعمدة غير المعرّفة وبياناتها (قراءة فقط)'
                 Write-Host '  logs      آخر 80 سطراً من سجل الخادم'
                 if ($act -ne 'help') { exit 1 }

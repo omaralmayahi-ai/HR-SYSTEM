@@ -6,17 +6,20 @@ import * as schema from './schema.ts';
 const { Pool } = pkg;
 
 // Function to create a new connection pool.
-export const createPool = () => {
+// B2: المهلة رُفعت من 4 إلى 10 ث — أغلب حوادث «Database fallback» في سجل التشغيل كانت
+// «Connection terminated due to connection timeout» تحت ضغط القراءات الثقيلة لا انقطاعاً حقيقياً.
+export const createPool = (overrides: Record<string, any> = {}) => {
   const p = new Pool({
     host: process.env.SQL_HOST,
     port: process.env.SQL_PORT ? Number(process.env.SQL_PORT) : undefined,
     user: process.env.SQL_USER,
     password: process.env.SQL_PASSWORD,
     database: process.env.SQL_DB_NAME,
-    connectionTimeoutMillis: 4000,
+    connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
     max: 20,
     keepAlive: true,
+    ...overrides,
   });
   p.on('error', (err) => {
     console.warn('[PG-POOL] Idle client error (will reconnect automatically):', err?.message);

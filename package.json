@@ -17,6 +17,7 @@
     "db:report": "tsx tools/db/report.ts",
     "db:localdiff": "tsx tools/db/localdiff.ts",
     "db:import-local": "tsx tools/db/import-local.ts",
+    "db:retire-local": "tsx tools/db/retire-local.ts",
     "test": "vitest run",
     "preview": "vite preview"
   },

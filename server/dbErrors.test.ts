@@ -48,10 +48,11 @@ describe('classifyDbError', () => {
 });
 
 describe('respondIfDbWriteError', () => {
-  it('returns false (offline fallback) on a connection failure and sends nothing', () => {
+  it('B2d (q-2): a connection failure is answered with 503 DB_UNAVAILABLE, no offline fallback', () => {
     const res = fakeRes();
-    expect(respondIfDbWriteError(res, { code: 'ECONNREFUSED' }, 'x')).toBe(false);
-    expect(res.status).not.toHaveBeenCalled();
+    expect(respondIfDbWriteError(res, { code: 'ECONNREFUSED' }, 'x')).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(res.body.code).toBe('DB_UNAVAILABLE');
   });
   it('responds with an error and returns true on a data error', () => {
     const res = fakeRes();
