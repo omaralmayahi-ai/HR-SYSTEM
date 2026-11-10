@@ -271,3 +271,26 @@ describe('B4a: payroll eligibility from the status table', () => {
     expect([{ status: 'مستمر' }].filter(isPayrollActiveEmployee)).toHaveLength(1);
   });
 });
+
+describe('B4d: العلاوة السنوية من السلّم النافذ', () => {
+  it('تُشتق من المرحلة 2 − المرحلة 1', async () => {
+    const { buildSalaryScaleMap, ANNUAL_INCREMENTS } = await import('./salaryTable.js');
+    // الجدول الملحق بقانون 22/2008: الدرجة 10 تبدأ 140 ألف بعلاوة 4 آلاف، والدرجة 3 تبدأ 621 بعلاوة 12
+    buildSalaryScaleMap([
+      { grade: 10, step: 1, amount: 140000 }, { grade: 10, step: 2, amount: 144000 },
+      { grade: 3, step: 1, amount: 621000 }, { grade: 3, step: 2, amount: 633000 },
+    ]);
+    expect(ANNUAL_INCREMENTS[10]).toBe(4000);
+    expect(ANNUAL_INCREMENTS[3]).toBe(12000);
+  });
+  it('ترحيل 0009 يحمل الجدول الملحق بالقانون ويجعله نافذاً', async () => {
+    const fs = await import('node:fs');
+    const sqlText = fs.readFileSync(new URL('../../drizzle/0009_salary_scale_versions.sql', import.meta.url), 'utf8');
+    expect(sqlText).toContain('(10, 1, 140000');
+    expect(sqlText).toContain('(9, 1, 185000');
+    expect(sqlText).toContain('(8, 5, 260000'); // المادة 4: المعاهد بالمرحلة 5 من الدرجة 8 = 260 ألف
+    expect(sqlText).toContain('(1, 1, 948000');
+    expect(sqlText).toContain('(5, 3, 443000'); // المادة 4 المعدلة: الدكتوراه 443 ألف
+    expect(sqlText).toMatch(/'2008-05-12', true/);
+  });
+});

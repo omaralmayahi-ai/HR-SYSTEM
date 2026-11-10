@@ -765,6 +765,20 @@ export const documentsRelations = relations(documents, ({ one }) => ({
 }));
 
 // 22. Salary Scale table
+// B4d (ق-5): سلّم الرواتب بإصدارات؛ إصدار واحد نافذ، وكل إصدار قابل للتعديل
+export const salaryScaleVersions = pgTable('salary_scale_versions', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique('salary_scale_versions_name_key'),
+  legalBasis: text('legal_basis'), // السند القانوني
+  effectiveFrom: date('effective_from', { mode: 'string' }),
+  isActive: boolean('is_active').notNull().default(false),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }),
+}, (t) => [
+  uniqueIndex('salary_scale_versions_single_active').on(t.isActive).where(sql`${t.isActive}`),
+]);
+
 export const salaryScale = pgTable('salary_scale', {
   id: serial('id').primaryKey(),
   grade: integer('grade').notNull(), // الدرجة
@@ -772,7 +786,11 @@ export const salaryScale = pgTable('salary_scale', {
   amount: integer('amount').notNull(), // مبلغ الراتب الاسمي
   effectiveFrom: text('effective_from'), // تاريخ بدء السريان (نقطة انطلاق التتبع - خط الأساس)
   createdAt: timestamp('created_at').defaultNow(),
-});
+  versionId: integer('version_id'), // B4d
+}, (t) => [
+  foreignKey({ name: 'salary_scale_version_fkey', columns: [t.versionId], foreignColumns: [salaryScaleVersions.id] }).onDelete('restrict'),
+  uniqueIndex('salary_scale_version_grade_step').on(t.versionId, t.grade, t.step),
+]);
 
 // 23. Allowances and Deductions table
 export const allowancesDeductions = pgTable('allowances_deductions', {

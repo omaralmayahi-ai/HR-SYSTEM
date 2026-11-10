@@ -64,6 +64,13 @@
       "when": 1794304241914,
       "tag": "0008_history_capture_trigger",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794305212702,
+      "tag": "0009_salary_scale_versions",
+      "breakpoints": true
     }
   ]
 }

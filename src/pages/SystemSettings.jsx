@@ -21,6 +21,7 @@ import { useAuth } from '@/lib/AuthContext';
 
 // Sub-settings components
 import SalaryScaleSettings from '@/components/SalaryScaleSettings';
+import SalaryScaleVersions from '@/components/SalaryScaleVersions';
 import LeaveTypesSettings from '@/components/LeaveTypesSettings';
 import EducationDegreesSettings from '@/components/EducationDegreesSettings';
 import FinancialRulesSettings from '@/components/FinancialRulesSettings';
@@ -112,6 +113,7 @@ export default function SystemSettings() {
   const { appPublicSettings } = useAuth();
   const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
   const [activeTab, setActiveTab] = useState('salaryScale');
+  const [scaleKey, setScaleKey] = useState(0); // B4d: إعادة تحميل السلّم بعد تفعيل إصدار
   const [tabs, setTabs] = useState(DEFAULT_TABS);
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
@@ -239,7 +241,8 @@ export default function SystemSettings() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.18 }}
             >
-              <SalaryScaleSettings />
+              <SalaryScaleVersions onChanged={() => setScaleKey(k => k + 1)} />
+              <SalaryScaleSettings key={scaleKey} />
             </motion.div>
           )}
 
