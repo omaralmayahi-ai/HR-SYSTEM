@@ -1,6 +1,6 @@
 // src/db/schema.ts
 import { relations, sql } from 'drizzle-orm';
-import { boolean, foreignKey, index, integer, jsonb, numeric, pgTable, real, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, date, foreignKey, index, integer, jsonb, numeric, pgTable, real, serial, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 // 1. Users table (Custom Username and Password)
 export const users = pgTable('users', {
@@ -1243,3 +1243,48 @@ export const appSettingsDocuments = pgTable('app_settings_documents', {
   updatedAt: timestamp('updated_at').defaultNow(),
   updatedBy: text('updated_by'),
 });
+
+// ============================================================================
+// B4b: الأوامر الإدارية والسجل الوظيفي المؤرخ (ق-4)
+// ============================================================================
+
+export const administrativeOrders = pgTable('administrative_orders', {
+  id: serial('id').primaryKey(),
+  orderNumber: text('order_number').notNull(),
+  orderDate: date('order_date', { mode: 'string' }).notNull(),
+  issuer: text('issuer'), // الجهة المصدرة
+  subject: text('subject'),
+  orderKind: text('order_kind'), // ترفيع / علاوة / نقل / تكليف / تغيير حالة / ...
+  effectiveDate: date('effective_date', { mode: 'string' }), // تاريخ النفاذ الافتراضي لحركات الأمر
+  cancelsOrderId: integer('cancels_order_id'), // هذا الأمر يلغي أمراً سابقاً
+  notes: text('notes'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  foreignKey({ name: 'administrative_orders_cancels_fkey', columns: [t.cancelsOrderId], foreignColumns: [t.id] }).onDelete('restrict'),
+  // الجهة الفارغة تُعامل كقيمة (حتى ما يتكرر نفس الأمر بلا جهة)
+  uniqueIndex('administrative_orders_identity').on(t.orderNumber, t.orderDate, sql`coalesce(${t.issuer}, '')`),
+]);
+
+// سجل إلحاقي فقط: لا يُعدَّل صف ولا يُحذف. نهاية كل فترة = بداية الصف التالي لنفس الحقل
+// (العرض employee_field_timeline). التصحيح صف جديد يشير للمُصحَّح بـ supersedes_id.
+export const employeeFieldHistory = pgTable('employee_field_history', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id').notNull(),
+  field: text('field').notNull(), // grade, step, job_title, ... أو 'event' لحدث بلا تغيير حقل
+  value: jsonb('value'),
+  validFrom: date('valid_from', { mode: 'string' }), // فارغ = قبل بدء السجل (تقديري بلا تاريخ معروف)
+  orderId: integer('order_id'),
+  source: text('source').notNull(), // تقديري | أمر | تعديل مباشر | ترحيل قديم
+  reason: text('reason'),
+  snapshot: jsonb('snapshot'), // صف الموظف لحظة التسجيل
+  supersedesId: integer('supersedes_id'),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
+  recordedBy: text('recorded_by'),
+}, (t) => [
+  foreignKey({ name: 'employee_field_history_employee_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('restrict'),
+  foreignKey({ name: 'employee_field_history_order_fkey', columns: [t.orderId], foreignColumns: [administrativeOrders.id] }).onDelete('restrict'),
+  foreignKey({ name: 'employee_field_history_supersedes_fkey', columns: [t.supersedesId], foreignColumns: [t.id] }).onDelete('restrict'),
+  index('employee_field_history_emp_field').on(t.employeeId, t.field, t.validFrom),
+  index('employee_field_history_order').on(t.orderId),
+]);

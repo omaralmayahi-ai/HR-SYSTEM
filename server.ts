@@ -14,6 +14,8 @@ import type { RouteContext } from './server/context.ts';
 import { registerTrainerRoutes } from './server/routes/trainers.ts';
 import { registerWorkLocationRoutes } from './server/routes/workLocations.ts';
 import { registerLookupRoutes } from './server/routes/lookups.ts';
+import { registerCareerHistoryRoutes } from './server/routes/careerHistory.ts';
+import { startDueMovementsJob } from './server/careerMovements.ts';
 import { registerAnnualPlanRoutes } from './server/routes/annualPlans.ts';
 import { registerSalaryRoutes } from './server/routes/salaries.ts';
 import { registerAttendanceRoutes } from './server/routes/attendance.ts';
@@ -2274,6 +2276,7 @@ async function startServer() {
   registerSalaryRoutes(app, routeCtx);
   registerAttendanceRoutes(app, routeCtx);
   registerOrgUnitRoutes(app, routeCtx);
+  registerCareerHistoryRoutes(app, routeCtx); // B4b
   const settingsLists = registerSettingsListRoutes(app, {
     SALARY_TABLE, asc, bothCases, camelToSnake, checkReferentialUsage, db, desc, eq, inMemoryEmployees: mem.inMemoryEmployees, jobTitlesCache,
     logRecalcError, mapKeys, registerLookupRoutes, registerWorkLocationRoutes, requireAdmin, requireAuth, requireWriter,
@@ -2314,6 +2317,7 @@ async function startServer() {
   const HOST = process.env.HOST || '0.0.0.0';
   app.listen(PORT, HOST, async () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    startDueMovementsJob(db, schema); // B4b: الحركات المؤجلة لتاريخ نفاذ لاحق
     await seedAdminUser();
   });
 }
