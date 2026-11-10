@@ -58,10 +58,17 @@ export function classifyDbError(err: any, operation = 'حفظ البيانات')
  * - Connection failure  → logs a warning and returns false (caller continues with the offline fallback).
  * - Any other DB error → logs it, sends an HTTP error response and returns true (caller must `return`).
  */
+// B2d (ق-2): لا تخزين احتياطي. انقطاع القاعدة = 503 برسالة واضحة، ويُبلَّغ مُستمع البوابة ليعيد الفحص.
+let onConnectionFailure: (() => void) | null = null;
+export function setDbConnectionFailureListener(fn: (() => void) | null) { onConnectionFailure = fn; }
+const DB_DOWN = 'قاعدة البيانات غير متاحة حالياً. لم يُحفظ شيء. أعد المحاولة بعد قليل.';
+
 export function respondIfDbWriteError(res: any, err: any, operation = 'حفظ البيانات'): boolean {
   if (isDbConnectionFailure(err)) {
-    console.warn(`[DB-OFFLINE] ${operation}: تعذّر الاتصال بقاعدة البيانات، سيُستخدم التخزين الاحتياطي`);
-    return false;
+    console.warn(`[DB-OFFLINE] ${operation}: تعذّر الاتصال بقاعدة البيانات — رُفض الطلب (لا تخزين احتياطي)`);
+    onConnectionFailure?.();
+    if (res && !res.headersSent) res.status(503).json({ error: DB_DOWN, code: 'DB_UNAVAILABLE' });
+    return true;
   }
   const inner = unwrapDbError(err);
   const classified = classifyDbError(err, operation);
@@ -94,7 +101,8 @@ export function sendRouteError(res: any, err: any, operation = 'تنفيذ ال�
   }
   if (isDbConnectionFailure(err)) {
     console.warn(`[DB-OFFLINE] ${operation}: ${unwrapDbError(err)?.message || err}`);
-    return res.status(503).json({ error: `تعذّر ${operation}: قاعدة البيانات غير متاحة حالياً` });
+    onConnectionFailure?.();
+    return res.status(503).json({ error: `تعذّر ${operation}: قاعدة البيانات غير متاحة حالياً`, code: 'DB_UNAVAILABLE' });
   }
   const inner = unwrapDbError(err);
   if (inner?.code && /^[0-9A-Z]{5}$/.test(String(inner.code))) {

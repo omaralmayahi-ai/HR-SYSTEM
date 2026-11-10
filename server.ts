@@ -5,9 +5,10 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { db, schema, eq, and, or, desc, asc, getSchemaHealth, pool } from './src/db/index.ts';
+import { db, schema, eq, and, or, desc, asc, getSchemaHealth, pool, createPool } from './src/db/index.ts';
 import { runMigrations, getMigrationStatus } from './server/migrate.ts';
 import { normalizeEmployeeIdentifiers } from './server/employeeIdentifiers.ts';
+import { createDbGate } from './server/dbGate.ts';
 import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
 import { requireAuth, requireAdmin, requireWriter, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
@@ -19,7 +20,7 @@ import { recalculateEligibilitySync, EngineContextData, formatDateString, isDate
 import { calculateDegreeTrackSimulation, processDegreeTrackSettlement, processBatchDegreeTrackAutoSettlement } from './src/lib/degreeTrackEngine.ts';
 import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src/lib/promotionDelayReasonsEngine.ts';
 import { checkReferentialUsage, isDbConnectionFailure } from './src/lib/referentialIntegrity.ts';
-import { respondIfDbWriteError, sendRouteError, HttpError, classifyDbError } from './server/dbErrors.ts';
+import { respondIfDbWriteError, sendRouteError, HttpError, classifyDbError, setDbConnectionFailureListener } from './server/dbErrors.ts';
 import { installRouteRegistry } from './server/routeRegistry.ts';
 import { syncEnrollmentToTrainingCourses } from './server/trainingSync.ts';
 import { resolveAccrualParams, accrueBalance, isValidAccrualMonth, ACCRUAL_ELIGIBLE_STATUSES, ACCRUAL_UPDATE_SQL, ACCRUAL_CLAIM_SQL, LEGAL_MONTHLY_REGULAR_LEAVE_DAYS, LEGAL_MAX_REGULAR_LEAVE_ACCUMULATION, DEFAULT_MONTHLY_SICK_LEAVE_DAYS, DEFAULT_MAX_SICK_LEAVE_ACCUMULATION } from './server/leaveAccrual.ts';
@@ -74,6 +75,16 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+  // B2d (ق-2): بوابة انقطاع القاعدة. الصحة من مجمّع مستقل باتصال واحد (لا يتأثر بازدحام المجمّع الرئيسي).
+  const healthPool = createPool({ max: 1, connectionTimeoutMillis: 3000, idleTimeoutMillis: 60000 });
+  const dbGate = createDbGate(async () => { await healthPool.query('SELECT 1'); return true; });
+  setDbConnectionFailureListener(() => dbGate.invalidate());
+  app.get('/api/health', async (_req, res) => {
+    const up = await dbGate.isUp();
+    res.status(up ? 200 : 503).json({ status: up ? 'ok' : 'db_unavailable', db: up ? 'up' : 'down', migrations: getMigrationStatus().status });
+  });
+  app.use('/api', dbGate.middleware);
 
   // System Settings Store & API
   let systemSettingsStore: any = {
@@ -155,23 +166,14 @@ async function startServer() {
     }
 
     if (!dbAvailable) {
-      // وضع عدم الاتصال: التخزين الاحتياطي في الذاكرة، مع منع التكرار بمفتاح الشهر
-      if (systemSettingsStore.lastLeaveAccrualMonth === currentMonth || leaveAccrualLogs.some(l => l.month === currentMonth)) {
-        alreadyExecuted = true;
-      } else {
-        for (const emp of inMemoryEmployees) {
-          const st = emp.status;
-          if (!st || ACCRUAL_ELIGIBLE_STATUSES.includes(st)) {
-            const newReg = accrueBalance(emp.initialRegularLeaveBalance ?? emp.initial_regular_leave_balance, params.regularDays, params.regularCap);
-            const newSick = accrueBalance(emp.initialSickLeaveBalance ?? emp.initial_sick_leave_balance, params.sickDays, params.sickCap);
-            emp.initialRegularLeaveBalance = newReg;
-            emp.initial_regular_leave_balance = newReg;
-            emp.initialSickLeaveBalance = newSick;
-            emp.initial_sick_leave_balance = newSick;
-            processedCount++;
-          }
-        }
-      }
+      // B2d (ق-2، مراجعة B2: M3): لا ترحيل في الذاكرة. الشهر لا يُعلَّم منفّذاً، والمهمة الساعية تعيد المحاولة.
+      console.warn(`[LEAVE-ACCRUAL] قاعدة البيانات غير متاحة؛ لم يُرحَّل شهر ${currentMonth}، ستُعاد المحاولة.`);
+      return {
+        success: false,
+        offline: true,
+        month: currentMonth,
+        message: `قاعدة البيانات غير متاحة؛ لم يُطبَّق ترحيل شهر ${currentMonth}. سيُعاد تلقائياً عند عودة القاعدة.`
+      };
     }
 
     if (alreadyExecuted) {
@@ -312,7 +314,8 @@ async function startServer() {
       const { month } = req.body || {};
       // ملاحظة: خيار force أُلغي — الشهر يُرحَّل مرة واحدة فقط (يُسجَّل في leave_accrual_runs).
       const actor = req.user?.username ? `مسؤول (يدوياً): ${req.user.username}` : 'مسؤول الموارد البشرية (يدوياً)';
-      const result = await executeMonthlyLeaveAccrual(month, actor);
+      const result: any = await executeMonthlyLeaveAccrual(month, actor);
+      if (result?.offline) return res.status(503).json({ error: result.message, code: 'DB_UNAVAILABLE' });
       res.json(result);
     } catch (err: any) {
       sendRouteError(res, err, 'تنفيذ الترحيل الشهري للإجازات');
@@ -327,7 +330,7 @@ async function startServer() {
         .from(schema.activityLogs)
         .orderBy(desc(schema.activityLogs.createdAt))
         .limit(100);
-      if (dbLogs && dbLogs.length > 0) {
+      { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         return res.json(dbLogs.map(l => ({
           id: l.id,
           action: l.action,
@@ -511,12 +514,11 @@ async function startServer() {
         role: schema.users.role,
         createdAt: schema.users.createdAt
       }).from(schema.users).orderBy(asc(schema.users.id));
-      if (allUsers && allUsers.length > 0) {
+      { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         return res.json(allUsers);
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for users list');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryUsers.map(({ password, ...safeUser }) => safeUser));
   });
@@ -1488,10 +1490,7 @@ async function startServer() {
     res.json({ ...getSchemaHealth(), migrations: getMigrationStatus() });
   });
 
-  app.post('/api/admin/reload-local-db', requireAuth, requireAdmin, async (req, res) => {
-    loadLocalDb();
-    res.json({ success: true, count: inMemoryEmployees.length });
-  });
+  // B2e: أُزيل POST /api/admin/reload-local-db (التخزين البديل متقاعد)
 
   // Employees API
   // مراجعة صفحة الموظفين (31-08-2026): بناء شروط الفلترة من جهة الخادم لمسار GET /api/employees
@@ -1691,9 +1690,6 @@ async function startServer() {
   };
 
   app.get('/api/employees', requireAuth, async (req, res) => {
-    if (!inMemoryEmployees || inMemoryEmployees.length === 0) {
-      loadLocalDb();
-    }
 
     // مسار الترقيم والفلترة من جهة الخادم: يُفعَّل فقط عند وجود معامل page في الطلب، حفاظاً على
     // التوافق التام مع كل الاستدعاءات القديمة الأخرى في النظام (الحضور، الرواتب، التقارير...) التي
@@ -1745,12 +1741,11 @@ async function startServer() {
       const allEmployees = statusFilter
         ? await db.select().from(schema.employees).where(eq(schema.employees.status, statusFilter)).orderBy(desc(schema.employees.createdAt))
         : await db.select().from(schema.employees).orderBy(desc(schema.employees.createdAt));
-      if (allEmployees && allEmployees.length > 0) {
+      { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         return res.json(allEmployees.map(enhanceEmployeeRecord));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for employees list');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const memList = statusFilter
       ? inMemoryEmployees.filter(e => String(e.status || 'مستمر') === statusFilter)
@@ -2039,8 +2034,7 @@ async function startServer() {
         return res.json(enhanceEmployeeRecord(employee));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for get employee by id');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const memEmp = inMemoryEmployees.find(e => parseInt(String(e.id)) === id);
     if (memEmp) {
@@ -2697,8 +2691,7 @@ async function startServer() {
         : await db.select().from(schema.leaveRequests).orderBy(desc(schema.leaveRequests.createdAt));
       return res.json(leaves.map(presentLeave));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة طلبات الإجازة');
-      console.warn('Database fallback (offline) for leaves list');
+      return sendRouteError(res, error, 'قراءة طلبات الإجازة'); // B2d: لا قراءة من الذاكرة
     }
     let memList = genericMemoryStores['leaves'] || inMemoryLeaves || [];
     if (empIdParam) {
@@ -2883,8 +2876,7 @@ async function startServer() {
       const results = await query.orderBy(desc(schema.penalties.createdAt));
       return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for penalties list');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const empIdParam = req.query.employeeId || req.query.employee_id;
     let memList = genericMemoryStores['penalties'] || inMemoryPenalties || [];
@@ -3020,8 +3012,7 @@ async function startServer() {
       const results = await query.orderBy(desc(schema.appreciations.createdAt));
       return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for appreciations list');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const empIdParam = req.query.employeeId || req.query.employee_id;
     let memList = genericMemoryStores['appreciations'] || inMemoryAppreciations || [];
@@ -3145,8 +3136,7 @@ async function startServer() {
         : await db.select().from(schema.performanceEvaluations).orderBy(desc(schema.performanceEvaluations.createdAt));
       return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for performance list');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const empIdParam = req.query.employeeId || req.query.employee_id;
     let memList = genericMemoryStores['performance'] || inMemoryPerformanceEvaluations || [];
@@ -3291,8 +3281,7 @@ async function startServer() {
         .orderBy(desc(schema.careerHistories.createdAt));
       return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for career history query');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const store = genericMemoryStores['career'] || inMemoryCareerHistories || [];
     const filtered = store.filter(item => parseInt(String(item.employee_id || item.employeeId)) === employeeId);
@@ -3476,8 +3465,7 @@ async function startServer() {
         : await db.select().from(schema.trainings).orderBy(desc(schema.trainings.startDate));
       return res.json(courses.map(enhanceTrainingRecord));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for trainings list');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const track = req.query.track as string;
     const year = req.query.year ? parseInt(req.query.year as string) : undefined;
@@ -3585,8 +3573,7 @@ async function startServer() {
       const enrollments = await query.orderBy(desc(schema.trainingEnrollments.createdAt));
       return res.json(enrollments.map(enhanceEnrollmentRecord));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for enrollments list');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const employeeId = req.query.employeeId ? parseInt(req.query.employeeId as string) : undefined;
     const trainingId = req.query.trainingId ? parseInt(req.query.trainingId as string) : undefined;
@@ -3695,8 +3682,7 @@ async function startServer() {
         return res.json(result.rows.map(enhanceTrainerRecord));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for trainers list');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryTrainers.map(enhanceTrainerRecord));
   });
@@ -3709,8 +3695,7 @@ async function startServer() {
         return res.json(enhanceTrainerRecord(result.rows[0]));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for trainer get by id');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const id = parseInt(req.params.id);
     const memTrainer = inMemoryTrainers.find(t => parseInt(String(t.id)) === id);
@@ -3899,8 +3884,7 @@ async function startServer() {
         return res.json(plans.map(enhancePlanRecord));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for annual plans list');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryAnnualPlans.map(enhancePlanRecord));
   });
@@ -3984,8 +3968,7 @@ async function startServer() {
       }));
       return res.json(mapped);
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for salary records');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json([]);
   });
@@ -4069,8 +4052,7 @@ async function startServer() {
       }));
       return res.json(mapped);
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for attendance records');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json([]);
   });
@@ -4177,7 +4159,7 @@ async function startServer() {
   app.get('/api/org-units', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.orgUnits);
-      if (records && records.length > 0) {
+      { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         return res.json(records.map(r => ({
           ...r,
           parent_id: r.parentId,
@@ -4185,8 +4167,7 @@ async function startServer() {
         })));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for org units');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryOrgUnits);
   });
@@ -4745,8 +4726,7 @@ async function startServer() {
         }
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for job titles');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     const statusParam = req.query.status as string;
     let list = inMemoryJobTitles;
@@ -5064,8 +5044,7 @@ async function startServer() {
         return res.json(records);
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for salary scale query');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     if (inMemorySalaryScale.length === 0) {
       inMemorySalaryScale = getUnifiedSalaryScaleDefaults();
@@ -5187,8 +5166,7 @@ async function startServer() {
         return res.json(records.map(r => mapKeys(r, camelToSnake)));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for grade promotion rules query');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryGradePromotionRules.map(r => mapKeys(r, camelToSnake)));
   });
@@ -5279,10 +5257,9 @@ async function startServer() {
   app.get('/api/commendation-types', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.commendationTypes).orderBy(asc(schema.commendationTypes.id));
-      if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
+      return res.json(records.map(r => mapKeys(r, camelToSnake)));
     } catch (e) {
-      if (!isDbConnectionFailure(e)) return sendRouteError(res, e, 'قراءة البيانات');
-      console.warn('Database fallback for commendation-types');
+      return sendRouteError(res, e, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryCommendationTypes.map(r => mapKeys(r, camelToSnake)));
   });
@@ -5376,10 +5353,9 @@ async function startServer() {
         query = db.select().from(schema.employeeCommendations).where(eq(schema.employeeCommendations.employeeId, employeeId)) as any;
       }
       const records = await query.orderBy(desc(schema.employeeCommendations.createdAt));
-      if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
+      return res.json(records.map(r => mapKeys(r, camelToSnake)));
     } catch (e) {
-      if (!isDbConnectionFailure(e)) return sendRouteError(res, e, 'قراءة البيانات');
-      console.warn('Database fallback for employee-commendations');
+      return sendRouteError(res, e, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = inMemoryEmployeeCommendations;
     if (employeeId) list = list.filter(r => r.employee_id === employeeId || r.employeeId === employeeId);
@@ -5510,8 +5486,7 @@ async function startServer() {
         return res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
       }
     } catch (e) {
-      if (!isDbConnectionFailure(e)) return sendRouteError(res, e, 'قراءة البيانات');
-      console.warn('Database fallback for commendation-rules-settings');
+      return sendRouteError(res, e, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(mapKeys(inMemoryCommendationRulesSettings, camelToSnake));
   });
@@ -5606,10 +5581,9 @@ async function startServer() {
       const records = await db.select().from(schema.allowancesDeductions)
         .where(includeArchived ? undefined : sql`${schema.allowancesDeductions.isArchived} IS NOT TRUE`)
         .orderBy(asc(schema.allowancesDeductions.id));
-      if (records && records.length > 0) return res.json(records);
+      return res.json(records);
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for allowances/deductions');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json((inMemoryAllowancesDeductions || []).filter(notArchived));
   });
@@ -5739,10 +5713,9 @@ async function startServer() {
   app.get('/api/work-locations', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.workLocations).orderBy(asc(schema.workLocations.id));
-      if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
+      return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for work locations');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryWorkLocations);
   });
@@ -5845,10 +5818,9 @@ async function startServer() {
   app.get('/api/service-types', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.serviceTypes).orderBy(asc(schema.serviceTypes.id));
-      if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
+      return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for service types');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryServiceTypes);
   });
@@ -5887,10 +5859,9 @@ async function startServer() {
   app.get('/api/employee-statuses', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.employeeStatuses).orderBy(asc(schema.employeeStatuses.id));
-      if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
+      return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for employee statuses');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryEmployeeStatuses);
   });
@@ -5985,10 +5956,9 @@ async function startServer() {
   app.get('/api/education-degrees', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.educationDegrees).orderBy(asc(schema.educationDegrees.id));
-      if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
+      return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for education degrees');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryEducationDegrees);
   });
@@ -6138,10 +6108,9 @@ async function startServer() {
   app.get('/api/responsibility-allowances', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.responsibilityAllowances).orderBy(asc(schema.responsibilityAllowances.id));
-      if (records && records.length > 0) return res.json(mapKeys(records, camelToSnake));
+      return res.json(mapKeys(records, camelToSnake));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for responsibility allowances');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryResponsibilityAllowances);
   });
@@ -6230,10 +6199,9 @@ async function startServer() {
   app.get('/api/leave-types', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.leaveTypes).orderBy(asc(schema.leaveTypes.id));
-      if (records && records.length > 0) return res.json(records.map(r => mapKeys(r, camelToSnake)));
+      return res.json(records.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for leave types');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(inMemoryLeaveTypes.map(r => mapKeys(r, camelToSnake)));
   });
@@ -6560,8 +6528,7 @@ async function startServer() {
       const records = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
       return res.json(mapKeys(records.map(enrichPenaltyRecord), camelToSnake));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة أنواع العقوبات');
-      console.warn('Database fallback for penalty types');
+      return sendRouteError(res, error, 'قراءة أنواع العقوبات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(mapKeys((inMemoryPenaltyTypes && inMemoryPenaltyTypes.length > 0 ? inMemoryPenaltyTypes : LEGAL_ARTICLE_8_PENALTIES).map(enrichPenaltyRecord), camelToSnake));
   });
@@ -6882,8 +6849,7 @@ async function startServer() {
         return res.json(mapKeys(records, camelToSnake));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for evaluation forms');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(mapKeys(CANONICAL_SEED_FORMS.map((f, i) => ({ id: i + 1, ...f })), camelToSnake));
   });
@@ -7044,12 +7010,11 @@ async function startServer() {
   app.get('/api/shift-systems', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.shiftSystems).orderBy(asc(schema.shiftSystems.id));
-      if (records && records.length > 0) {
+      { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         return res.json(mapKeys(records, camelToSnake));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for shift systems');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     res.json(DEFAULT_SHIFT_SYSTEMS);
   });
@@ -7290,7 +7255,7 @@ async function startServer() {
         query = db.select().from(schema.qualifications).where(eq(schema.qualifications.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.qualifications.createdAt));
-      if (results && results.length > 0) {
+      { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         const resultsMapped = results.map(r => ({
           ...r,
           education_level: r.level,
@@ -7311,8 +7276,7 @@ async function startServer() {
         return res.json(resultsMapped);
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for qualifications');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
 
     let list = genericMemoryStores['qualifications'] || inMemoryQualifications || [];
@@ -7616,10 +7580,9 @@ async function startServer() {
         query = db.select().from(schema.jobAssignments).where(eq(schema.jobAssignments.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.jobAssignments.createdAt));
-      if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for job assignments');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = genericMemoryStores['job-assignments'] || inMemoryJobAssignments || [];
     if (employeeId) list = list.filter(j => parseInt(String(j.employee_id || j.employeeId)) === employeeId);
@@ -7732,10 +7695,9 @@ async function startServer() {
         query = db.select().from(schema.promotionsIncrements).where(eq(schema.promotionsIncrements.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.promotionsIncrements.createdAt));
-      if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for promotions');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = genericMemoryStores['promotions'] || inMemoryPromotions || [];
     if (employeeId) list = list.filter(p => parseInt(String(p.employee_id || p.employeeId)) === employeeId);
@@ -7855,7 +7817,7 @@ async function startServer() {
         query = db.select().from(schema.salaryAllowances).where(eq(schema.salaryAllowances.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.salaryAllowances.createdAt));
-      if (results && results.length > 0) {
+      { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         return res.json(results.map(r => ({
           ...r,
           allowance_type: r.allowanceType,
@@ -7864,8 +7826,7 @@ async function startServer() {
         })));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for salary allowances');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = genericMemoryStores['salary-allowances'] || inMemorySalaryAllowances || [];
     if (employeeId) list = list.filter(s => parseInt(String(s.employee_id || s.employeeId)) === employeeId);
@@ -7959,10 +7920,9 @@ async function startServer() {
         query = db.select().from(schema.annualEvaluations).where(eq(schema.annualEvaluations.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.annualEvaluations.createdAt));
-      if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for annual evaluations');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = genericMemoryStores['annual-evaluations'] || inMemoryAnnualEvaluations || [];
     if (employeeId) list = list.filter(e => parseInt(String(e.employee_id || e.employeeId)) === employeeId);
@@ -8044,10 +8004,9 @@ async function startServer() {
         query = db.select().from(schema.trainingCourses).where(eq(schema.trainingCourses.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.trainingCourses.createdAt));
-      if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for training courses');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = genericMemoryStores['training-courses'] || inMemoryTrainingCourses || [];
     if (employeeId) list = list.filter(t => parseInt(String(t.employee_id || t.employeeId)) === employeeId);
@@ -8131,10 +8090,9 @@ async function startServer() {
         query = db.select().from(schema.transfers).where(eq(schema.transfers.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.transfers.createdAt));
-      if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for transfers');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = genericMemoryStores['transfers'] || inMemoryTransfers || [];
     if (employeeId) list = list.filter(t => parseInt(String(t.employee_id || t.employeeId)) === employeeId);
@@ -8223,10 +8181,9 @@ async function startServer() {
         query = db.select().from(schema.retirements).where(eq(schema.retirements.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.retirements.createdAt));
-      if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for retirements');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = genericMemoryStores['retirements'] || inMemoryRetirements || [];
     if (employeeId) list = list.filter(r => parseInt(String(r.employee_id || r.employeeId)) === employeeId);
@@ -8303,10 +8260,9 @@ async function startServer() {
         query = db.select().from(schema.documents).where(eq(schema.documents.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.documents.createdAt));
-      if (results && results.length > 0) return res.json(results.map(r => mapKeys(r, camelToSnake)));
+      return res.json(results.map(r => mapKeys(r, camelToSnake)));
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for documents');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = genericMemoryStores['documents'] || inMemoryDocuments || [];
     if (employeeId) list = list.filter(d => parseInt(String(d.employee_id || d.employeeId)) === employeeId);
@@ -8363,7 +8319,7 @@ async function startServer() {
         query = db.select().from(schema.serviceRecords).where(eq(schema.serviceRecords.employeeId, employeeId)) as any;
       }
       const results = await query.orderBy(desc(schema.serviceRecords.createdAt));
-      if (results && results.length > 0) {
+      { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         return res.json(results.map(r => ({
           ...r,
           employee_id: r.employeeId,
@@ -8374,8 +8330,7 @@ async function startServer() {
         })));
       }
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'قراءة البيانات');
-      console.warn('Database fallback for service records');
+      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
     }
     let list = inMemoryServiceRecords;
     if (employeeId) list = list.filter(r => r.employee_id === employeeId || r.employeeId === employeeId);
@@ -8885,8 +8840,7 @@ async function startServer() {
       }
       return res.json(results);
     } catch (error: any) {
-      if (!isDbConnectionFailure(error)) return sendRouteError(res, error, 'إعادة ضبط الدورات الحاكمة');
-      console.warn('[DB-OFFLINE] إعادة ضبط الدورات الحاكمة: تُطبَّق على التخزين الاحتياطي');
+      return sendRouteError(res, error, 'إعادة ضبط الدورات الحاكمة'); // B2d: لا قراءة من الذاكرة
     }
 
     inMemoryGoverningCourses = DEFAULT_GOVERNING_COURSES.map((item, idx) => ({
@@ -9205,7 +9159,7 @@ async function startServer() {
   app.get('/api/governing-courses/employee-assignments', requireAuth, async (req, res) => {
     try {
       const records = await db.select().from(schema.governingCourseEmployeeAssignments);
-      if (records && records.length > 0) {
+      { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
         const resultMap: Record<string, any> = {};
         for (const row of records) {
           resultMap[row.employeeId] = {
@@ -9400,280 +9354,22 @@ async function startServer() {
     }
   }
 
-  function saveLocalDb() {
-    if (pendingSaveTimer) {
-      clearTimeout(pendingSaveTimer);
-    }
-    pendingSaveTimer = setTimeout(() => {
-      pendingSaveTimer = null;
-      flushLocalDbSync();
-    }, 300);
-    if (pendingSaveTimer && typeof pendingSaveTimer.unref === 'function') {
-      pendingSaveTimer.unref();
-    }
+  // B2e (ق-1، ق-2): التخزين البديل متقاعد. القاعدة هي المصدر الوحيد؛ لا يُكتب الملف بعد اليوم.
+  // تبقى الدالة بلا أثر لأن 86 موضعاً يستدعيها؛ تُزال مع المخازن نفسها في B3.
+  function saveLocalDb() { /* متقاعد */ }
+
+  // B2e: loadLocalDb أُزيلت — كانت تعيد كتابة الملف عند فشل فك التشفير وتملأ قيماً مختلقة أثناء التحميل (مراجعة B2: M7، M9).
+
+  // B2e: لا تحميل من local_storage.json عند الإقلاع. الإعدادات تُقرأ من القاعدة.
+  try {
+    const [dbSettings] = await db.select().from(schema.systemSettings).limit(1);
+    if (dbSettings) systemSettingsStore = { ...systemSettingsStore, ...dbSettings };
+  } catch (setErr: any) {
+    console.warn('[SETTINGS] تعذّر تحميل إعدادات النظام من القاعدة عند الإقلاع:', setErr?.message || setErr);
   }
-
-  process.once('beforeExit', () => {
-    if (pendingSaveTimer) flushLocalDbSync();
-  });
-  process.once('SIGINT', () => {
-    if (pendingSaveTimer) flushLocalDbSync();
-    process.exit(0);
-  });
-  process.once('SIGTERM', () => {
-    if (pendingSaveTimer) flushLocalDbSync();
-    process.exit(0);
-  });
-
-  function loadLocalDb() {
-    if (pendingSaveTimer) {
-      clearTimeout(pendingSaveTimer);
-      pendingSaveTimer = null;
-    }
-    try {
-      if (fs.existsSync(DATA_FILE)) {
-        const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-        let decryptedStr: string;
-        try {
-          decryptedStr = decryptData(raw);
-        } catch (decryptErr: any) {
-          console.warn('[LOCAL-DB] Could not decrypt existing local_storage.json (key changed or file interrupted). Re-initializing encrypted local backup with active key.');
-          try {
-            fs.copyFileSync(DATA_FILE, `${DATA_FILE}.bak`);
-          } catch {}
-          flushLocalDbSync();
-          return;
-        }
-        const state = JSON.parse(decryptedStr);
-
-        // If file was legacy plain text, re-save immediately as encrypted
-        try {
-          const parsedRaw = JSON.parse(raw);
-          if (parsedRaw && !parsedRaw.version) {
-            console.log('[SECURITY] Upgrading legacy plain-text local_storage.json to AES-256-GCM encryption...');
-            saveLocalDb();
-          }
-        } catch (e) {
-          // not legacy raw json or already ciphertext
-        }
-        if (Array.isArray(state.inMemoryEmployees) && state.inMemoryEmployees.length > 0) {
-          inMemoryEmployees = state.inMemoryEmployees.map((emp: any) => {
-            // لا اشتقاق لتواريخ آخر ترفيع/علاوة من تواريخ أخرى (تبقى null إن لم تُسجَّل)
-            const lastPromo = emp.lastPromotionDate || emp.last_promotion_date || null;
-            const lastIncr = emp.lastIncrementDate || emp.last_increment_date || null;
-            return {
-              ...emp,
-              lastPromotionDate: lastPromo,
-              last_promotion_date: lastPromo,
-              lastIncrementDate: lastIncr,
-              last_increment_date: lastIncr,
-              nextPromotionDueDate: emp.nextPromotionDueDate || emp.next_promotion_due_date || null,
-              next_promotion_due_date: emp.next_promotion_due_date || emp.nextPromotionDueDate || null,
-              nextIncrementDueDate: emp.nextIncrementDueDate || emp.next_increment_due_date || null,
-              next_increment_due_date: emp.next_increment_due_date || emp.nextIncrementDueDate || null,
-            };
-          });
-        }
-        if (state.genericMemoryStores && typeof state.genericMemoryStores === 'object') {
-          for (const [k, v] of Object.entries(state.genericMemoryStores)) {
-            if (Array.isArray(v)) {
-              genericMemoryStores[k] = v;
-            }
-          }
-        }
-        if (Array.isArray(state.inMemoryJobAssignments)) {
-          inMemoryJobAssignments = state.inMemoryJobAssignments;
-          genericMemoryStores['job-assignments'] = state.inMemoryJobAssignments;
-        }
-        if (Array.isArray(state.inMemoryQualifications)) {
-          inMemoryQualifications = state.inMemoryQualifications.map((q: any) => {
-            const gradYear = q.graduationYear || q.graduation_year;
-            const gradDate = q.graduationDate || q.graduation_date || (gradYear ? `${gradYear}-01-01` : null);
-            return {
-              ...q,
-              graduationDate: gradDate,
-              graduation_date: gradDate,
-              qualificationType: q.qualificationType || q.qualification_type || 'تعيين',
-              qualification_type: q.qualification_type || q.qualificationType || 'تعيين'
-            };
-          });
-          genericMemoryStores['qualifications'] = inMemoryQualifications;
-        }
-        if (Array.isArray(state.inMemoryPromotions)) {
-          inMemoryPromotions = state.inMemoryPromotions;
-          genericMemoryStores['promotions'] = state.inMemoryPromotions;
-        }
-        if (Array.isArray(state.inMemorySalaryAllowances)) {
-          inMemorySalaryAllowances = state.inMemorySalaryAllowances;
-          genericMemoryStores['salary-allowances'] = state.inMemorySalaryAllowances;
-        }
-        if (Array.isArray(state.inMemoryAnnualEvaluations)) {
-          inMemoryAnnualEvaluations = state.inMemoryAnnualEvaluations;
-          genericMemoryStores['annual-evaluations'] = state.inMemoryAnnualEvaluations;
-        }
-        if (Array.isArray(state.inMemoryTrainingCourses)) {
-          inMemoryTrainingCourses = state.inMemoryTrainingCourses;
-          genericMemoryStores['training-courses'] = state.inMemoryTrainingCourses;
-        }
-        if (Array.isArray(state.inMemoryTransfers)) {
-          inMemoryTransfers = state.inMemoryTransfers;
-          genericMemoryStores['transfers'] = state.inMemoryTransfers;
-        }
-        if (Array.isArray(state.inMemoryRetirements)) {
-          inMemoryRetirements = state.inMemoryRetirements;
-          genericMemoryStores['retirements'] = state.inMemoryRetirements;
-        }
-        if (Array.isArray(state.inMemoryDocuments)) {
-          inMemoryDocuments = state.inMemoryDocuments;
-          genericMemoryStores['documents'] = state.inMemoryDocuments;
-        }
-        if (Array.isArray(state.inMemoryServiceRecords)) {
-          inMemoryServiceRecords = state.inMemoryServiceRecords;
-          genericMemoryStores['service-records'] = state.inMemoryServiceRecords;
-        }
-        if (Array.isArray(state.inMemoryServiceCredits)) {
-          inMemoryServiceCredits = state.inMemoryServiceCredits;
-          genericMemoryStores['service-credits'] = state.inMemoryServiceCredits;
-        }
-        if (Array.isArray(state.inMemoryLeaves)) {
-          inMemoryLeaves = state.inMemoryLeaves;
-          genericMemoryStores['leaves'] = state.inMemoryLeaves;
-        }
-        if (Array.isArray(state.inMemoryPenalties)) {
-          inMemoryPenalties = state.inMemoryPenalties;
-          genericMemoryStores['penalties'] = state.inMemoryPenalties;
-        }
-        if (Array.isArray(state.inMemoryAppreciations)) {
-          inMemoryAppreciations = state.inMemoryAppreciations;
-          genericMemoryStores['appreciations'] = state.inMemoryAppreciations;
-        }
-        if (Array.isArray(state.inMemoryPerformanceEvaluations)) {
-          inMemoryPerformanceEvaluations = state.inMemoryPerformanceEvaluations;
-          genericMemoryStores['performance'] = state.inMemoryPerformanceEvaluations;
-        }
-        if (Array.isArray(state.inMemoryCareerHistories)) {
-          inMemoryCareerHistories = state.inMemoryCareerHistories;
-          genericMemoryStores['career'] = state.inMemoryCareerHistories;
-        }
-        if (Array.isArray(state.inMemoryDegreeTrackSnapshots)) {
-          inMemoryDegreeTrackSnapshots = state.inMemoryDegreeTrackSnapshots;
-          genericMemoryStores['degree-track-snapshots'] = state.inMemoryDegreeTrackSnapshots;
-        }
-        if (Array.isArray(state.inMemoryDegreeTrackSimulationSteps)) {
-          inMemoryDegreeTrackSimulationSteps = state.inMemoryDegreeTrackSimulationSteps;
-          genericMemoryStores['degree-track-simulation-steps'] = state.inMemoryDegreeTrackSimulationSteps;
-        }
-        if (Array.isArray(state.inMemorySpecializationCredits)) {
-          inMemorySpecializationCredits = state.inMemorySpecializationCredits;
-          genericMemoryStores['specialization-credits'] = state.inMemorySpecializationCredits;
-        }
-        if (Array.isArray(state.inMemoryPromotionDelayReasons)) {
-          inMemoryPromotionDelayReasons = state.inMemoryPromotionDelayReasons;
-          genericMemoryStores['promotion-delay-reasons'] = state.inMemoryPromotionDelayReasons;
-          genericMemoryStores['promotion_delay_reasons'] = state.inMemoryPromotionDelayReasons;
-        }
-        if (Array.isArray(state.inMemoryAllowancesDeductions) && state.inMemoryAllowancesDeductions.length > 0) {
-          inMemoryAllowancesDeductions = state.inMemoryAllowancesDeductions.filter((item: any) => {
-            if (!item) return false;
-            const name = String(item.name || '');
-            const isDegree = (name.includes('شهادة') || name.includes('الشهادة') || name.includes('دكتوراه') || name.includes('ماجستير') || name.includes('دبلوم') || name.includes('بكالوريوس') || name.includes('إعدادية') || name.includes('متوسطة'));
-            const isResp = (name.includes('منصب') || name.includes('مسؤولية') || name.includes('إشرافية'));
-            return !isDegree && !isResp;
-          });
-        }
-        if (Array.isArray(state.inMemoryEducationDegrees) && state.inMemoryEducationDegrees.length > 0) {
-          inMemoryEducationDegrees = state.inMemoryEducationDegrees.map((r: any) => ({
-            ...r,
-            baseline_grade: r.baseline_grade !== undefined ? parseInt(r.baseline_grade) : (r.baselineGrade !== undefined ? parseInt(r.baselineGrade) : 7),
-            baselineGrade: r.baseline_grade !== undefined ? parseInt(r.baseline_grade) : (r.baselineGrade !== undefined ? parseInt(r.baselineGrade) : 7),
-            baseline_step: r.baseline_step !== undefined ? parseInt(r.baseline_step) : (r.baselineStep !== undefined ? parseInt(r.baselineStep) : 1),
-            baselineStep: r.baseline_step !== undefined ? parseInt(r.baseline_step) : (r.baselineStep !== undefined ? parseInt(r.baselineStep) : 1),
-          }));
-        }
-        if (Array.isArray(state.inMemoryResponsibilityAllowances) && state.inMemoryResponsibilityAllowances.length > 0) inMemoryResponsibilityAllowances = state.inMemoryResponsibilityAllowances;
-        if (Array.isArray(state.inMemoryWorkLocations) && state.inMemoryWorkLocations.length > 0) inMemoryWorkLocations = state.inMemoryWorkLocations;
-        if (Array.isArray(state.inMemoryShiftSystems) && state.inMemoryShiftSystems.length > 0) inMemoryShiftSystems = state.inMemoryShiftSystems;
-        if (Array.isArray(state.inMemoryServiceTypes) && state.inMemoryServiceTypes.length > 0) inMemoryServiceTypes = state.inMemoryServiceTypes;
-        if (Array.isArray(state.inMemoryEmployeeStatuses) && state.inMemoryEmployeeStatuses.length > 0) inMemoryEmployeeStatuses = state.inMemoryEmployeeStatuses;
-        if (Array.isArray(state.inMemoryPenaltyTypes) && state.inMemoryPenaltyTypes.length > 0) inMemoryPenaltyTypes = state.inMemoryPenaltyTypes;
-        if (Array.isArray(state.inMemorySalaryScale) && state.inMemorySalaryScale.length > 0) inMemorySalaryScale = state.inMemorySalaryScale;
-        if (Array.isArray(state.inMemoryTrainings)) inMemoryTrainings = state.inMemoryTrainings;
-        if (Array.isArray(state.inMemoryEnrollments)) inMemoryEnrollments = state.inMemoryEnrollments;
-        if (Array.isArray(state.inMemoryTrainers)) inMemoryTrainers = state.inMemoryTrainers;
-        if (Array.isArray(state.inMemoryAnnualPlans)) inMemoryAnnualPlans = state.inMemoryAnnualPlans;
-        if (Array.isArray(state.inMemoryAttendance)) {
-          inMemoryAttendance = state.inMemoryAttendance;
-          genericMemoryStores['attendance'] = state.inMemoryAttendance;
-        }
-        if (Array.isArray(state.inMemoryOrgUnits)) inMemoryOrgUnits = state.inMemoryOrgUnits;
-
-        if (Array.isArray(state.inMemoryLeaveTypes) && state.inMemoryLeaveTypes.length > 0) {
-          inMemoryLeaveTypes = state.inMemoryLeaveTypes.map((r: any) => {
-            const isInc = Boolean(r.affectsIncrement ?? r.affects_increment ?? (
-              r.administrativeEffect === 'يؤخر_العلاوة' || 
-              r.administrative_effect === 'يؤخر_العلاوة' || 
-              (r.administrative_effect && r.administrative_effect.includes('العلاوة'))
-            ));
-            const isPromo = Boolean(r.affectsPromotion ?? r.affects_promotion ?? (
-              r.administrativeEffect === 'يوقف_الترفيع' || 
-              r.administrative_effect === 'يوقف_الترفيع' || 
-              (r.administrative_effect && r.administrative_effect.includes('الترفيع'))
-            ));
-            const isComm = Boolean(r.affectsCommendations ?? r.affects_commendations ?? (
-              (r.administrative_effect && r.administrative_effect.includes('الشكر')) ||
-              (r.effects_options && r.effects_options.includes('كتب_الشكر'))
-            ));
-            let salType = r.salaryPaymentType || r.salary_payment_type;
-            if (!salType) {
-              const fin = r.financialEffect || r.financial_effect;
-              if (fin === 'بدون_راتب') salType = 'بدون_راتب';
-              else if (fin === 'براتب_ومخصصات_ثابتة') salType = 'منح_الراتب_والمخصصات_الثابتة_فقط';
-              else if (fin === 'استقطاع_جزئي') salType = 'استقطاع_جزئي';
-              else salType = 'منح_الراتب_كامل';
-            }
-            return {
-              ...r,
-              affects_increment: isInc,
-              affectsIncrement: isInc,
-              affects_promotion: isPromo,
-              affectsPromotion: isPromo,
-              affects_commendations: isComm,
-              affectsCommendations: isComm,
-              salary_payment_type: salType,
-              salaryPaymentType: salType,
-              administrative_effect: r.administrative_effect || r.administrativeEffect || (isPromo || isInc || isComm ? [isPromo && 'يوقف الترفيع', isInc && 'يؤخر العلاوة', isComm && 'يوقف كتب الشكر'].filter(Boolean).join(' و ') : 'لا_يؤثر'),
-              financial_effect: r.financial_effect || r.financialEffect || (salType === 'بدون_راتب' ? 'بدون_راتب' : salType === 'منح_الراتب_والمخصصات_الثابتة_فقط' ? 'براتب_ومخصصات_ثابتة' : salType === 'استقطاع_جزئي' ? 'استقطاع_جزئي' : 'براتب_كامل'),
-            };
-          });
-        }
-        if (Array.isArray(state.inMemoryGradePromotionRules) && state.inMemoryGradePromotionRules.length > 0) inMemoryGradePromotionRules = state.inMemoryGradePromotionRules;
-        if (Array.isArray(state.inMemoryCommendationTypes) && state.inMemoryCommendationTypes.length > 0) inMemoryCommendationTypes = state.inMemoryCommendationTypes;
-        if (Array.isArray(state.inMemoryEmployeeCommendations)) inMemoryEmployeeCommendations = state.inMemoryEmployeeCommendations;
-        if (state.inMemoryCommendationRulesSettings && typeof state.inMemoryCommendationRulesSettings === 'object') inMemoryCommendationRulesSettings = state.inMemoryCommendationRulesSettings;
-        if (Array.isArray(state.inMemoryJobTitles) && state.inMemoryJobTitles.length > 0) inMemoryJobTitles = state.inMemoryJobTitles;
-        if (state.inMemoryExemptionRules && typeof state.inMemoryExemptionRules === 'object') {
-          inMemoryExemptionRules = { ...inMemoryExemptionRules, ...state.inMemoryExemptionRules };
-        }
-        if (state.inMemoryGradeRequirements && typeof state.inMemoryGradeRequirements === 'object') {
-          inMemoryGradeRequirements = { ...inMemoryGradeRequirements, ...state.inMemoryGradeRequirements };
-        }
-        if (state.inMemoryEmployeeAssignments && typeof state.inMemoryEmployeeAssignments === 'object') {
-          inMemoryEmployeeAssignments = { ...inMemoryEmployeeAssignments, ...state.inMemoryEmployeeAssignments };
-        }
-        if (state.systemSettingsStore && typeof state.systemSettingsStore === 'object') {
-          systemSettingsStore = { ...systemSettingsStore, ...state.systemSettingsStore };
-        }
-        if (Array.isArray(state.leaveAccrualLogs)) {
-          leaveAccrualLogs = state.leaveAccrualLogs;
-        }
-      }
-    } catch (e) {
-      console.warn('Could not load local DB state:', e);
-    }
+  if (fs.existsSync(DATA_FILE)) {
+    console.warn('[LOCAL-STORAGE] الملف data/local_storage.json ما زال موجوداً لكنه لم يعد يُقرأ أو يُكتب. بعد التأكد من النقل: control-app.bat retirelocal');
   }
-
-  // Load existing data on startup
-  loadLocalDb();
 
   // Automatic periodic check for monthly leave accrual
   setTimeout(() => {
@@ -9966,8 +9662,7 @@ async function startServer() {
           return res.json(records.map((r: any) => mapKeys(r, camelToSnake)));
         }
       } catch (err: any) {
-        if (!isDbConnectionFailure(err)) return sendRouteError(res, err, 'قراءة السجلات');
-        console.warn(`Database fallback for /api/${endpoint}`);
+        return sendRouteError(res, err, 'قراءة السجلات'); // B2d: لا قراءة من الذاكرة
       }
       let memList = genericMemoryStores[endpoint] || [];
       if (empIdParam) {

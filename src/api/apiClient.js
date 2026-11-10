@@ -6,6 +6,15 @@
 // لا يرفض (reject) أبداً إن لم يستجب الخادم إطلاقاً - فقط يرفض عند خطأ فعلي أو استجابة غير ناجحة.
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
+// حالة قاعدة البيانات كما يراها المتصفح (B2d): تُبثّ كحدث فقط عند تغيّرها
+let dbDown = false;
+export function setDbDown(down) {
+  if (dbDown === down) return;
+  dbDown = down;
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('hr:db-status', { detail: { down } }));
+}
+export function isDbDown() { return dbDown; }
+
 export async function request(path, options = {}) {
   const token = localStorage.getItem('hr_session_token');
   const headers = {
@@ -54,8 +63,13 @@ export async function request(path, options = {}) {
     const errorMsg = data?.error ? (data.details ? `${data.error} - [${data.details}]` : data.error) : (data?.message || `HTTP error! status: ${response.status}`);
     const err = new Error(errorMsg);
     if (data?.details) err.details = data.details;
+    err.status = response.status;
+    if (data?.code) err.code = data.code;
+    // B2d: انقطاع قاعدة البيانات يُعرض شريطاً واضحاً في أعلى الشاشة (DbStatusBanner)
+    if (data?.code === 'DB_UNAVAILABLE') setDbDown(true);
     throw err;
   }
+  setDbDown(false);
 
   if (data === null) {
     if (text && text.trim().startsWith('<')) {
@@ -140,8 +154,12 @@ export const apiClient = {
         const user = await request('/api/auth/me');
         return user;
       } catch (e) {
-        localStorage.removeItem('hr_session_token');
-        return null;
+        // الجلسة تُلغى فقط إذا رفضها الخادم (401). انقطاع مؤقت أو 503 لا يُخرج المستخدم (مراجعة B2: M1).
+        if (e?.status === 401) {
+          localStorage.removeItem('hr_session_token');
+          return null;
+        }
+        throw e;
       }
     },
     loginViaEmailPassword: async (username, password) => {

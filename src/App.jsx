@@ -11,6 +11,7 @@ import ScrollToTop from './components/ScrollToTop';
 // Layout
 import AppLayout from '@/components/layout/AppLayout';
 import Login from '@/pages/Login';
+import DbStatusBanner from '@/components/system/DbStatusBanner';
 
 // Lazy-loaded Pages
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -108,6 +109,7 @@ function App() {
       <QueryClientProvider client={queryClientInstance}>
         <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <ScrollToTop />
+          <DbStatusBanner />
           <AuthenticatedApp />
         </Router>
         <Toaster />
