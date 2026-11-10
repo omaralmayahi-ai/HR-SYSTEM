@@ -9,6 +9,7 @@ import { db, schema, eq, and, or, desc, asc, getSchemaHealth, pool, createPool }
 import { runMigrations, getMigrationStatus } from './server/migrate.ts';
 import { normalizeEmployeeIdentifiers } from './server/employeeIdentifiers.ts';
 import { createDbGate } from './server/dbGate.ts';
+import { loadEngineContext, loadAllEngineContexts, bothCases, type LoadedEngineContext } from './server/engineContext.ts';
 import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
 import { requireAuth, requireAdmin, requireWriter, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
@@ -19,7 +20,7 @@ import { encryptData, decryptData, validateEncryptionKeyConfig } from './src/lib
 import { recalculateEligibilitySync, EngineContextData, formatDateString, isDateOnOrAfter } from './src/lib/promotionEngine.ts';
 import { calculateDegreeTrackSimulation, processDegreeTrackSettlement, processBatchDegreeTrackAutoSettlement } from './src/lib/degreeTrackEngine.ts';
 import { extractDelayReasonsFromContext, syncPromotionDelayReasons } from './src/lib/promotionDelayReasonsEngine.ts';
-import { checkReferentialUsage, isDbConnectionFailure } from './src/lib/referentialIntegrity.ts';
+import { checkReferentialUsage, isDbConnectionFailure, validateEmployeeImportRow } from './src/lib/referentialIntegrity.ts';
 import { respondIfDbWriteError, sendRouteError, HttpError, classifyDbError, setDbConnectionFailureListener } from './server/dbErrors.ts';
 import { installRouteRegistry } from './server/routeRegistry.ts';
 import { syncEnrollmentToTrainingCourses } from './server/trainingSync.ts';
@@ -1355,93 +1356,8 @@ async function startServer() {
   }
 
   // بذرة تجريبية وهمية بالكامل (لا تمثل أي شخص حقيقي) تظهر فقط في وضع عدم الاتصال بقاعدة البيانات.
-  let inMemoryEmployees: any[] = [
-    {
-      id: 1,
-      fullName: 'موظف تجريبي أول وهمي',
-      full_name: 'موظف تجريبي أول وهمي',
-      firstName: 'موظف',
-      first_name: 'موظف',
-      fatherName: 'تجريبي',
-      father_name: 'تجريبي',
-      grandfatherName: 'أول',
-      grandfather_name: 'أول',
-      greatGrandfatherName: 'وهمي',
-      great_grandfather_name: 'وهمي',
-      surname: 'التجريبي',
-      employeeNumber: '900001',
-      employee_number: '900001',
-      companyNumber: '900001',
-      company_number: '900001',
-      civilServiceNumber: '900001',
-      civil_service_number: '900001',
-      gender: 'ذكر',
-      birthDate: '1990-01-01',
-      birth_date: '1990-01-01',
-      birthPlace: 'مدينة تجريبية',
-      birth_place: 'مدينة تجريبية',
-      nationality: 'عراقي',
-      maritalStatus: 'أعزب',
-      marital_status: 'أعزب',
-      spouseNames: '',
-      spouse_names: '',
-      spousesData: JSON.stringify([]),
-      spouses_data: JSON.stringify([]),
-      childrenCount: 0,
-      children_count: 0,
-      childrenDetails: JSON.stringify([]),
-      children_details: JSON.stringify([]),
-      nationalId: '000000000000',
-      national_id: '000000000000',
-      phone: '07000000000',
-      email: 'test.employee@example.invalid',
-      address: 'عنوان تجريبي - لا يوجد',
-      appointmentDate: '2015-01-01',
-      appointment_date: '2015-01-01',
-      firstAppointmentDate: '2015-01-01',
-      first_appointment_date: '2015-01-01',
-      currentAppointmentDate: '2015-01-01',
-      current_appointment_date: '2015-01-01',
-      jobTitle: 'مبرمج',
-      job_title: 'مبرمج',
-      department: 'قسم تجريبي',
-      section: 'شعبة تجريبية',
-      serviceType: 'دائم',
-      service_type: 'دائم',
-      grade: 6,
-      step: 1,
-      gradeDate: '2015-01-01',
-      grade_date: '2015-01-01',
-      lastPromotionDate: null,
-      last_promotion_date: null,
-      lastIncrementDate: null,
-      last_increment_date: null,
-      jobResponsibility: 'بلا مسؤولية',
-      job_responsibility: 'بلا مسؤولية',
-      primaryResponsibility: 'بلا مسؤولية',
-      primary_responsibility: 'بلا مسؤولية',
-      educationLevel: 'بكالوريوس',
-      education_level: 'بكالوريوس',
-      specialization: 'تخصص تجريبي',
-      university: 'جامعة تجريبية',
-      institution: 'جامعة تجريبية',
-      graduationYear: 2012,
-      graduation_year: 2012,
-      workLocation: 'موقع تجريبي',
-      work_location: 'موقع تجريبي',
-      workNature: 'مكتبي',
-      work_nature: 'مكتبي',
-      workShiftType: 'صباحي',
-      work_shift_type: 'صباحي',
-      status: 'مستمر',
-      initialRegularLeaveBalance: 0,
-      initial_regular_leave_balance: 0,
-      initialSickLeaveBalance: 0,
-      initial_sick_leave_balance: 0,
-      createdAt: new Date().toISOString(),
-      created_at: new Date().toISOString()
-    }
-  ];
+  // إصلاح عاجل: أُزيل «موظف تجريبي أول وهمي» (id 1) — كان يُقدَّم على الموظف الحقيقي رقم 1 في المسارات التي تبحث في الذاكرة أولاً
+  let inMemoryEmployees: any[] = [];
 
   async function updateEmployeeCentralRecord(employeeId: number, partialData: any) {
     if (!employeeId || isNaN(employeeId)) return;
@@ -1456,14 +1372,12 @@ async function startServer() {
       }
       if (Object.keys(dbPayload).length > 0) {
         dbPayload.updatedAt = new Date();
-        try {
-          await db.update(schema.employees).set(dbPayload).where(eq(schema.employees.id, employeeId));
-        } catch (dbErr) {
-          console.warn('Database fallback for updateEmployeeCentralRecord');
-        }
+        // إصلاح عاجل: فشل الحفظ لا يُبتلع (كان يُكمل كأن السجل حُفظ)
+        await db.update(schema.employees).set(dbPayload).where(eq(schema.employees.id, employeeId));
       }
     } catch (e) {
       console.error('Error updating central employee in DB:', e);
+      throw e;
     }
 
     // Also update in-memory employee record
@@ -1861,10 +1775,14 @@ async function startServer() {
         return res.status(400).json({ error: 'لم يتم تزويد قائمة موظفين صالحة للترحيل' });
       }
 
+      // إصلاح عاجل: قوائم التحقق من القاعدة لا من الذاكرة (فارغة بعد B2e)
+      const [ljt, led, lss] = await Promise.all([
+        db.select().from(schema.jobTitles), db.select().from(schema.educationDegrees), db.select().from(schema.shiftSystems),
+      ]);
       const lookupData = {
-        jobTitles: inMemoryJobTitles,
-        educationDegrees: inMemoryEducationDegrees,
-        shiftSystems: inMemoryShiftSystems,
+        jobTitles: ljt.map(bothCases),
+        educationDegrees: led.map(bothCases),
+        shiftSystems: lss.map(bothCases),
         salaryScaleMap: SALARY_TABLE
       };
 
@@ -2708,8 +2626,10 @@ async function startServer() {
   // ويُعاد الرصيد عند رفض/إلغاء/حذف طلب كان معتمداً. direction: -1 خصم، +1 إعادة.
   async function adjustLeaveBalance(employeeId: number, days: number, leaveType: any, direction: -1 | 1) {
     if (!employeeId || !(days > 0)) return;
-    const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === employeeId);
-    if (!emp) return;
+    // إصلاح عاجل: الرصيد الحالي من القاعدة (كان من الذاكرة ← لا خصم إطلاقاً بعد B2e)
+    const [dbEmp] = await db.select().from(schema.employees).where(eq(schema.employees.id, employeeId));
+    if (!dbEmp) return;
+    const emp: any = bothCases(dbEmp);
     const lType = String(leaveType || '').toLowerCase();
     if (lType.includes('مرض') || lType.includes('sick')) {
       const cur = parseFloat(String(emp.sick_leave_balance ?? emp.sickLeaveBalance ?? emp.initial_sick_leave_balance ?? 0)) || 0;
@@ -3864,8 +3784,8 @@ async function startServer() {
   });
 
   app.delete('/api/trainers/:id', requireAuth, requireWriter, async (req, res) => {
+    const id = parseInt(req.params.id); // كان داخل try ويُستعمل بعدها ← ReferenceError بعد نجاح الحذف
     try {
-      const id = parseInt(req.params.id);
       await pool.query('DELETE FROM trainers WHERE id = $1', [id]);
     } catch (error: any) {
       if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
@@ -4668,31 +4588,34 @@ async function startServer() {
     inMemoryJobTitles = DEFAULT_JOB_TITLES.map(t => ({ ...t, minGrade: t.min_grade, minStep: t.min_step }));
   }
 
-  function buildRefContext() {
+  // إصلاح عاجل (مراجعة B3: Blocker): فحص الارتباط قبل الحذف من القاعدة. كان يقرأ مخازن الذاكرة
+  // (فارغة بعد B2e) فيسمح بحذف مخصص/شهادة/عنوان مستعمل فعلاً من موظفين.
+  async function buildRefContext() {
+    const all = (t: any) => db.select().from(t).then((rows: any[]) => rows.map(bothCases));
+    const [employees, jobAssignments, qualifications, penalties, performanceEvaluations, assignments,
+      jobTitles, shiftSystems, allowances, degrees, responsibilities, penaltyTypes, evaluationForms, governingCourses] = await Promise.all([
+      all(schema.employees), all(schema.jobAssignments), all(schema.qualifications), all(schema.penalties),
+      all(schema.performanceEvaluations), all(schema.governingCourseEmployeeAssignments),
+      all(schema.jobTitles), all(schema.shiftSystems), all(schema.allowancesDeductions), all(schema.educationDegrees),
+      all(schema.responsibilityAllowances), all(schema.penaltyTypes), all(schema.evaluationForms), all(schema.governingCourses),
+    ]);
+    const forms = evaluationForms.length ? evaluationForms : CANONICAL_SEED_FORMS;
     return {
-      employees: (typeof inMemoryEmployees !== 'undefined' && inMemoryEmployees) ? inMemoryEmployees : [],
-      jobAssignments: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['job-assignments']) || (typeof inMemoryJobAssignments !== 'undefined' ? inMemoryJobAssignments : []),
-      qualifications: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['qualifications']) || (typeof inMemoryQualifications !== 'undefined' ? inMemoryQualifications : []),
-      penalties: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['penalties']) || (typeof inMemoryPenalties !== 'undefined' ? inMemoryPenalties : []),
-      performanceEvaluations: (typeof genericMemoryStores !== 'undefined' && genericMemoryStores['performance']) || (typeof inMemoryPerformanceEvaluations !== 'undefined' ? inMemoryPerformanceEvaluations : []),
-      governingCourseAssignments: (typeof inMemoryEmployeeAssignments !== 'undefined' && inMemoryEmployeeAssignments) ? Object.values(inMemoryEmployeeAssignments) : [],
+      employees,
+      jobAssignments,
+      qualifications,
+      penalties,
+      performanceEvaluations,
+      governingCourseAssignments: assignments,
       entities: {
-        'job_titles': (typeof inMemoryJobTitles !== 'undefined' && inMemoryJobTitles) ? inMemoryJobTitles : [],
-        'job-titles': (typeof inMemoryJobTitles !== 'undefined' && inMemoryJobTitles) ? inMemoryJobTitles : [],
-        'shift_systems': (typeof inMemoryShiftSystems !== 'undefined' && inMemoryShiftSystems) ? inMemoryShiftSystems : [],
-        'shift-systems': (typeof inMemoryShiftSystems !== 'undefined' && inMemoryShiftSystems) ? inMemoryShiftSystems : [],
-        'allowances_deductions': (typeof inMemoryAllowancesDeductions !== 'undefined' && inMemoryAllowancesDeductions) ? inMemoryAllowancesDeductions : [],
-        'allowances-deductions': (typeof inMemoryAllowancesDeductions !== 'undefined' && inMemoryAllowancesDeductions) ? inMemoryAllowancesDeductions : [],
-        'education_degrees': (typeof inMemoryEducationDegrees !== 'undefined' && inMemoryEducationDegrees) ? inMemoryEducationDegrees : [],
-        'education-degrees': (typeof inMemoryEducationDegrees !== 'undefined' && inMemoryEducationDegrees) ? inMemoryEducationDegrees : [],
-        'responsibility_allowances': (typeof inMemoryResponsibilityAllowances !== 'undefined' && inMemoryResponsibilityAllowances) ? inMemoryResponsibilityAllowances : [],
-        'responsibility-allowances': (typeof inMemoryResponsibilityAllowances !== 'undefined' && inMemoryResponsibilityAllowances) ? inMemoryResponsibilityAllowances : [],
-        'penalty_types': (typeof inMemoryPenaltyTypes !== 'undefined' && inMemoryPenaltyTypes) ? inMemoryPenaltyTypes : [],
-        'penalty-types': (typeof inMemoryPenaltyTypes !== 'undefined' && inMemoryPenaltyTypes) ? inMemoryPenaltyTypes : [],
-        'evaluation_forms': (typeof inMemoryEvaluationForms !== 'undefined' ? inMemoryEvaluationForms : (typeof CANONICAL_SEED_FORMS !== 'undefined' ? CANONICAL_SEED_FORMS : [])),
-        'evaluation-forms': (typeof inMemoryEvaluationForms !== 'undefined' ? inMemoryEvaluationForms : (typeof CANONICAL_SEED_FORMS !== 'undefined' ? CANONICAL_SEED_FORMS : [])),
-        'governing_courses': (typeof inMemoryGoverningCourses !== 'undefined' ? inMemoryGoverningCourses : []),
-        'governing-courses': (typeof inMemoryGoverningCourses !== 'undefined' ? inMemoryGoverningCourses : []),
+        'job_titles': jobTitles, 'job-titles': jobTitles,
+        'shift_systems': shiftSystems, 'shift-systems': shiftSystems,
+        'allowances_deductions': allowances, 'allowances-deductions': allowances,
+        'education_degrees': degrees, 'education-degrees': degrees,
+        'responsibility_allowances': responsibilities, 'responsibility-allowances': responsibilities,
+        'penalty_types': penaltyTypes, 'penalty-types': penaltyTypes,
+        'evaluation_forms': forms, 'evaluation-forms': forms,
+        'governing_courses': governingCourses, 'governing-courses': governingCourses,
       }
     };
   }
@@ -4862,11 +4785,12 @@ async function startServer() {
           if (dbTitleList && dbTitleList.length > 0) dbTitles = dbTitleList;
         } catch (e) {}
 
+        const baseRef = await buildRefContext();
         const refCtx = {
-          ...buildRefContext(),
+          ...baseRef,
           employees: dbEmployees,
           entities: {
-            ...buildRefContext().entities,
+            ...baseRef.entities,
             'job_titles': dbTitles,
             'job-titles': dbTitles
           }
@@ -5002,11 +4926,12 @@ async function startServer() {
         if (dbTitleList && dbTitleList.length > 0) dbTitles = dbTitleList;
       } catch (e) {}
 
+      const baseRef = await buildRefContext();
       const refCtx = {
-        ...buildRefContext(),
+        ...baseRef,
         employees: dbEmployees,
         entities: {
-          ...buildRefContext().entities,
+          ...baseRef.entities,
           'job_titles': dbTitles,
           'job-titles': dbTitles
         }
@@ -5644,7 +5569,7 @@ async function startServer() {
     }
 
     if (status === 'موقوف' || status === 'غير فعال' || status === 'معطل') {
-      const refCheck = checkReferentialUsage('allowances_deductions', id, true, buildRefContext());
+      const refCheck = checkReferentialUsage('allowances_deductions', id, true, await buildRefContext());
       if (!refCheck.canProceed) {
         return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
       }
@@ -5693,7 +5618,7 @@ async function startServer() {
   app.delete('/api/allowances-deductions/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
 
-    const refCheck = checkReferentialUsage('allowances_deductions', id, false, buildRefContext());
+    const refCheck = checkReferentialUsage('allowances_deductions', id, false, await buildRefContext());
     if (!refCheck.canProceed) {
       return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
     }
@@ -6027,7 +5952,7 @@ async function startServer() {
     } = req.body;
 
     if (status === 'معطل' || status === 'غير فعال') {
-      const refCheck = checkReferentialUsage('education_degrees', id, true, buildRefContext());
+      const refCheck = checkReferentialUsage('education_degrees', id, true, await buildRefContext());
       if (!refCheck.canProceed) {
         return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
       }
@@ -6088,7 +6013,7 @@ async function startServer() {
   app.delete('/api/education-degrees/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
 
-    const refCheck = checkReferentialUsage('education_degrees', id, false, buildRefContext());
+    const refCheck = checkReferentialUsage('education_degrees', id, false, await buildRefContext());
     if (!refCheck.canProceed) {
       return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
     }
@@ -6144,7 +6069,7 @@ async function startServer() {
     const { name, allowance_rate, status } = req.body;
 
     if (status === 'معطل' || status === 'غير فعال') {
-      const refCheck = checkReferentialUsage('responsibility_allowances', id, true, buildRefContext());
+      const refCheck = checkReferentialUsage('responsibility_allowances', id, true, await buildRefContext());
       if (!refCheck.canProceed) {
         return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
       }
@@ -6179,7 +6104,7 @@ async function startServer() {
   app.delete('/api/responsibility-allowances/:id', requireAuth, requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id);
 
-    const refCheck = checkReferentialUsage('responsibility_allowances', id, false, buildRefContext());
+    const refCheck = checkReferentialUsage('responsibility_allowances', id, false, await buildRefContext());
     if (!refCheck.canProceed) {
       return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
     }
@@ -6613,7 +6538,7 @@ async function startServer() {
       const { name, delayMonths, description, salaryDeductionDays, status } = data;
 
       if (status === 'غير فعال' || status === 'معطل') {
-        const refCheck = checkReferentialUsage('penalty_types', id, true, buildRefContext());
+        const refCheck = checkReferentialUsage('penalty_types', id, true, await buildRefContext());
         if (!refCheck.canProceed) {
           return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
         }
@@ -6663,7 +6588,7 @@ async function startServer() {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
 
-      const refCheck = checkReferentialUsage('penalty_types', id, false, buildRefContext());
+      const refCheck = checkReferentialUsage('penalty_types', id, false, await buildRefContext());
       if (!refCheck.canProceed) {
         return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
       }
@@ -6950,7 +6875,7 @@ async function startServer() {
       } = data;
 
       if (status === 'غير فعال' || status === 'معطل') {
-        const refCheck = checkReferentialUsage('evaluation_forms', id, true, buildRefContext());
+        const refCheck = checkReferentialUsage('evaluation_forms', id, true, await buildRefContext());
         if (!refCheck.canProceed) {
           return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
         }
@@ -6987,7 +6912,7 @@ async function startServer() {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'ID غير صالح' });
 
-      const refCheck = checkReferentialUsage('evaluation_forms', id, false, buildRefContext());
+      const refCheck = checkReferentialUsage('evaluation_forms', id, false, await buildRefContext());
       if (!refCheck.canProceed) {
         return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
       }
@@ -7069,7 +6994,7 @@ async function startServer() {
       } = req.body;
 
       if (status === 'معطل' || status === 'غير فعال') {
-        const refCheck = checkReferentialUsage('shift_systems', id, true, buildRefContext());
+        const refCheck = checkReferentialUsage('shift_systems', id, true, await buildRefContext());
         if (!refCheck.canProceed) {
           return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
         }
@@ -7106,7 +7031,7 @@ async function startServer() {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
 
-      const refCheck = checkReferentialUsage('shift_systems', id, false, buildRefContext());
+      const refCheck = checkReferentialUsage('shift_systems', id, false, await buildRefContext());
       if (!refCheck.canProceed) {
         return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
       }
@@ -7747,8 +7672,11 @@ async function startServer() {
       if (actionDate) empUpdate.lastPromotionDate = actionDate;
       const targetGradeNum = parseInt(String(data.grade_after || data.gradeAfter));
       if (!isNaN(targetGradeNum)) {
-        const curEmp = inMemoryEmployees.find(e => parseInt(String(e.id)) === employeeId);
-        const resolvedTitle = findMatchingJobTitleForPromotion(curEmp, targetGradeNum, inMemoryJobTitles);
+        // إصلاح عاجل: الموظف والعناوين من القاعدة (كانت من الذاكرة ← لا يُحدَّث العنوان بعد الترفيع)
+        const [curEmpRow] = await db.select().from(schema.employees).where(eq(schema.employees.id, employeeId));
+        const titlesNow = (await db.select().from(schema.jobTitles)).map(bothCases);
+        const curEmp: any = curEmpRow ? bothCases(curEmpRow) : null;
+        const resolvedTitle = findMatchingJobTitleForPromotion(curEmp, targetGradeNum, titlesNow.length ? titlesNow : inMemoryJobTitles);
         if (resolvedTitle) {
           empUpdate.jobTitle = resolvedTitle.name;
           empUpdate.job_title = resolvedTitle.name;
@@ -8747,7 +8675,7 @@ async function startServer() {
     const data = req.body;
 
     if (data.status === 'غير فعال' || data.status === 'معطل') {
-      const refCheck = checkReferentialUsage('governing_courses', id, true, buildRefContext());
+      const refCheck = checkReferentialUsage('governing_courses', id, true, await buildRefContext());
       if (!refCheck.canProceed) {
         return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
       }
@@ -8800,7 +8728,7 @@ async function startServer() {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
 
-    const refCheck = checkReferentialUsage('governing_courses', id, false, buildRefContext());
+    const refCheck = checkReferentialUsage('governing_courses', id, false, await buildRefContext());
     if (!refCheck.canProceed) {
       return res.status(400).json({ error: refCheck.message, details: refCheck.affectedSummary });
     }
@@ -9391,49 +9319,30 @@ async function startServer() {
     } catch (ptErr) {
       if (!isDbConnectionFailure(ptErr)) throw ptErr;
     }
-    return Array.isArray(inMemoryPenaltyTypes) && inMemoryPenaltyTypes.length > 0 ? inMemoryPenaltyTypes : undefined;
+    // إصلاح عاجل: لا رجوع لقائمة الذاكرة (تأخيرها 0 للتوبيخ والإنذار، خلاف قانون الانضباط 14/1991).
+    // undefined ⇒ المحرك يستعمل DEFAULT_PENALTY_DELAYS القانونية.
+    return undefined;
   }
 
   function logRecalcError(err: any) {
     console.error('[ELIGIBILITY] فشلت إعادة احتساب الاستحقاق:', err?.message || err);
   }
 
-  async function triggerRecalculateEligibility(employeeId: number | string) {
+  async function triggerRecalculateEligibility(employeeId: number | string, preloaded?: LoadedEngineContext) {
     if (!employeeId) return null;
     const empIdNum = parseInt(String(employeeId));
     if (isNaN(empIdNum)) return null;
 
-    let emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empIdNum);
-    if (!emp) {
-      try {
-        const dbEmps = await db.select().from(schema.employees).where(eq(schema.employees.id, empIdNum));
-        if (dbEmps && dbEmps.length > 0) {
-          emp = dbEmps[0];
-        }
-      } catch (e) {}
-    }
+    // إصلاح عاجل (مراجعة B3: Blocker): كل مدخلات المحرك من القاعدة، لا من مخازن الذاكرة
+    // (كانت فارغة بعد B2e، ومتأخرة قبله). فشل القراءة يُرمى: لا احتساب على بيانات ناقصة.
+    const loaded = preloaded || await loadEngineContext(db, schema, empIdNum);
+    const emp: any = loaded.employee;
     if (!emp) return null;
-
-    // Collect Context Data
-    const commendations = [
-      ...inMemoryEmployeeCommendations.filter(c => parseInt(String(c.employee_id || c.employeeId)) === empIdNum),
-      ...(genericMemoryStores['appreciations'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empIdNum)
-    ];
-
-    const penalties = (genericMemoryStores['penalties'] || []).filter(p => parseInt(String(p.employee_id || p.employeeId)) === empIdNum);
-    const attendances = (genericMemoryStores['attendance'] || []).filter(a => parseInt(String(a.employee_id || a.employeeId)) === empIdNum);
-    const evaluations = [
-      ...(genericMemoryStores['performance'] || []).filter(e => parseInt(String(e.employee_id || e.employeeId)) === empIdNum),
-      ...(genericMemoryStores['annual-evaluations'] || []).filter(e => parseInt(String(e.employee_id || e.employeeId)) === empIdNum)
-    ];
-    const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empIdNum).map(toEngineLeave);
-    const serviceCredits = [
-      ...(genericMemoryStores['service-credits'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum),
-      ...(genericMemoryStores['service-records'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum)
-    ];
-    const qualifications = (genericMemoryStores['qualifications'] || []).filter(q => parseInt(String(q.employee_id || q.employeeId)) === empIdNum);
-    const degreeTrackSnapshots = (genericMemoryStores['degree-track-snapshots'] || []).filter(s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum);
-    const specializationCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empIdNum);
+    const { penalties, attendances, evaluations, serviceCredits, qualifications, specializationCredits } = loaded;
+    const commendations = loaded.commendations;
+    const leaves = loaded.leaves.map(toEngineLeave);
+    const degreeTrackSnapshots = loaded.degreeTrackSnapshots;
+    const commendationRulesNow = loaded.commendationRules || inMemoryCommendationRulesSettings;
 
     const context: EngineContextData = {
       commendations,
@@ -9445,9 +9354,11 @@ async function startServer() {
       qualifications,
       degreeTrackSnapshots,
       specializationCredits,
-      governingCourses: inMemoryGoverningCourses,
-      governingAssignments: inMemoryEmployeeAssignments,
-      gradeRules: inMemoryGradePromotionRules,
+      // الدورات الحاكمة: من القاعدة؛ إن كان الجدول فارغاً فالقائمة الافتراضية الموثّقة
+      governingCourses: loaded.governingCourses.length ? loaded.governingCourses : inMemoryGoverningCourses,
+      governingAssignments: loaded.governingAssignments,
+      // قواعد الترفيع: من القاعدة؛ إن كانت فارغة فالقواعد القانونية الافتراضية
+      gradeRules: loaded.gradeRules.length ? loaded.gradeRules : inMemoryGradePromotionRules,
       // أنواع العقوبات من الإعدادات (جدول penalty_types) بدل الجدول الثابت في المحرك
       penaltyTypes: await loadPenaltyTypesForEngine()
     } as EngineContextData;
@@ -9455,8 +9366,8 @@ async function startServer() {
     const fullResult = recalculateEligibilitySync(emp, context);
 
     // Check Degree Recognition Track & Deficit Auto-Settlement
-    const activeDegreeSnapshot = (genericMemoryStores['degree-track-snapshots'] || []).find(
-      s => parseInt(String(s.employee_id || s.employeeId)) === empIdNum && (s.status === 'نشط' || !s.status)
+    const activeDegreeSnapshot = degreeTrackSnapshots.find(
+      (s: any) => s.status === 'نشط' || !s.status
     );
 
     let activeDegreeSimResult: any = undefined;
@@ -9471,8 +9382,8 @@ async function startServer() {
         });
         activeDegreeSimResult = simResult;
 
-        const isAutoSettlementEnabled = inMemoryCommendationRulesSettings.degreeTrackAutoSettlement === true ||
-          inMemoryCommendationRulesSettings.degree_track_auto_settlement === true;
+        const isAutoSettlementEnabled = commendationRulesNow.degreeTrackAutoSettlement === true ||
+          commendationRulesNow.degree_track_auto_settlement === true;
 
         if (isAutoSettlementEnabled && simResult.hasDeficit && simResult.realTimeNextPromotion?.isEligible) {
           const settlementRes = processDegreeTrackSettlement(emp, activeDegreeSnapshot, simResult, {
@@ -9593,17 +9504,13 @@ async function startServer() {
     // Sync Promotion Delay Reasons (Phase 4: Transparency & Reminders)
     try {
       const rawReasons = extractDelayReasonsFromContext(emp, fullResult, context, activeDegreeSimResult);
-      const currentReasonsStore = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
+      // أسباب التأخير الحالية لهذا الموظف من القاعدة (لا من الذاكرة) حتى لا تُكرَّر عند كل احتساب
       const delaySyncRes = syncPromotionDelayReasons(
         empIdNum,
         rawReasons,
-        currentReasonsStore,
-        inMemoryCommendationRulesSettings
+        loaded.delayReasons,
+        commendationRulesNow
       );
-
-      genericMemoryStores['promotion-delay-reasons'] = delaySyncRes.updatedStore;
-      genericMemoryStores['promotion_delay_reasons'] = delaySyncRes.updatedStore;
-      inMemoryPromotionDelayReasons = delaySyncRes.updatedStore;
 
       // DB sync with safe isolation
       try {
@@ -10193,8 +10100,11 @@ async function startServer() {
       const dueForPromotion: any[] = [];
       const dueForSettlement: any[] = [];
 
-      for (const emp of (inMemoryEmployees || [])) {
+      // إصلاح عاجل: الموظفون ومدخلات المحرك من القاعدة بقراءة واحدة لكل جدول (كانت من الذاكرة ← قائمة فارغة بعد B2e)
+      const bulk = await loadAllEngineContexts(db, schema);
+      for (const rawEmp of bulk.employees) {
         try {
+          const emp: any = bothCases(rawEmp);
           const empId = parseInt(String(emp.id));
           if (!empId) continue;
 
@@ -10205,7 +10115,7 @@ async function startServer() {
           }
 
           // Recalculate standard eligibility
-          const eligibility = await triggerRecalculateEligibility(empId);
+          const eligibility = await triggerRecalculateEligibility(empId, bulk.get(empId));
 
           const currentTitle = emp.jobTitle || emp.job_title || 'موظف';
           const basePromotionDate = emp.lastPromotionDate || emp.last_promotion_date || emp.gradeDate || emp.grade_date || emp.currentAppointmentDate || emp.current_appointment_date || emp.appointmentDate || emp.appointment_date || emp.firstAppointmentDate || emp.first_appointment_date || '';
@@ -10496,7 +10406,7 @@ async function startServer() {
             });
           }
         } catch (empErr: any) {
-          console.warn(`[DUE_LIST_WARN] Could not process eligibility for employee ${emp.id}:`, empErr?.message || empErr);
+          console.warn(`[DUE_LIST_WARN] Could not process eligibility for employee ${rawEmp?.id}:`, empErr?.message || empErr);
         }
       }
 
@@ -10578,7 +10488,9 @@ async function startServer() {
           return res.status(400).json({ error: `معرف الموظف غير صالح: ${item.employee_id}` });
         }
 
-        const emp = inMemoryEmployees.find(e => parseInt(String(e.id)) === empId);
+        // إصلاح عاجل: الموظف من القاعدة (كان من الذاكرة ← 404 لكل الموظفين بعد B2e)
+        const [dbEmpRow] = await db.select().from(schema.employees).where(eq(schema.employees.id, empId));
+        const emp: any = dbEmpRow ? bothCases(dbEmpRow) : null;
         if (!emp) {
           return res.status(404).json({ error: `الموظف رقم (${empId}) غير موجود بالنظام` });
         }
@@ -10944,9 +10856,10 @@ async function startServer() {
       // Always trigger a fresh recalculation to ensure delay reasons match latest status
       await triggerRecalculateEligibility(empId);
 
-      const store = genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons || [];
+      // إصلاح عاجل: الأسباب من القاعدة (كانت من الذاكرة ← قائمة فارغة بعد B2e)
+      const store: any[] = await db.select().from(schema.promotionDelayReasons).where(eq(schema.promotionDelayReasons.employeeId, empId));
       const employeeReasons = store
-        .filter(item => parseInt(String(item.employeeId || item.employee_id)) === empId)
+        .filter((item: any) => parseInt(String(item.employeeId || item.employee_id)) === empId)
         .map(item => ({
           ...mapKeys(item, camelToSnake),
           ...item,
@@ -11002,7 +10915,7 @@ async function startServer() {
           isHidden,
           updatedAt: new Date()
         }).where(eq(schema.promotionDelayReasons.id, id));
-      } catch (e) {}
+      } catch (e) { return sendRouteError(res, e, 'حفظ سبب التأخير'); }
 
       saveLocalDb();
       res.json({ success: true, isHidden, id });
@@ -11037,7 +10950,7 @@ async function startServer() {
           isAutoReminder: false,
           updatedAt: new Date()
         }).where(eq(schema.promotionDelayReasons.id, id));
-      } catch (e) {}
+      } catch (e) { return sendRouteError(res, e, 'حفظ سبب التأخير'); }
 
       saveLocalDb();
       res.json({ success: true, reminderDate, isAutoReminder: false, id });
@@ -11051,9 +10964,12 @@ async function startServer() {
   app.get('/api/promotion-delay-reasons/due-reminders', requireAuth, async (req, res) => {
     try {
       const today = formatDateString(new Date());
-      const store = Array.isArray(genericMemoryStores['promotion-delay-reasons'])
-        ? genericMemoryStores['promotion-delay-reasons']
-        : (Array.isArray(inMemoryPromotionDelayReasons) ? inMemoryPromotionDelayReasons : []);
+      // إصلاح عاجل: من القاعدة (كانت من الذاكرة ← لوحة التذكيرات فارغة بعد B2e)
+      const store: any[] = await db.select().from(schema.promotionDelayReasons)
+        .where(and(sql`${schema.promotionDelayReasons.isHidden} IS NOT TRUE`, sql`${schema.promotionDelayReasons.isResolved} IS NOT TRUE`, isNotNull(schema.promotionDelayReasons.reminderDate)));
+      const reminderEmpIds = [...new Set(store.map((r: any) => r.employeeId).filter(Boolean))] as number[];
+      const reminderEmps = reminderEmpIds.length ? await db.select().from(schema.employees).where(inArray(schema.employees.id, reminderEmpIds)) : [];
+      const empById = new Map(reminderEmps.map((e: any) => [e.id, e]));
 
       const dueItems: any[] = [];
 
@@ -11067,7 +10983,7 @@ async function startServer() {
           if (!isDateOnOrAfter(today, rDate)) continue;
 
           const empId = parseInt(String(item.employeeId || item.employee_id));
-          const emp = (inMemoryEmployees || []).find(e => parseInt(String(e.id)) === empId);
+          const emp: any = empById.get(empId);
 
           dueItems.push({
             ...item,
