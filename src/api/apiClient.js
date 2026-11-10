@@ -299,6 +299,10 @@ export const apiClient = {
     }),
     getDueReminders: () => request('/api/promotion-delay-reasons/due-reminders')
   },
+  // B5: إنهاء الوحدة التنظيمية بتاريخ
+  orgUnits: {
+    end: (id, data) => request(`/api/org-units/${id}/end`, { method: 'POST', body: JSON.stringify(data || {}) }),
+  },
   // B4d: إصدارات سلّم الرواتب
   salaryScaleVersions: {
     list: () => request('/api/salary-scale/versions'),

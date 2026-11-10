@@ -450,7 +450,7 @@ export default function EmployeeForm() {
     setShowOrgPicker(true);
     setOrgLoading(true);
     apiClient.entities.OrgUnit.list().then(data => {
-      setOrgUnits(data || []);
+      setOrgUnits((data || []).filter(u => !u.is_ended)); // B5: الوحدات المنتهية ما تنختار
       const allIds = new Set((data || []).map(u => u.id));
       setExpandedPickerIds(allIds);
     }).catch(err => {
@@ -487,7 +487,8 @@ export default function EmployeeForm() {
     setForm(prev => ({
       ...prev,
       department: unit.name,
-      section: chain
+      section: chain,
+      org_unit_id: unit.id // B5: الربط بالمعرّف
     }));
     setShowOrgPicker(false);
   };
@@ -1322,7 +1323,8 @@ export default function EmployeeForm() {
                           setForm(prev => ({
                             ...prev,
                             department: 'لم يحدد بعد',
-                            section: 'لم يحدد بعد'
+                            section: 'لم يحدد بعد',
+                            org_unit_id: null // B5: فك الربط بالوحدة
                           }));
                         }} 
                         variant="outline"
