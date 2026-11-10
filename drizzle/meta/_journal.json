@@ -57,6 +57,13 @@
       "when": 1794291949623,
       "tag": "0007_orders_field_history",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794304241914,
+      "tag": "0008_history_capture_trigger",
+      "breakpoints": true
     }
   ]
 }

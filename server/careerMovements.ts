@@ -191,6 +191,8 @@ export async function rebuildEmployeeFields(tx: any, schema: any, employeeId: nu
     if (!sameValue((emp as any)?.[col], v)) patch[col] = v;
   }
   if (Object.keys(patch).length > 0) {
+    // السجل مكتوب مسبقاً؛ مشغّل الالتقاط (0008) ما يكرره
+    await tx.execute(sql`SELECT set_config('hr.skip_history', '1', true)`);
     await tx.update(schema.employees).set(patch).where(eq(schema.employees.id, employeeId));
   }
   return { changed: Object.keys(patch) };
