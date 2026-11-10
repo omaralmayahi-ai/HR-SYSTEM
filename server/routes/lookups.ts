@@ -31,7 +31,7 @@ export function registerLookupRoutes(app: Express, ctx: RouteContext) {
         if (existing.some((r: any) => normalize(String(r.name || '')) === normalize(name))) {
           return res.status(400).json({ error: `${label} (${name}) موجود بالفعل` });
         }
-        const [inserted] = await db.insert(table).values({ name }).returning();
+        const [inserted] = (await db.insert(table).values({ name }).returning()) as any[];
         res.status(201).json(mapKeys(inserted, camelToSnake));
       } catch (error: any) {
         fail(res, error, `حفظ ${label}`);
@@ -47,7 +47,7 @@ export function registerLookupRoutes(app: Express, ctx: RouteContext) {
 
   // حذف حالة: مسموح فقط إذا لم يحملها أي موظف حالياً
   app.delete('/api/employee-statuses/:id', requireAuth, requireAdmin, async (req, res) => {
-    const id = parseInt(req.params.id);
+    const id = parseInt(String(req.params.id));
     if (isNaN(id)) return res.status(400).json({ error: 'معرّف غير صالح' });
     try {
       const [statusRecord] = await db.select().from(schema.employeeStatuses).where(eq(schema.employeeStatuses.id, id));

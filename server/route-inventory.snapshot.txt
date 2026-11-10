@@ -1,221 +1,227 @@
-GET /api/health
-GET /api/settings/public
-GET /api/settings
-PUT /api/settings
-GET /api/leave-accrual/status
-POST /api/leave-accrual/execute
-GET /api/logs
-POST /api/logs
-POST /api/auth/login
-GET /api/auth/me
-GET /api/auth/users
-POST /api/auth/users
-PUT /api/auth/users/:id
-DELETE /api/auth/users/:id
-GET /api/admin/schema-health
-GET /api/employees
-POST /api/employees
-POST /api/employees/bulk-import
-GET /api/employees/status-counts
-GET /api/employees/:id
-PUT /api/employees/:id
-DELETE /api/employees/:id
-GET /api/archive
-POST /api/archive/:id/restore
-DELETE /api/archive/:id
-GET /api/leaves
-POST /api/leaves
-PUT /api/leaves/:id
-DELETE /api/leaves/:id
-GET /api/penalties
-POST /api/penalties
-PUT /api/penalties/:id
-DELETE /api/penalties/:id
-GET /api/appreciations
-POST /api/appreciations
-PUT /api/appreciations/:id
-DELETE /api/appreciations/:id
-GET /api/performance
-POST /api/performance
-PUT /api/performance/:id
-DELETE /api/performance/:id
-GET /api/career
-POST /api/career
-DELETE /api/career/:id
-GET /api/trainings
-POST /api/trainings
-PUT /api/trainings/:id
-DELETE /api/trainings/:id
-GET /api/trainings/enrollments
-POST /api/trainings/enroll
-PUT /api/trainings/enrollments/:id
-DELETE /api/trainings/enrollments/:id
-GET /api/trainers
-GET /api/trainers/:id
-POST /api/trainers
-PUT /api/trainers/:id
-DELETE /api/trainers/:id
-GET /api/annual-plans
-POST /api/annual-plans
-GET /api/salaries
-POST /api/salaries/bulk
-PUT /api/salaries/:id
-GET /api/attendance
-POST /api/attendance
-PUT /api/attendance/:id
-DELETE /api/attendance/:id
-GET /api/org-units
-POST /api/org-units
-PUT /api/org-units/:id
-DELETE /api/org-units/:id
-GET /api/job-titles
-POST /api/job-titles
-PUT /api/job-titles/:id
-DELETE /api/job-titles/:id
-GET /api/salary-scale
-POST /api/salary-scale
-POST /api/salary-scale/bulk
-PUT /api/salary-scale/:id
-DELETE /api/salary-scale/:id
-GET /api/grade-promotion-rules
-PUT /api/grade-promotion-rules/:id
-PUT /api/grade-promotion-rules
-GET /api/commendation-types
-POST /api/commendation-types
-PUT /api/commendation-types/:id
-DELETE /api/commendation-types/:id
-GET /api/employee-commendations
-POST /api/employee-commendations
-PUT /api/employee-commendations/:id
-DELETE /api/employee-commendations/:id
-GET /api/commendation-rules-settings
-PUT /api/commendation-rules-settings
-GET /api/allowances-deductions
-POST /api/allowances-deductions
-PUT /api/allowances-deductions/:id
-DELETE /api/allowances-deductions/:id
-GET /api/work-locations
-POST /api/work-locations
-PUT /api/work-locations/:id
-DELETE /api/work-locations/:id
-GET /api/service-types
-POST /api/service-types
-GET /api/employee-statuses
-POST /api/employee-statuses
-DELETE /api/employee-statuses/:id
-GET /api/education-degrees
-POST /api/education-degrees
-PUT /api/education-degrees/:id
-DELETE /api/education-degrees/:id
-GET /api/responsibility-allowances
-POST /api/responsibility-allowances
-PUT /api/responsibility-allowances/:id
-DELETE /api/responsibility-allowances/:id
-GET /api/leave-types
-POST /api/leave-types
-PUT /api/leave-types/:id
-DELETE /api/leave-types/:id
-GET /api/penalty-types
-POST /api/penalty-types/reset-legal
-POST /api/penalty-types
-PUT /api/penalty-types/:id
-DELETE /api/penalty-types/:id
-GET /api/evaluation-forms
-POST /api/evaluation-forms/seed-defaults
-POST /api/evaluation-forms
-PUT /api/evaluation-forms/:id
-DELETE /api/evaluation-forms/:id
-GET /api/shift-systems
-POST /api/shift-systems
-PUT /api/shift-systems/:id
-DELETE /api/shift-systems/:id
-GET /api/qualifications
-POST /api/qualifications
-PUT /api/qualifications/:id
-PATCH /api/qualifications/:id/toggle
-DELETE /api/qualifications/:id
-GET /api/job-assignments
-POST /api/job-assignments
-PUT /api/job-assignments/:id
-DELETE /api/job-assignments/:id
-GET /api/promotions
-POST /api/promotions
-PUT /api/promotions/:id
-DELETE /api/promotions/:id
-GET /api/salary-allowances
-POST /api/salary-allowances
-PUT /api/salary-allowances/:id
-DELETE /api/salary-allowances/:id
-GET /api/annual-evaluations
-POST /api/annual-evaluations
-PUT /api/annual-evaluations/:id
-DELETE /api/annual-evaluations/:id
-GET /api/training-courses
-POST /api/training-courses
-PUT /api/training-courses/:id
-DELETE /api/training-courses/:id
-GET /api/transfers
-POST /api/transfers
-PUT /api/transfers/:id
-DELETE /api/transfers/:id
-GET /api/retirements
-POST /api/retirements
-DELETE /api/retirements/:id
-GET /api/documents
-POST /api/documents
-DELETE /api/documents/:id
-GET /api/service-records
-POST /api/service-records
-PUT /api/service-records/:id
-DELETE /api/service-records/:id
-GET /api/governing-courses
-POST /api/governing-courses
-PUT /api/governing-courses/:id
-DELETE /api/governing-courses/:id
-POST /api/governing-courses/reset-defaults
-GET /api/governing-courses/exemption-rules
-POST /api/governing-courses/exemption-rules
-GET /api/governing-courses/matrix
-POST /api/governing-courses/matrix
-GET /api/governing-courses/grade-requirements
-POST /api/governing-courses/grade-requirements
-GET /api/governing-courses/employee-assignments
-POST /api/governing-courses/employee-assignments
-PUT /api/career/:id
-PUT /api/retirements/:id
-PUT /api/documents/:id
-GET /api/service-credits
-POST /api/service-credits
-PUT /api/service-credits/:id
-DELETE /api/service-credits/:id
-GET /api/degree-track-snapshots
-POST /api/degree-track-snapshots
-PUT /api/degree-track-snapshots/:id
-DELETE /api/degree-track-snapshots/:id
-GET /api/degree-track-simulation-steps
-POST /api/degree-track-simulation-steps
-PUT /api/degree-track-simulation-steps/:id
-DELETE /api/degree-track-simulation-steps/:id
-GET /api/specialization-credits
-POST /api/specialization-credits
-PUT /api/specialization-credits/:id
-DELETE /api/specialization-credits/:id
-GET /api/promotion-delay-reasons
-POST /api/promotion-delay-reasons
-PUT /api/promotion-delay-reasons/:id
-DELETE /api/promotion-delay-reasons/:id
-GET /api/promotion_delay_reasons
-POST /api/promotion_delay_reasons
-PUT /api/promotion_delay_reasons/:id
-DELETE /api/promotion_delay_reasons/:id
-GET /api/employees/:id/promotion-eligibility
-POST /api/qualifications/:id/initiate-degree-recognition
-GET /api/degree-track-snapshots/:id/simulation
-GET /api/employees/:id/degree-track
-GET /api/promotions/due-list
-POST /api/promotions/approve-batch
-POST /api/degree-track/process-auto-settlement
-GET /api/promotion-delay-reasons/employee/:id
-PATCH /api/promotion-delay-reasons/:id/hide
-PATCH /api/promotion-delay-reasons/:id/reminder
-GET /api/promotion-delay-reasons/due-reminders
+USE * [anonymous]
+USE * [jsonParser]
+USE * [urlencodedParser]
+GET /api/health []
+USE /api [dbGateMiddleware]
+GET /api/settings/public []
+GET /api/settings [requireAuth]
+PUT /api/settings [requireAuth,requireAdmin]
+GET /api/leave-accrual/status [requireAuth]
+POST /api/leave-accrual/execute [requireAuth,requireAdmin]
+GET /api/logs [requireAuth]
+POST /api/logs [requireAuth,requireWriter]
+POST /api/auth/login []
+GET /api/auth/me [requireAuth]
+GET /api/auth/users [requireAuth,requireAdmin]
+POST /api/auth/users [requireAuth,requireAdmin]
+PUT /api/auth/users/:id [requireAuth,requireAdmin]
+DELETE /api/auth/users/:id [requireAuth,requireAdmin]
+GET /api/admin/schema-health [requireAuth,requireAdmin]
+GET /api/employees [requireAuth]
+POST /api/employees [requireAuth,requireWriter]
+POST /api/employees/bulk-import [requireAuth,requireAdmin]
+GET /api/employees/status-counts [requireAuth]
+GET /api/employees/:id [requireAuth]
+PUT /api/employees/:id [requireAuth,requireWriter]
+DELETE /api/employees/:id [requireAuth,requireAdmin]
+GET /api/archive [requireAuth,requireAdmin]
+POST /api/archive/:id/restore [requireAuth,requireAdmin]
+DELETE /api/archive/:id [requireAuth,requireAdmin]
+GET /api/leaves [requireAuth]
+POST /api/leaves [requireAuth]
+PUT /api/leaves/:id [requireAuth,requireWriter]
+DELETE /api/leaves/:id [requireAuth,requireWriter]
+GET /api/penalties [requireAuth]
+POST /api/penalties [requireAuth,requireWriter]
+PUT /api/penalties/:id [requireAuth,requireWriter]
+DELETE /api/penalties/:id [requireAuth,requireWriter]
+GET /api/appreciations [requireAuth]
+POST /api/appreciations [requireAuth,requireWriter]
+PUT /api/appreciations/:id [requireAuth,requireWriter]
+DELETE /api/appreciations/:id [requireAuth,requireWriter]
+GET /api/performance [requireAuth]
+POST /api/performance [requireAuth,requireWriter]
+PUT /api/performance/:id [requireAuth,requireWriter]
+DELETE /api/performance/:id [requireAuth,requireWriter]
+GET /api/career [requireAuth]
+POST /api/career [requireAuth,requireWriter]
+DELETE /api/career/:id [requireAuth,requireWriter]
+GET /api/trainings [requireAuth]
+POST /api/trainings [requireAuth,requireWriter]
+PUT /api/trainings/:id [requireAuth,requireWriter]
+DELETE /api/trainings/:id [requireAuth,requireWriter]
+GET /api/trainings/enrollments [requireAuth]
+POST /api/trainings/enroll [requireAuth,requireWriter]
+PUT /api/trainings/enrollments/:id [requireAuth,requireWriter]
+DELETE /api/trainings/enrollments/:id [requireAuth,requireWriter]
+GET /api/trainers [requireAuth]
+GET /api/trainers/:id [requireAuth]
+POST /api/trainers [requireAuth,requireWriter]
+PUT /api/trainers/:id [requireAuth,requireWriter]
+DELETE /api/trainers/:id [requireAuth,requireWriter]
+GET /api/annual-plans [requireAuth]
+POST /api/annual-plans [requireAuth,requireWriter]
+GET /api/salaries [requireAuth]
+POST /api/salaries/bulk [requireAuth,requireWriter]
+PUT /api/salaries/:id [requireAuth,requireWriter]
+GET /api/attendance [requireAuth]
+POST /api/attendance [requireAuth,requireWriter]
+PUT /api/attendance/:id [requireAuth,requireWriter]
+DELETE /api/attendance/:id [requireAuth,requireWriter]
+GET /api/org-units [requireAuth]
+POST /api/org-units [requireAuth,requireWriter]
+PUT /api/org-units/:id [requireAuth,requireWriter]
+DELETE /api/org-units/:id [requireAuth,requireWriter]
+GET /api/job-titles [requireAuth]
+POST /api/job-titles [requireAuth,requireWriter]
+PUT /api/job-titles/:id [requireAuth,requireWriter]
+DELETE /api/job-titles/:id [requireAuth,requireWriter]
+GET /api/salary-scale [requireAuth]
+POST /api/salary-scale [requireAuth,requireAdmin]
+POST /api/salary-scale/bulk [requireAuth,requireAdmin]
+PUT /api/salary-scale/:id [requireAuth,requireAdmin]
+DELETE /api/salary-scale/:id [requireAuth,requireAdmin]
+GET /api/grade-promotion-rules [requireAuth]
+PUT /api/grade-promotion-rules/:id [requireAuth,requireAdmin]
+PUT /api/grade-promotion-rules [requireAuth,requireAdmin]
+GET /api/commendation-types [requireAuth]
+POST /api/commendation-types [requireAuth,requireAdmin]
+PUT /api/commendation-types/:id [requireAuth,requireAdmin]
+DELETE /api/commendation-types/:id [requireAuth,requireAdmin]
+GET /api/employee-commendations [requireAuth]
+POST /api/employee-commendations [requireAuth,requireWriter]
+PUT /api/employee-commendations/:id [requireAuth,requireWriter]
+DELETE /api/employee-commendations/:id [requireAuth,requireWriter]
+GET /api/commendation-rules-settings [requireAuth]
+PUT /api/commendation-rules-settings [requireAuth,requireAdmin]
+GET /api/allowances-deductions [requireAuth]
+POST /api/allowances-deductions [requireAuth,requireAdmin]
+PUT /api/allowances-deductions/:id [requireAuth,requireAdmin]
+DELETE /api/allowances-deductions/:id [requireAuth,requireAdmin]
+GET /api/work-locations [requireAuth]
+POST /api/work-locations [requireAuth,requireAdmin]
+PUT /api/work-locations/:id [requireAuth,requireAdmin]
+DELETE /api/work-locations/:id [requireAuth,requireAdmin]
+GET /api/service-types [requireAuth]
+POST /api/service-types [requireAuth,requireWriter]
+GET /api/employee-statuses [requireAuth]
+POST /api/employee-statuses [requireAuth,requireWriter]
+DELETE /api/employee-statuses/:id [requireAuth,requireAdmin]
+GET /api/education-degrees [requireAuth]
+POST /api/education-degrees [requireAuth,requireAdmin]
+PUT /api/education-degrees/:id [requireAuth,requireAdmin]
+DELETE /api/education-degrees/:id [requireAuth,requireAdmin]
+GET /api/responsibility-allowances [requireAuth]
+POST /api/responsibility-allowances [requireAuth,requireAdmin]
+PUT /api/responsibility-allowances/:id [requireAuth,requireAdmin]
+DELETE /api/responsibility-allowances/:id [requireAuth,requireAdmin]
+GET /api/leave-types [requireAuth]
+POST /api/leave-types [requireAuth,requireAdmin]
+PUT /api/leave-types/:id [requireAuth,requireAdmin]
+DELETE /api/leave-types/:id [requireAuth,requireAdmin]
+GET /api/penalty-types [requireAuth]
+POST /api/penalty-types/reset-legal [requireAuth,requireAdmin]
+POST /api/penalty-types [requireAuth,requireAdmin]
+PUT /api/penalty-types/:id [requireAuth,requireAdmin]
+DELETE /api/penalty-types/:id [requireAuth,requireAdmin]
+GET /api/evaluation-forms [requireAuth]
+POST /api/evaluation-forms/seed-defaults [requireAuth,requireAdmin]
+POST /api/evaluation-forms [requireAuth,requireAdmin]
+PUT /api/evaluation-forms/:id [requireAuth,requireAdmin]
+DELETE /api/evaluation-forms/:id [requireAuth,requireAdmin]
+GET /api/shift-systems [requireAuth]
+POST /api/shift-systems [requireAuth,requireAdmin]
+PUT /api/shift-systems/:id [requireAuth,requireAdmin]
+DELETE /api/shift-systems/:id [requireAuth,requireAdmin]
+GET /api/qualifications [requireAuth]
+POST /api/qualifications [requireAuth,requireWriter]
+PUT /api/qualifications/:id [requireAuth,requireWriter]
+PATCH /api/qualifications/:id/toggle [requireAuth,requireWriter]
+DELETE /api/qualifications/:id [requireAuth,requireWriter]
+GET /api/job-assignments [requireAuth]
+POST /api/job-assignments [requireAuth,requireWriter]
+PUT /api/job-assignments/:id [requireAuth,requireWriter]
+DELETE /api/job-assignments/:id [requireAuth,requireWriter]
+GET /api/promotions [requireAuth]
+POST /api/promotions [requireAuth,requireWriter]
+PUT /api/promotions/:id [requireAuth,requireWriter]
+DELETE /api/promotions/:id [requireAuth,requireWriter]
+GET /api/salary-allowances [requireAuth]
+POST /api/salary-allowances [requireAuth,requireWriter]
+PUT /api/salary-allowances/:id [requireAuth,requireWriter]
+DELETE /api/salary-allowances/:id [requireAuth,requireWriter]
+GET /api/annual-evaluations [requireAuth]
+POST /api/annual-evaluations [requireAuth,requireWriter]
+PUT /api/annual-evaluations/:id [requireAuth,requireWriter]
+DELETE /api/annual-evaluations/:id [requireAuth,requireWriter]
+GET /api/training-courses [requireAuth]
+POST /api/training-courses [requireAuth,requireWriter]
+PUT /api/training-courses/:id [requireAuth,requireWriter]
+DELETE /api/training-courses/:id [requireAuth,requireWriter]
+GET /api/transfers [requireAuth]
+POST /api/transfers [requireAuth,requireWriter]
+PUT /api/transfers/:id [requireAuth,requireWriter]
+DELETE /api/transfers/:id [requireAuth,requireWriter]
+GET /api/retirements [requireAuth]
+POST /api/retirements [requireAuth,requireWriter]
+DELETE /api/retirements/:id [requireAuth,requireWriter]
+GET /api/documents [requireAuth]
+POST /api/documents [requireAuth,requireWriter]
+DELETE /api/documents/:id [requireAuth,requireWriter]
+GET /api/service-records [requireAuth]
+POST /api/service-records [requireAuth,requireWriter]
+PUT /api/service-records/:id [requireAuth,requireWriter]
+DELETE /api/service-records/:id [requireAuth,requireWriter]
+GET /api/governing-courses [requireAuth]
+POST /api/governing-courses [requireAuth,requireAdmin]
+PUT /api/governing-courses/:id [requireAuth,requireAdmin]
+DELETE /api/governing-courses/:id [requireAuth,requireAdmin]
+POST /api/governing-courses/reset-defaults [requireAuth,requireAdmin]
+GET /api/governing-courses/exemption-rules [requireAuth]
+POST /api/governing-courses/exemption-rules [requireAuth,requireAdmin]
+GET /api/governing-courses/matrix [requireAuth]
+POST /api/governing-courses/matrix [requireAuth,requireAdmin]
+GET /api/governing-courses/grade-requirements [requireAuth]
+POST /api/governing-courses/grade-requirements [requireAuth,requireAdmin]
+GET /api/governing-courses/employee-assignments [requireAuth]
+POST /api/governing-courses/employee-assignments [requireAuth,requireWriter]
+PUT /api/career/:id [requireAuth,requireWriter]
+PUT /api/retirements/:id [requireAuth,requireWriter]
+PUT /api/documents/:id [requireAuth,requireWriter]
+GET /api/service-credits [requireAuth]
+POST /api/service-credits [requireAuth,requireWriter]
+PUT /api/service-credits/:id [requireAuth,requireWriter]
+DELETE /api/service-credits/:id [requireAuth,requireWriter]
+GET /api/degree-track-snapshots [requireAuth]
+POST /api/degree-track-snapshots [requireAuth,requireWriter]
+PUT /api/degree-track-snapshots/:id [requireAuth,requireWriter]
+DELETE /api/degree-track-snapshots/:id [requireAuth,requireWriter]
+GET /api/degree-track-simulation-steps [requireAuth]
+POST /api/degree-track-simulation-steps [requireAuth,requireWriter]
+PUT /api/degree-track-simulation-steps/:id [requireAuth,requireWriter]
+DELETE /api/degree-track-simulation-steps/:id [requireAuth,requireWriter]
+GET /api/specialization-credits [requireAuth]
+POST /api/specialization-credits [requireAuth,requireWriter]
+PUT /api/specialization-credits/:id [requireAuth,requireWriter]
+DELETE /api/specialization-credits/:id [requireAuth,requireWriter]
+GET /api/promotion-delay-reasons [requireAuth]
+POST /api/promotion-delay-reasons [requireAuth,requireWriter]
+PUT /api/promotion-delay-reasons/:id [requireAuth,requireWriter]
+DELETE /api/promotion-delay-reasons/:id [requireAuth,requireWriter]
+GET /api/promotion_delay_reasons [requireAuth]
+POST /api/promotion_delay_reasons [requireAuth,requireWriter]
+PUT /api/promotion_delay_reasons/:id [requireAuth,requireWriter]
+DELETE /api/promotion_delay_reasons/:id [requireAuth,requireWriter]
+GET /api/employees/:id/promotion-eligibility [requireAuth]
+POST /api/qualifications/:id/initiate-degree-recognition [requireAuth,requireWriter]
+GET /api/degree-track-snapshots/:id/simulation [requireAuth]
+GET /api/employees/:id/degree-track [requireAuth]
+GET /api/promotions/due-list [requireAuth]
+POST /api/promotions/approve-batch [requireAuth,requireAdmin]
+POST /api/degree-track/process-auto-settlement [requireAuth,requireAdmin]
+GET /api/promotion-delay-reasons/employee/:id [requireAuth]
+PATCH /api/promotion-delay-reasons/:id/hide [requireAuth,requireWriter]
+PATCH /api/promotion-delay-reasons/:id/reminder [requireAuth,requireWriter]
+GET /api/promotion-delay-reasons/due-reminders [requireAuth]
+USE * [serveStatic]
+USE * [anonymous]

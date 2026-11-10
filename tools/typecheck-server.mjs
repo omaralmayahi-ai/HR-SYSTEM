@@ -10,7 +10,9 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace
 const tsc = path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
 const r = spawnSync(tsc, ['-p', 'tsconfig.server.json'], { cwd: root, encoding: 'utf8', shell: process.platform === 'win32' });
 const lines = (r.stdout || '').split('\n').filter((l) => / error TS\d+/.test(l));
-const undefinedNames = lines.filter((l) => l.includes('error TS2304'));
+// أخطاء تعني ReferenceError/TypeError وقت التشغيل لا مجرد نوع (مراجعة B3: M1)
+const RUNTIME_CODES = ['TS2304', 'TS2552', 'TS2448', 'TS2454', 'TS2663', 'TS2588', 'TS1308'];
+const undefinedNames = lines.filter((l) => RUNTIME_CODES.some((c) => l.includes('error ' + c)));
 const baseline = JSON.parse(fs.readFileSync(path.join(root, 'tools', 'typecheck-server-baseline.json'), 'utf8')).maxErrors;
 let fail = false;
 if (undefinedNames.length) { console.error('✖ أسماء غير معرّفة (ReferenceError وقت التشغيل):\n' + undefinedNames.join('\n')); fail = true; }

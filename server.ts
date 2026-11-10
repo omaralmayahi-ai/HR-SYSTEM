@@ -10197,7 +10197,7 @@ async function startServer() {
 
   // B3: جرد المسارات بترتيب تسجيلها (لاختبار server/routeInventory.test.ts). لا يشغّل الخادم.
   if (process.env.ROUTE_INVENTORY_OUT) {
-    fs.writeFileSync(process.env.ROUTE_INVENTORY_OUT, routeRegistry.list().join('\n') + '\n', 'utf8');
+    fs.writeFileSync(process.env.ROUTE_INVENTORY_OUT, routeRegistry.inventory().join('\n') + '\n', 'utf8');
     process.exit(0);
   }
 

@@ -44,7 +44,7 @@ export function registerWorkLocationRoutes(app: Express, ctx: RouteContext) {
   });
 
   app.put('/api/work-locations/:id', requireAuth, requireAdmin, async (req, res) => {
-    const id = parseInt(req.params.id);
+    const id = parseInt(String(req.params.id));
     const { name, province, allowance_amount, work_start_hour, work_end_hour } = req.body || {};
     try {
       const [updated] = await db.update(schema.workLocations)
@@ -66,7 +66,7 @@ export function registerWorkLocationRoutes(app: Express, ctx: RouteContext) {
 
   app.delete('/api/work-locations/:id', requireAuth, requireAdmin, async (req, res) => {
     try {
-      await db.delete(schema.workLocations).where(eq(schema.workLocations.id, parseInt(req.params.id)));
+      await db.delete(schema.workLocations).where(eq(schema.workLocations.id, parseInt(String(req.params.id))));
       res.json({ success: true });
     } catch (error: any) {
       fail(res, error, 'حذف موقع العمل');

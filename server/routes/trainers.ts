@@ -61,7 +61,7 @@ export function registerTrainerRoutes(app: Express, ctx: RouteContext) {
 
   app.get('/api/trainers/:id', requireAuth, async (req, res) => {
     try {
-      const result = await pool.query('SELECT * FROM trainers WHERE id = $1', [parseInt(req.params.id)]);
+      const result = await pool.query('SELECT * FROM trainers WHERE id = $1', [parseInt(String(req.params.id))]);
       if (!result.rows.length) return res.status(404).json({ error: 'المدرب غير موجود' });
       res.json(enhanceTrainerRecord(result.rows[0]));
     } catch (error: any) {
@@ -105,7 +105,7 @@ export function registerTrainerRoutes(app: Express, ctx: RouteContext) {
 
   app.put('/api/trainers/:id', requireAuth, requireWriter, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       const rawData = req.body || {};
       const existingCols = await getExistingColumns(pool, 'trainers');
       const snakeData: Record<string, any> = {};
@@ -142,7 +142,7 @@ export function registerTrainerRoutes(app: Express, ctx: RouteContext) {
 
   app.delete('/api/trainers/:id', requireAuth, requireWriter, async (req, res) => {
     try {
-      const result = await pool.query('DELETE FROM trainers WHERE id = $1', [parseInt(req.params.id)]);
+      const result = await pool.query('DELETE FROM trainers WHERE id = $1', [parseInt(String(req.params.id))]);
       if (!result.rowCount) return res.status(404).json({ error: 'المدرب غير موجود' });
       res.json({ success: true });
     } catch (error: any) {
