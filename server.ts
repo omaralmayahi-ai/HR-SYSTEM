@@ -10,6 +10,15 @@ import { runMigrations, getMigrationStatus } from './server/migrate.ts';
 import { normalizeEmployeeIdentifiers } from './server/employeeIdentifiers.ts';
 import { createDbGate } from './server/dbGate.ts';
 import { loadEngineContext, loadAllEngineContexts, bothCases, type LoadedEngineContext } from './server/engineContext.ts';
+import type { RouteContext } from './server/context.ts';
+import { registerTrainerRoutes } from './server/routes/trainers.ts';
+import { registerWorkLocationRoutes } from './server/routes/workLocations.ts';
+import { registerLookupRoutes } from './server/routes/lookups.ts';
+import { registerAnnualPlanRoutes } from './server/routes/annualPlans.ts';
+import { registerSalaryRoutes } from './server/routes/salaries.ts';
+import { registerAttendanceRoutes } from './server/routes/attendance.ts';
+import { camelToSnake, snakeToCamel, mapKeys } from './server/util/caseMap.ts';
+import { getExistingColumns as getExistingColumnsFrom } from './server/util/dbColumns.ts';
 import { getTableColumns, ilike, ne, isNull, isNotNull, gt, inArray, not, sql, count as sqlCount } from 'drizzle-orm';
 import { requireAuth, requireAdmin, requireWriter, AuthRequest, JWT_SECRET, getJwtSecret } from './src/middleware/auth.ts';
 import { seedAdminUser } from './src/db/users.ts';
@@ -86,6 +95,9 @@ async function startServer() {
     res.status(up ? 200 : 503).json({ status: up ? 'ok' : 'db_unavailable', db: up ? 'up' : 'down', migrations: getMigrationStatus().status });
   });
   app.use('/api', dbGate.middleware);
+
+  // B3: سياق مسارات المجالات المنقولة إلى server/routes/
+  const routeCtx: RouteContext = { db, schema, pool, requireAuth, requireWriter, requireAdmin, sendRouteError, respondIfDbWriteError };
 
   // System Settings Store & API
   let systemSettingsStore: any = {
@@ -701,31 +713,7 @@ async function startServer() {
     }
   });
 
-  // Casing conversion utilities for database <-> frontend compatibility
-  function camelToSnake(str: string): string {
-    return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
-  }
-
-  function snakeToCamel(str: string): string {
-    return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
-  }
-
-  function mapKeys(obj: any, transform: (s: string) => string): any {
-    if (obj === null || obj === undefined) return obj;
-    if (Array.isArray(obj)) {
-      return obj.map(item => mapKeys(item, transform));
-    }
-    if (typeof obj === 'object') {
-      if (obj instanceof Date) return obj;
-      const newObj: any = {};
-      for (const key of Object.keys(obj)) {
-        // Keep string values as is, transform only keys
-        newObj[transform(key)] = mapKeys(obj[key], transform);
-      }
-      return newObj;
-    }
-    return obj;
-  }
+  // B3: camelToSnake / snakeToCamel / mapKeys نُقلت إلى server/util/caseMap.ts
 
   // Helper to ensure employee name fields and full_name are in sync
   function processEmployeeNameData(mappedData: any, isCreate = false) {
@@ -3329,45 +3317,9 @@ async function startServer() {
     return mapped;
   }
 
-  function enhanceTrainerRecord(t: any) {
-    if (!t) return t;
-    const mapped = mapKeys(t, camelToSnake);
-    mapped.fullName = t.fullName || mapped.full_name;
-    mapped.full_name = mapped.full_name || t.fullName;
-    mapped.trainerType = t.trainerType || mapped.trainer_type;
-    mapped.trainer_type = mapped.trainer_type || t.trainerType;
-    mapped.employeeId = t.employeeId ?? mapped.employee_id;
-    mapped.employee_id = mapped.employee_id ?? t.employeeId;
-    mapped.employeeCode = t.employeeCode || mapped.employee_code;
-    mapped.employee_code = mapped.employee_code || t.employeeCode;
-    mapped.trainerCode = t.trainerCode || mapped.trainer_code;
-    mapped.trainer_code = mapped.trainer_code || t.trainerCode;
-    mapped.courseCategories = t.courseCategories || mapped.course_categories;
-    mapped.course_categories = mapped.course_categories || t.courseCategories;
-    mapped.specialtyDetails = t.specialtyDetails || mapped.specialty_details;
-    mapped.specialty_details = mapped.specialty_details || t.specialtyDetails;
-    mapped.workPhone = t.workPhone || mapped.work_phone;
-    mapped.work_phone = mapped.work_phone || t.workPhone;
-    return mapped;
-  }
-
-  function enhancePlanRecord(p: any) {
-    if (!p) return p;
-    const mapped = mapKeys(p, camelToSnake);
-    mapped.plannedCoursesCount = p.plannedCoursesCount ?? mapped.planned_courses_count;
-    mapped.planned_courses_count = mapped.planned_courses_count ?? p.plannedCoursesCount;
-    mapped.plannedTraineesCount = p.plannedTraineesCount ?? mapped.planned_trainees_count;
-    mapped.planned_trainees_count = mapped.planned_trainees_count ?? p.plannedTraineesCount;
-    mapped.plannedBudget = p.plannedBudget ?? mapped.planned_budget;
-    mapped.planned_budget = mapped.planned_budget ?? p.plannedBudget;
-    return mapped;
-  }
-
   // In-memory stores for training & enrollments fallback
   let inMemoryTrainings: any[] = [];
   let inMemoryEnrollments: any[] = [];
-  let inMemoryTrainers: any[] = [];
-  let inMemoryAnnualPlans: any[] = [];
   let inMemoryAttendance: any[] = [];
 
   // Training Courses API
@@ -3581,491 +3533,20 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // Helper to dynamically inspect existing database table columns
-  async function getExistingColumns(tableName: string): Promise<Set<string>> {
-    try {
-      const res = await pool.query(
-        `SELECT column_name FROM information_schema.columns WHERE table_name = $1`,
-        [tableName]
-      );
-      return new Set(res.rows.map((r: any) => r.column_name));
-    } catch {
-      return new Set();
-    }
-  }
+  // B3: getExistingColumns نُقلت إلى server/util/dbColumns.ts
+  const getExistingColumns = (tableName: string) => getExistingColumnsFrom(pool, tableName);
 
-  // Trainers API (دليل المدربين)
-  app.get('/api/trainers', requireAuth, async (req, res) => {
-    try {
-      const result = await pool.query('SELECT * FROM trainers ORDER BY id DESC');
-      if (result && result.rows && result.rows.length > 0) {
-        return res.json(result.rows.map(enhanceTrainerRecord));
-      }
-    } catch (error: any) {
-      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
-    }
-    res.json(inMemoryTrainers.map(enhanceTrainerRecord));
-  });
+  // Trainers API (دليل المدربين) — B3: server/routes/trainers.ts
+  registerTrainerRoutes(app, routeCtx);
 
-  app.get('/api/trainers/:id', requireAuth, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      const result = await pool.query('SELECT * FROM trainers WHERE id = $1', [id]);
-      if (result.rows.length > 0) {
-        return res.json(enhanceTrainerRecord(result.rows[0]));
-      }
-    } catch (error: any) {
-      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
-    }
-    const id = parseInt(req.params.id);
-    const memTrainer = inMemoryTrainers.find(t => parseInt(String(t.id)) === id);
-    if (memTrainer) return res.json(enhanceTrainerRecord(memTrainer));
-    res.status(404).json({ error: 'المدرب غير موجود' });
-  });
+  // Annual Training Plans API — B3: server/routes/annualPlans.ts
+  registerAnnualPlanRoutes(app, routeCtx);
 
-  app.post('/api/trainers', requireAuth, requireWriter, async (req, res) => {
-    try {
-      const rawData = req.body;
-      const existingCols = await getExistingColumns('trainers');
-      
-      const snakeData: Record<string, any> = {};
-      const addField = (colName: string, val: any) => {
-        if (existingCols.size === 0 || existingCols.has(colName)) {
-          if (val !== undefined && val !== null) snakeData[colName] = val;
-        }
-      };
+  // Salaries API — B3: server/routes/salaries.ts
+  registerSalaryRoutes(app, routeCtx);
 
-      addField('full_name', rawData.full_name || rawData.fullName);
-      addField('specialization', rawData.specialization);
-      addField('trainer_type', rawData.trainer_type || rawData.trainerType || 'داخلي');
-      addField('organization', rawData.organization);
-      addField('phone', rawData.phone);
-      addField('email', rawData.email);
-      addField('status', rawData.status || 'معتمد');
-      addField('rating', rawData.rating || 'ممتاز');
-      addField('notes', rawData.notes);
-
-      const rawEmpId = rawData.employee_id ?? rawData.employeeId;
-      let parsedEmpId: number | null = null;
-      if (rawEmpId !== undefined && rawEmpId !== null && rawEmpId !== '' && !isNaN(parseInt(rawEmpId))) {
-        parsedEmpId = parseInt(rawEmpId);
-      }
-      addField('employee_id', parsedEmpId);
-
-      addField('employee_code', rawData.employee_code || rawData.employeeCode);
-      addField('trainer_code', rawData.trainer_code || rawData.trainerCode);
-      
-      const cats = rawData.course_categories ?? rawData.courseCategories;
-      if (cats !== undefined && cats !== null) {
-        let catVal = cats;
-        if (typeof cats === 'string') {
-          try {
-            const parsed = JSON.parse(cats);
-            if (typeof parsed === 'string') {
-              catVal = parsed;
-            }
-          } catch {
-            // Keep original string
-          }
-        } else {
-          catVal = JSON.stringify(cats);
-        }
-        addField('course_categories', typeof catVal === 'string' ? catVal : JSON.stringify(catVal));
-      }
-      addField('specialty_details', rawData.specialty_details || rawData.specialtyDetails);
-      addField('work_phone', rawData.work_phone || rawData.workPhone);
-
-      let savedRow: any = null;
-      try {
-        const keys = Object.keys(snakeData);
-        const values = Object.values(snakeData);
-        const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
-        const q = `INSERT INTO trainers (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`;
-        const result = await pool.query(q, values);
-        if (result && result.rows && result.rows.length > 0) {
-          savedRow = result.rows[0];
-        }
-      } catch (dbErr) {
-        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
-        console.warn('Database fallback for insert trainer');
-      }
-
-      const newId = savedRow?.id || (inMemoryTrainers.reduce((max, t) => Math.max(max, parseInt(t.id) || 0), 0) || 0) + 1;
-      const memTrainer = { id: newId, ...rawData, ...(savedRow || {}), created_at: new Date().toISOString() };
-      inMemoryTrainers.push(memTrainer);
-      saveLocalDb();
-      res.status(201).json(enhanceTrainerRecord(memTrainer));
-    } catch (error: any) {
-      console.warn('Database fallback for create trainer');
-      res.status(201).json(enhanceTrainerRecord({ id: 1, ...req.body }));
-    }
-  });
-
-  app.put('/api/trainers/:id', requireAuth, requireWriter, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      const rawData = req.body;
-      const existingCols = await getExistingColumns('trainers');
-      
-      const snakeData: Record<string, any> = {};
-      const addField = (colName: string, val: any) => {
-        if (existingCols.size === 0 || existingCols.has(colName)) {
-          if (val !== undefined) snakeData[colName] = val;
-        }
-      };
-
-      addField('full_name', rawData.full_name ?? rawData.fullName);
-      addField('specialization', rawData.specialization);
-      addField('trainer_type', rawData.trainer_type ?? rawData.trainerType);
-      addField('organization', rawData.organization);
-      addField('phone', rawData.phone);
-      addField('email', rawData.email);
-      addField('status', rawData.status);
-      addField('rating', rawData.rating);
-      addField('notes', rawData.notes);
-
-      const rawEmpId = rawData.employee_id ?? rawData.employeeId;
-      if (rawEmpId !== undefined) {
-        snakeData['employee_id'] = (rawEmpId !== null && rawEmpId !== '' && !isNaN(parseInt(rawEmpId))) ? parseInt(rawEmpId) : null;
-      }
-      addField('employee_code', rawData.employee_code ?? rawData.employeeCode);
-      addField('trainer_code', rawData.trainer_code ?? rawData.trainerCode);
-      
-      const cats = rawData.course_categories ?? rawData.courseCategories;
-      if (cats !== undefined && cats !== null) {
-        let catVal = cats;
-        if (typeof cats === 'string') {
-          try {
-            const parsed = JSON.parse(cats);
-            if (typeof parsed === 'string') {
-              catVal = parsed;
-            }
-          } catch {
-            // Keep original string
-          }
-        } else {
-          catVal = JSON.stringify(cats);
-        }
-        addField('course_categories', typeof catVal === 'string' ? catVal : JSON.stringify(catVal));
-      }
-      addField('specialty_details', rawData.specialty_details ?? rawData.specialtyDetails);
-      addField('work_phone', rawData.work_phone ?? rawData.workPhone);
-
-      let savedRow: any = null;
-      try {
-        const keys = Object.keys(snakeData);
-        const values = Object.values(snakeData);
-        const setClauses = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
-        const q = `UPDATE trainers SET ${setClauses} WHERE id = $${keys.length + 1} RETURNING *`;
-        const result = await pool.query(q, [...values, id]);
-        if (result && result.rows && result.rows.length > 0) {
-          savedRow = result.rows[0];
-        }
-      } catch (dbErr) {
-        if (respondIfDbWriteError(res, dbErr, 'تعديل السجل')) return;
-        console.warn('Database fallback for update trainer');
-      }
-
-      const idx = inMemoryTrainers.findIndex(t => parseInt(String(t.id)) === id);
-      let record: any;
-      if (idx !== -1) {
-        inMemoryTrainers[idx] = { ...inMemoryTrainers[idx], ...rawData, ...(savedRow || {}) };
-        record = inMemoryTrainers[idx];
-      } else {
-        record = { id, ...rawData, ...(savedRow || {}) };
-        inMemoryTrainers.push(record);
-      }
-      saveLocalDb();
-      res.json(enhanceTrainerRecord(record));
-    } catch (error: any) {
-      console.warn('Database fallback for update trainer');
-      res.json(enhanceTrainerRecord({ id: parseInt(req.params.id), ...req.body }));
-    }
-  });
-
-  app.delete('/api/trainers/:id', requireAuth, requireWriter, async (req, res) => {
-    const id = parseInt(req.params.id); // كان داخل try ويُستعمل بعدها ← ReferenceError بعد نجاح الحذف
-    try {
-      await pool.query('DELETE FROM trainers WHERE id = $1', [id]);
-    } catch (error: any) {
-      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
-      console.warn('Database fallback for delete trainer');
-    }
-    inMemoryTrainers = inMemoryTrainers.filter(t => parseInt(String(t.id)) !== id);
-    saveLocalDb();
-    res.json({ success: true });
-  });
-
-  // Annual Training Plans API (خطط التدريب السنوية)
-  app.get('/api/annual-plans', requireAuth, async (req, res) => {
-    try {
-      const plans = await db.select().from(schema.annualTrainingPlans).orderBy(desc(schema.annualTrainingPlans.year));
-      if (plans && plans.length > 0) {
-        return res.json(plans.map(enhancePlanRecord));
-      }
-    } catch (error: any) {
-      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
-    }
-    res.json(inMemoryAnnualPlans.map(enhancePlanRecord));
-  });
-
-  app.post('/api/annual-plans', requireAuth, requireWriter, async (req, res) => {
-    try {
-      const data = mapKeys(req.body, snakeToCamel);
-      if (data.year) data.year = parseInt(data.year);
-      if (data.plannedCoursesCount) data.plannedCoursesCount = parseInt(data.plannedCoursesCount);
-      if (data.plannedTraineesCount) data.plannedTraineesCount = parseInt(data.plannedTraineesCount);
-      if (data.plannedBudget) data.plannedBudget = parseInt(data.plannedBudget);
-
-      const { year, track } = data;
-      let savedPlan: any = null;
-      try {
-        const existing = await db.select().from(schema.annualTrainingPlans)
-          .where(and(eq(schema.annualTrainingPlans.year, year), eq(schema.annualTrainingPlans.track, track))).limit(1);
-
-        if (existing.length > 0) {
-          const [updated] = await db.update(schema.annualTrainingPlans)
-            .set(data)
-            .where(eq(schema.annualTrainingPlans.id, existing[0].id))
-            .returning();
-          savedPlan = updated;
-        } else {
-          const [newPlan] = await db.insert(schema.annualTrainingPlans).values(data).returning();
-          savedPlan = newPlan;
-        }
-      } catch (dbErr) {
-        if (respondIfDbWriteError(res, dbErr, 'حفظ السجل')) return;
-        console.warn('Database fallback for save annual plan');
-      }
-
-      const idx = inMemoryAnnualPlans.findIndex(p => p.year === year && p.track === track);
-      let record: any;
-      if (idx !== -1) {
-        inMemoryAnnualPlans[idx] = { ...inMemoryAnnualPlans[idx], ...data, ...(savedPlan || {}) };
-        record = inMemoryAnnualPlans[idx];
-      } else {
-        const newId = savedPlan?.id || (inMemoryAnnualPlans.reduce((max, p) => Math.max(max, parseInt(p.id) || 0), 0) || 0) + 1;
-        record = { id: newId, ...data, ...(savedPlan || {}) };
-        inMemoryAnnualPlans.push(record);
-      }
-      saveLocalDb();
-      res.status(201).json(enhancePlanRecord(record));
-    } catch (error: any) {
-      console.warn('Database fallback for save annual plan');
-      res.status(201).json(enhancePlanRecord({ id: 1, ...req.body }));
-    }
-  });
-
-  // Salaries API
-  app.get('/api/salaries', requireAuth, async (req, res) => {
-    try {
-      const month = req.query.month ? parseInt(req.query.month as string) : undefined;
-      const year = req.query.year ? parseInt(req.query.year as string) : undefined;
-      if (!month || !year || isNaN(month) || isNaN(year)) {
-        return res.status(400).json({ error: 'Missing or invalid month/year' });
-      }
-      const records = await db.select()
-        .from(schema.salaryRecords)
-        .where(
-          and(
-            eq(schema.salaryRecords.month, month),
-            eq(schema.salaryRecords.year, year)
-          )
-        );
-      
-      // Map to snake_case format for the frontend compatibility
-      const mapped = records.map(r => ({
-        id: r.id,
-        employee_id: r.employeeId,
-        month: r.month,
-        year: r.year,
-        base_salary: r.baseSalary,
-        total_allowances: r.totalAllowances,
-        total_deductions: r.totalDeductions,
-        net_salary: r.netSalary,
-        status: r.status,
-        created_at: r.createdAt
-      }));
-      return res.json(mapped);
-    } catch (error: any) {
-      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
-    }
-    res.json([]);
-  });
-
-  app.post('/api/salaries/bulk', requireAuth, requireWriter, async (req, res) => {
-    try {
-      const data = req.body;
-      if (!Array.isArray(data)) {
-        return res.status(400).json({ error: 'Body must be an array' });
-      }
-      const toInsert = data.map(item => ({
-        employeeId: item.employee_id,
-        month: item.month,
-        year: item.year,
-        baseSalary: item.base_salary,
-        totalAllowances: item.total_allowances,
-        totalDeductions: item.total_deductions,
-        netSalary: item.net_salary,
-        status: item.status || 'مسودة'
-      }));
-      const invalid = toInsert.findIndex(r => !r.employeeId || !r.month || !r.year);
-      if (invalid !== -1) {
-        return res.status(400).json({ error: `بيانات ناقصة في السجل رقم ${invalid + 1}: الموظف والشهر والسنة مطلوبة` });
-      }
-      let inserted: any[] = [];
-      if (toInsert.length > 0) {
-        // إدراج واحد (ذري): إما أن تُحفظ كل القسائم أو لا يُحفظ شيء
-        inserted = await db.insert(schema.salaryRecords).values(toInsert).returning({ id: schema.salaryRecords.id });
-      }
-      res.status(201).json({ success: true, count: inserted.length });
-    } catch (error: any) {
-      // لا يوجد تخزين احتياطي لقسائم الرواتب: أي فشل (بما فيه انقطاع الاتصال) يُعاد كخطأ ولا يُبلَّغ كنجاح
-      sendRouteError(res, error, 'حفظ قسائم الرواتب');
-    }
-  });
-
-  app.put('/api/salaries/:id', requireAuth, requireWriter, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: 'Invalid ID format' });
-      }
-      const data = req.body;
-      const updateObj: any = {};
-      if (data.status) updateObj.status = data.status;
-      if (Object.keys(updateObj).length === 0) {
-        return res.status(400).json({ error: 'لا توجد حقول للتعديل' });
-      }
-      const [updated] = await db.update(schema.salaryRecords)
-        .set(updateObj)
-        .where(eq(schema.salaryRecords.id, id))
-        .returning();
-      if (!updated) return res.status(404).json({ error: 'قسيمة الراتب غير موجودة' });
-      res.json(updated);
-    } catch (error: any) {
-      console.error('Error updating salary record:', error);
-      sendRouteError(res, error);
-    }
-  });
-
-  // Attendance API
-  app.get('/api/attendance', requireAuth, async (req, res) => {
-    try {
-      const date = req.query.date as string;
-      let query = db.select().from(schema.attendance);
-      if (date) {
-        query = db.select().from(schema.attendance).where(eq(schema.attendance.date, date)) as any;
-      }
-      const records = await query.orderBy(desc(schema.attendance.createdAt));
-      
-      const mapped = records.map(r => ({
-        id: r.id,
-        employee_id: r.employeeId,
-        date: r.date,
-        status: r.status,
-        check_in: r.checkIn,
-        check_out: r.checkOut,
-        late_minutes: r.lateMinutes,
-        notes: r.notes,
-        created_at: r.createdAt
-      }));
-      return res.json(mapped);
-    } catch (error: any) {
-      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
-    }
-    res.json([]);
-  });
-
-  app.post('/api/attendance', requireAuth, requireWriter, async (req, res) => {
-    try {
-      const data = req.body;
-      const toInsert = {
-        employeeId: data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined),
-        date: data.date,
-        status: data.status,
-        checkIn: data.check_in !== undefined ? data.check_in : data.checkIn,
-        checkOut: data.check_out !== undefined ? data.check_out : data.checkOut,
-        lateMinutes: data.late_minutes !== undefined ? parseInt(data.late_minutes) : (data.lateMinutes !== undefined ? parseInt(data.lateMinutes) : 0),
-        notes: data.notes
-      };
-
-      if (!toInsert.employeeId) {
-        return res.status(400).json({ error: 'الموظف مطلوب' });
-      }
-
-      const [newRecord] = await db.insert(schema.attendance).values(toInsert as any).returning();
-      
-      res.status(201).json({
-        id: newRecord.id,
-        employee_id: newRecord.employeeId,
-        date: newRecord.date,
-        status: newRecord.status,
-        check_in: newRecord.checkIn,
-        check_out: newRecord.checkOut,
-        late_minutes: newRecord.lateMinutes,
-        notes: newRecord.notes,
-        created_at: newRecord.createdAt
-      });
-    } catch (error: any) {
-      console.error('Error creating attendance record:', error);
-      sendRouteError(res, error);
-    }
-  });
-
-  app.put('/api/attendance/:id', requireAuth, requireWriter, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: 'Invalid ID format' });
-      }
-      const data = req.body;
-      const updateObj: any = {};
-      if (data.status) updateObj.status = data.status;
-      if (data.check_in !== undefined) updateObj.checkIn = data.check_in;
-      if (data.check_out !== undefined) updateObj.checkOut = data.check_out;
-      if (data.late_minutes !== undefined) updateObj.lateMinutes = parseInt(data.late_minutes) || 0;
-      if (data.notes !== undefined) updateObj.notes = data.notes;
-
-      if (Object.keys(updateObj).length === 0) {
-        return res.status(400).json({ error: 'لا توجد حقول للتعديل' });
-      }
-      const [updated] = await db.update(schema.attendance)
-        .set(updateObj)
-        .where(eq(schema.attendance.id, id))
-        .returning();
-      if (!updated) return res.status(404).json({ error: 'سجل الدوام غير موجود' });
-
-      res.json({
-        id: updated.id,
-        employee_id: updated.employeeId,
-        date: updated.date,
-        status: updated.status,
-        check_in: updated.checkIn,
-        check_out: updated.checkOut,
-        late_minutes: updated.lateMinutes,
-        notes: updated.notes,
-        created_at: updated.createdAt
-      });
-    } catch (error: any) {
-      console.error('Error updating attendance record:', error);
-      sendRouteError(res, error);
-    }
-  });
-
-  app.delete('/api/attendance/:id', requireAuth, requireWriter, async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: 'Invalid ID format' });
-      }
-      await db.delete(schema.attendance).where(eq(schema.attendance.id, id));
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error('Error deleting attendance record:', error);
-      sendRouteError(res, error);
-    }
-  });
+  // Attendance API — B3: server/routes/attendance.ts
+  registerAttendanceRoutes(app, routeCtx);
 
   // Organizational Units API
   let inMemoryOrgUnits: any[] = [
@@ -4356,27 +3837,8 @@ async function startServer() {
     { id: 9, name: 'بلا مسؤولية', allowance_rate: 0, status: 'فعال' }
   ];
 
-  let inMemoryWorkLocations: any[] = [
-    { id: 1, name: 'المقر العام - بغداد', allowance_amount: 0, work_start_hour: '08:00', work_end_hour: '15:00' },
-    { id: 2, name: 'حقول البصرة النفطية', allowance_amount: 150000, work_start_hour: '07:00', work_end_hour: '19:00' },
-    { id: 3, name: 'مصفى كركوك', allowance_amount: 100000, work_start_hour: '08:00', work_end_hour: '16:00' },
-    { id: 4, name: 'مستودع ميسان', allowance_amount: 75000, work_start_hour: '08:00', work_end_hour: '15:00' }
-  ];
 
-  let inMemoryServiceTypes: any[] = [
-    { id: 1, name: 'دائم' },
-    { id: 2, name: 'عقد' },
-    { id: 3, name: 'أجر يومي' }
-  ];
 
-  let inMemoryEmployeeStatuses: any[] = [
-    { id: 1, name: 'مستمر' },
-    { id: 2, name: 'منسب' },
-    { id: 3, name: 'مجاز' },
-    { id: 4, name: 'متقاعد' },
-    { id: 5, name: 'مستقيل' },
-    { id: 6, name: 'موقوف' }
-  ];
 
   let inMemoryShiftSystems: any[] = [
     { id: 1, name: 'دوام صباحي اعتيادي (5 أيام عمل / يومين راحة)', work_days: 5, rest_days: 2, allowance_amount: 0, status: 'فعال' },
@@ -5634,248 +5096,9 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // --- Work Locations API ---
-  app.get('/api/work-locations', requireAuth, async (req, res) => {
-    try {
-      const records = await db.select().from(schema.workLocations).orderBy(asc(schema.workLocations.id));
-      return res.json(mapKeys(records, camelToSnake));
-    } catch (error: any) {
-      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
-    }
-    res.json(inMemoryWorkLocations);
-  });
-
-  app.post('/api/work-locations', requireAuth, requireAdmin, async (req, res) => {
-    const { name, province, allowance_amount, work_start_hour, work_end_hour } = req.body;
-    const locName = String(name || '').trim();
-    if (!locName) {
-      return res.status(400).json({ error: 'اسم موقع العمل مطلوب' });
-    }
-    {
-      const normalize = (s: string) => s.trim().toLowerCase();
-      let existingLocs: any[] = [];
-      try {
-        existingLocs = await db.select().from(schema.workLocations);
-      } catch (error: any) {
-        console.warn('Database fallback for work location duplicate check');
-      }
-      const allLocs = [...existingLocs, ...inMemoryWorkLocations];
-      if (allLocs.some(l => normalize(String(l.name || '')) === normalize(locName))) {
-        return res.status(400).json({ error: `موقع العمل (${locName}) موجود بالفعل` });
-      }
-    }
-    try {
-      const [newRecord] = await db.insert(schema.workLocations).values({
-        name,
-        province,
-        allowanceAmount: allowance_amount !== undefined ? parseFloat(allowance_amount) : 0,
-        workStartHour: work_start_hour || '08:00',
-        workEndHour: work_end_hour || '15:00',
-      }).returning();
-      if (newRecord) return res.status(201).json(mapKeys(newRecord, camelToSnake));
-    } catch (error: any) {
-      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
-      console.warn('Database fallback for create work location');
-    }
-    const memItem = {
-      id: inMemoryWorkLocations.length + 1,
-      name,
-      province,
-      allowance_amount: allowance_amount !== undefined ? parseFloat(allowance_amount) : 0,
-      work_start_hour: work_start_hour || '08:00',
-      work_end_hour: work_end_hour || '15:00',
-      created_at: new Date().toISOString()
-    };
-    inMemoryWorkLocations.push(memItem);
-    saveLocalDb();
-    res.status(201).json(memItem);
-  });
-
-  app.put('/api/work-locations/:id', requireAuth, requireAdmin, async (req, res) => {
-    const id = parseInt(req.params.id);
-    const { name, province, allowance_amount, work_start_hour, work_end_hour } = req.body;
-    try {
-      const [updated] = await db.update(schema.workLocations)
-        .set({
-          name,
-          province,
-          allowanceAmount: allowance_amount !== undefined ? parseFloat(allowance_amount) : undefined,
-          workStartHour: work_start_hour !== undefined ? work_start_hour : undefined,
-          workEndHour: work_end_hour !== undefined ? work_end_hour : undefined,
-        })
-        .where(eq(schema.workLocations.id, id))
-        .returning();
-      if (updated) return res.json(mapKeys(updated, camelToSnake));
-    } catch (error: any) {
-      if (respondIfDbWriteError(res, error, 'تعديل السجل')) return;
-      console.warn('Database fallback for update work location');
-    }
-    const idx = inMemoryWorkLocations.findIndex(r => r.id === id);
-    if (idx !== -1) {
-      inMemoryWorkLocations[idx] = {
-        ...inMemoryWorkLocations[idx],
-        name: name || inMemoryWorkLocations[idx].name,
-        province: province || inMemoryWorkLocations[idx].province,
-        allowance_amount: allowance_amount !== undefined ? parseFloat(allowance_amount) : inMemoryWorkLocations[idx].allowance_amount,
-        work_start_hour: work_start_hour || inMemoryWorkLocations[idx].work_start_hour,
-        work_end_hour: work_end_hour || inMemoryWorkLocations[idx].work_end_hour
-      };
-      saveLocalDb();
-      return res.json(inMemoryWorkLocations[idx]);
-    }
-    res.json({ id, name, province, allowance_amount, work_start_hour, work_end_hour });
-  });
-
-  app.delete('/api/work-locations/:id', requireAuth, requireAdmin, async (req, res) => {
-    const id = parseInt(req.params.id);
-    try {
-      await db.delete(schema.workLocations).where(eq(schema.workLocations.id, id));
-    } catch (error: any) {
-      if (respondIfDbWriteError(res, error, 'حذف السجل')) return;
-      console.warn('Database fallback for delete work location');
-    }
-    inMemoryWorkLocations = inMemoryWorkLocations.filter(r => r.id !== id);
-    saveLocalDb();
-    res.json({ success: true });
-  });
-
-  // --- أنواع الخدمة (service types) API: قائمة قابلة للتوسيع بلا تكرار ---
-  app.get('/api/service-types', requireAuth, async (req, res) => {
-    try {
-      const records = await db.select().from(schema.serviceTypes).orderBy(asc(schema.serviceTypes.id));
-      return res.json(mapKeys(records, camelToSnake));
-    } catch (error: any) {
-      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
-    }
-    res.json(inMemoryServiceTypes);
-  });
-
-  app.post('/api/service-types', requireAuth, requireWriter, async (req, res) => {
-    const name = String(req.body?.name || '').trim();
-    if (!name) {
-      return res.status(400).json({ error: 'اسم نوع الخدمة مطلوب' });
-    }
-    const normalize = (s: string) => s.trim().toLowerCase();
-    let existingRows: any[] = [];
-    try {
-      existingRows = await db.select().from(schema.serviceTypes);
-    } catch (error: any) {
-      console.warn('Database fallback for service types duplicate check');
-    }
-    const allNames = [...existingRows, ...inMemoryServiceTypes].map(r => normalize(String(r.name || '')));
-    if (allNames.includes(normalize(name))) {
-      return res.status(400).json({ error: `نوع الخدمة (${name}) موجود بالفعل` });
-    }
-    let newRecord: any = null;
-    try {
-      const [inserted] = await db.insert(schema.serviceTypes).values({ name }).returning();
-      newRecord = inserted;
-    } catch (error: any) {
-      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
-      console.warn('Database fallback for create service type');
-    }
-    const memItem = newRecord || { id: (inMemoryServiceTypes.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1, name, created_at: new Date().toISOString() };
-    inMemoryServiceTypes.push(mapKeys(memItem, camelToSnake));
-    saveLocalDb();
-    res.status(201).json(mapKeys(memItem, camelToSnake));
-  });
-
-  // --- حالات الموظف (employee statuses) API: قائمة قابلة للتوسيع بلا تكرار ---
-  app.get('/api/employee-statuses', requireAuth, async (req, res) => {
-    try {
-      const records = await db.select().from(schema.employeeStatuses).orderBy(asc(schema.employeeStatuses.id));
-      return res.json(mapKeys(records, camelToSnake));
-    } catch (error: any) {
-      return sendRouteError(res, error, 'قراءة البيانات'); // B2d: لا قراءة من الذاكرة
-    }
-    res.json(inMemoryEmployeeStatuses);
-  });
-
-  app.post('/api/employee-statuses', requireAuth, requireWriter, async (req, res) => {
-    const name = String(req.body?.name || '').trim();
-    if (!name) {
-      return res.status(400).json({ error: 'اسم حالة الموظف مطلوب' });
-    }
-    const normalize = (s: string) => s.trim().toLowerCase();
-    let existingRows: any[] = [];
-    try {
-      existingRows = await db.select().from(schema.employeeStatuses);
-    } catch (error: any) {
-      console.warn('Database fallback for employee statuses duplicate check');
-    }
-    const allNames = [...existingRows, ...inMemoryEmployeeStatuses].map(r => normalize(String(r.name || '')));
-    if (allNames.includes(normalize(name))) {
-      return res.status(400).json({ error: `حالة الموظف (${name}) موجودة بالفعل` });
-    }
-    let newRecord: any = null;
-    try {
-      const [inserted] = await db.insert(schema.employeeStatuses).values({ name }).returning();
-      newRecord = inserted;
-    } catch (error: any) {
-      if (respondIfDbWriteError(res, error, 'حفظ السجل')) return;
-      console.warn('Database fallback for create employee status');
-    }
-    const memItem = newRecord || { id: (inMemoryEmployeeStatuses.reduce((max, r) => Math.max(max, parseInt(r.id) || 0), 0) || 0) + 1, name, created_at: new Date().toISOString() };
-    inMemoryEmployeeStatuses.push(mapKeys(memItem, camelToSnake));
-    saveLocalDb();
-    res.status(201).json(mapKeys(memItem, camelToSnake));
-  });
-
-  // حذف حالة موظف: مسموح فقط بشرط ألا يستخدمها أي موظف حالياً (سيطرة على إدارة الحالات
-  // كي لا تُحذف حالة أُضيفت بالخطأ وتؤثر على موظفين فعليين يحملونها).
-  app.delete('/api/employee-statuses/:id', requireAuth, requireAdmin, async (req, res) => {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) {
-      return res.status(400).json({ error: 'Invalid ID format' });
-    }
-    try {
-      let statusRecord: any = null;
-      try {
-        const [row] = await db.select().from(schema.employeeStatuses).where(eq(schema.employeeStatuses.id, id));
-        statusRecord = row || null;
-      } catch (err) {
-        console.warn('Database fallback for employee status lookup');
-      }
-      if (!statusRecord) {
-        statusRecord = inMemoryEmployeeStatuses.find(r => parseInt(String(r.id)) === id) || null;
-      }
-      if (!statusRecord) {
-        return res.status(404).json({ error: 'حالة الموظف غير موجودة' });
-      }
-      const statusName = String(statusRecord.name || '').trim();
-
-      // فحص الارتباط: هل يوجد موظف واحد أو أكثر يحمل هذه الحالة حالياً؟
-      let usedCount = 0;
-      try {
-        const rows = await db.select().from(schema.employees).where(eq(schema.employees.status, statusName));
-        usedCount = rows.length;
-      } catch (err) {
-        console.warn('Database fallback for employee status usage check');
-      }
-      if (usedCount === 0) {
-        usedCount = inMemoryEmployees.filter(e => String(e.status || '').trim() === statusName).length;
-      }
-      if (usedCount > 0) {
-        return res.status(400).json({
-          error: `لا يمكن حذف حالة (${statusName})، مستخدمة حالياً من قبل ${usedCount} موظف/ة. يجب تغيير حالة هؤلاء الموظفين أولاً قبل حذف هذه الحالة.`,
-          count: usedCount
-        });
-      }
-
-      try {
-        await db.delete(schema.employeeStatuses).where(eq(schema.employeeStatuses.id, id));
-      } catch (err) {
-        if (respondIfDbWriteError(res, err, 'حذف السجل')) return;
-        console.warn('Database fallback for delete employee status');
-      }
-      inMemoryEmployeeStatuses = inMemoryEmployeeStatuses.filter(r => parseInt(String(r.id)) !== id);
-      saveLocalDb();
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error('Error deleting employee status:', error);
-      sendRouteError(res, error, 'حذف حالة الموظف');
-    }
-  });
+  // --- Work Locations / Service Types / Employee Statuses — B3: server/routes/workLocations.ts, lookups.ts ---
+  registerWorkLocationRoutes(app, routeCtx);
+  registerLookupRoutes(app, routeCtx);
 
   // --- Education Degrees API ---
   app.get('/api/education-degrees', requireAuth, async (req, res) => {
@@ -9204,83 +8427,7 @@ async function startServer() {
     } catch (e) {}
   }
 
-  let pendingSaveTimer: ReturnType<typeof setTimeout> | null = null;
-  let isSavingLocalDb = false;
-
-  function flushLocalDbSync() {
-    if (pendingSaveTimer) {
-      clearTimeout(pendingSaveTimer);
-      pendingSaveTimer = null;
-    }
-    if (isSavingLocalDb) return;
-    isSavingLocalDb = true;
-    try {
-      ensureDataDir();
-      const state = {
-        inMemoryEmployees,
-        inMemoryQualifications: genericMemoryStores['qualifications'] || inMemoryQualifications,
-        inMemoryJobAssignments: genericMemoryStores['job-assignments'] || inMemoryJobAssignments,
-        inMemoryPromotions: genericMemoryStores['promotions'] || inMemoryPromotions,
-        inMemorySalaryAllowances: genericMemoryStores['salary-allowances'] || inMemorySalaryAllowances,
-        inMemoryAnnualEvaluations: genericMemoryStores['annual-evaluations'] || inMemoryAnnualEvaluations,
-        inMemoryTrainingCourses: genericMemoryStores['training-courses'] || inMemoryTrainingCourses,
-        inMemoryTransfers: genericMemoryStores['transfers'] || inMemoryTransfers,
-        inMemoryRetirements: genericMemoryStores['retirements'] || inMemoryRetirements,
-        inMemoryDocuments: genericMemoryStores['documents'] || inMemoryDocuments,
-        inMemoryServiceRecords: genericMemoryStores['service-records'] || inMemoryServiceRecords,
-        inMemoryServiceCredits: genericMemoryStores['service-credits'] || inMemoryServiceCredits,
-        inMemoryLeaves: genericMemoryStores['leaves'] || inMemoryLeaves,
-        inMemoryPenalties: genericMemoryStores['penalties'] || inMemoryPenalties,
-        inMemoryAppreciations: genericMemoryStores['appreciations'] || inMemoryAppreciations,
-        inMemoryPerformanceEvaluations: genericMemoryStores['performance'] || inMemoryPerformanceEvaluations,
-        inMemoryCareerHistories: genericMemoryStores['career'] || inMemoryCareerHistories,
-        inMemoryDegreeTrackSnapshots: genericMemoryStores['degree-track-snapshots'] || inMemoryDegreeTrackSnapshots,
-        inMemoryDegreeTrackSimulationSteps: genericMemoryStores['degree-track-simulation-steps'] || inMemoryDegreeTrackSimulationSteps,
-        inMemorySpecializationCredits: genericMemoryStores['specialization-credits'] || inMemorySpecializationCredits,
-        inMemoryPromotionDelayReasons: genericMemoryStores['promotion-delay-reasons'] || inMemoryPromotionDelayReasons,
-        inMemoryAllowancesDeductions,
-        inMemoryEducationDegrees,
-        inMemoryResponsibilityAllowances,
-        inMemoryWorkLocations,
-        inMemoryShiftSystems,
-        inMemoryServiceTypes,
-        inMemoryEmployeeStatuses,
-        inMemoryLeaveTypes,
-        inMemoryPenaltyTypes,
-        inMemorySalaryScale,
-        inMemoryGradePromotionRules,
-        inMemoryCommendationTypes,
-        inMemoryEmployeeCommendations,
-        inMemoryCommendationRulesSettings,
-        inMemoryJobTitles,
-        inMemoryExemptionRules,
-        inMemoryGradeRequirements,
-        inMemoryEmployeeAssignments,
-        inMemoryTrainings,
-        inMemoryEnrollments,
-        inMemoryTrainers,
-        inMemoryAnnualPlans,
-        inMemoryAttendance,
-        inMemoryOrgUnits,
-        systemSettingsStore,
-        leaveAccrualLogs
-      };
-      const jsonStr = JSON.stringify(state);
-      const encryptedPayload = encryptData(jsonStr);
-      const tmpFile = `${DATA_FILE}.tmp.${process.pid}.${Date.now()}`;
-      fs.writeFileSync(tmpFile, encryptedPayload, { encoding: 'utf-8', mode: 0o600 });
-      try {
-        fs.renameSync(tmpFile, DATA_FILE);
-      } catch {
-        fs.writeFileSync(DATA_FILE, encryptedPayload, { encoding: 'utf-8', mode: 0o600 });
-        try { fs.unlinkSync(tmpFile); } catch {}
-      }
-    } catch (e) {
-      console.warn('Could not save local DB state:', e);
-    } finally {
-      isSavingLocalDb = false;
-    }
-  }
+  // B3: flushLocalDbSync أُزيلت (كود ميت بعد تقاعد التخزين البديل في B2e).
 
   // B2e (ق-1، ق-2): التخزين البديل متقاعد. القاعدة هي المصدر الوحيد؛ لا يُكتب الملف بعد اليوم.
   // تبقى الدالة بلا أثر لأن 86 موضعاً يستدعيها؛ تُزال مع المخازن نفسها في B3.
@@ -11046,6 +10193,12 @@ async function startServer() {
     app.use((req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
+  }
+
+  // B3: جرد المسارات بترتيب تسجيلها (لاختبار server/routeInventory.test.ts). لا يشغّل الخادم.
+  if (process.env.ROUTE_INVENTORY_OUT) {
+    fs.writeFileSync(process.env.ROUTE_INVENTORY_OUT, routeRegistry.inventory().join('\n') + '\n', 'utf8');
+    process.exit(0);
   }
 
   const HOST = process.env.HOST || '0.0.0.0';

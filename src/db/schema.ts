@@ -816,6 +816,7 @@ export const leaveTypes = pgTable('leave_types', {
 export const workLocations = pgTable('work_locations', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(), // اسم موقع العمل
+  province: text('province'), // المحافظة — B3: كانت الواجهة ترسلها وتُهمل بصمت لعدم وجود العمود
   allowanceAmount: real('allowance_amount').default(0), // مخصصات الموقع الجغرافي أو النامي
   workStartHour: text('work_start_hour').default('08:00'), // وقت بدء الدوام
   workEndHour: text('work_end_hour').default('15:00'), // وقت نهاية الدوام

@@ -10,6 +10,7 @@
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc -p ./jsconfig.json",
+    "typecheck:server": "node tools/typecheck-server.mjs",
     "db:generate": "drizzle-kit generate --config src/db/drizzle.config.ts",
     "db:migrate": "tsx tools/db/migrate.ts",
     "db:status": "tsx tools/db/status.ts",

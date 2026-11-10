@@ -80,7 +80,7 @@ export const requireRole = (...roles: string[]) =>
   };
 
 /** مدير النظام فقط. */
-export const requireAdmin = requireRole(...ADMIN_ROLES);
+export const requireAdmin = Object.defineProperty(requireRole(...ADMIN_ROLES), 'name', { value: 'requireAdmin' });
 
 /** كل الأدوار عدا 'employee': لعمليات الكتابة على البيانات. */
-export const requireWriter = requireRole(...WRITE_ROLES);
+export const requireWriter = Object.defineProperty(requireRole(...WRITE_ROLES), 'name', { value: 'requireWriter' });

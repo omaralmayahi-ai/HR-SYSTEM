@@ -10,6 +10,8 @@ type Method = typeof METHODS[number];
 export interface RouteRegistry {
   has(method: Method, path: string): boolean;
   list(): string[];
+  /** المسارات ووسطاؤها ومواضع app.use بترتيب التسجيل الفعلي */
+  inventory(): string[];
 }
 
 export function routeKey(method: string, path: string): string {
@@ -18,7 +20,19 @@ export function routeKey(method: string, path: string): string {
 
 export function installRouteRegistry(app: any): RouteRegistry {
   const seen = new Map<string, number>();
+  // B3 (مراجعة: M2، M3): الجرد يسجّل وسطاء كل مسار (requireAuth/requireAdmin...) ومواضع app.use
+  // بالترتيب، فإسقاط requireAdmin أو تسجيل مجال قبل بوابة الانقطاع أو بعد الـ catch-all يُفشل لقطة الجرد.
+  const inventory: string[] = [];
+  const fnName = (f: any) => (typeof f === 'function' ? (f.name || 'anonymous') : typeof f);
   let order = 0;
+
+  const originalUse = app.use.bind(app);
+  app.use = (...args: any[]) => {
+    const where = typeof args[0] === 'string' ? args[0] : '*';
+    const fns = (typeof args[0] === 'string' ? args.slice(1) : args).map(fnName);
+    inventory.push(`USE ${where} [${fns.join(',')}]`);
+    return originalUse(...args);
+  };
 
   for (const method of METHODS) {
     const original = app[method].bind(app);
@@ -34,6 +48,8 @@ export function installRouteRegistry(app: any): RouteRegistry {
           throw new Error(`[ROUTES] تسجيل مكرر للمسار ${key}: النسخة الثانية لن تُنفَّذ أبداً. احذف أحد التعريفين.`);
         }
         seen.set(key, order++);
+        // الوسطاء = كل الدوال عدا الأخيرة (المعالج)
+        inventory.push(`${key} [${args.slice(1, -1).map(fnName).join(',')}]`);
       }
       return original(...args);
     };
@@ -41,6 +57,7 @@ export function installRouteRegistry(app: any): RouteRegistry {
 
   return {
     has: (method, p) => seen.has(routeKey(method, p)),
-    list: () => [...seen.entries()].sort((a, b) => a[1] - b[1]).map(([k]) => k)
+    list: () => [...seen.entries()].sort((a, b) => a[1] - b[1]).map(([k]) => k),
+    inventory: () => [...inventory],
   };
 }

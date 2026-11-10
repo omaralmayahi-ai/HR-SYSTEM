@@ -36,7 +36,7 @@ export function createDbGate(probe: HealthProbe, opts: { cacheMs?: number; now?:
   /** يُستدعى من مسارات الأخطاء عند فشل اتصال فعلي: يُسقط الذاكرة المؤقتة فيُعاد الفحص فوراً. */
   function invalidate() { checked = false; }
 
-  function middleware(req: Request, res: Response, next: NextFunction) {
+  function dbGateMiddleware(req: Request, res: Response, next: NextFunction) {
     const p = req.path.startsWith('/api/') ? req.path : '/api' + req.path;
     if (GATE_EXEMPT.has(p) || GATE_EXEMPT.has(req.originalUrl.split('?')[0])) return next();
     isUp().then((up) => {
@@ -45,5 +45,5 @@ export function createDbGate(probe: HealthProbe, opts: { cacheMs?: number; now?:
     }, () => res.status(503).json({ error: DB_UNAVAILABLE_MESSAGE, code: 'DB_UNAVAILABLE' }));
   }
 
-  return { isUp, invalidate, middleware, status: () => ({ up: lastUp, checkedAt: checked ? new Date(lastAt).toISOString() : null }) };
+  return { isUp, invalidate, middleware: dbGateMiddleware, status: () => ({ up: lastUp, checkedAt: checked ? new Date(lastAt).toISOString() : null }) };
 }
