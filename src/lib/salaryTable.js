@@ -1046,7 +1046,22 @@ export function buildSalaryScaleMap(records) {
     if (!scaleMap[g]) scaleMap[g] = {};
     scaleMap[g][st] = amount;
   });
-  return Object.keys(scaleMap).length > 0 ? scaleMap : null;
+  if (Object.keys(scaleMap).length === 0) return null;
+  syncAnnualIncrementsFromScale(scaleMap);
+  return scaleMap;
+}
+
+/**
+ * B4d: مقدار العلاوة السنوية يُشتق من السلّم النافذ (المرحلة 2 − المرحلة 1) بدل القيم المحفوظة
+ * بالمتصفح، حتى ما تختلف شاشات العرض عن السلّم المعتمد.
+ */
+export function syncAnnualIncrementsFromScale(scaleMap) {
+  if (!scaleMap) return;
+  for (const [g, steps] of Object.entries(scaleMap)) {
+    const a = toNumber(steps?.[1]);
+    const b = toNumber(steps?.[2]);
+    if (Number.isFinite(a) && Number.isFinite(b) && b > a) ANNUAL_INCREMENTS[g] = b - a;
+  }
 }
 
 /**

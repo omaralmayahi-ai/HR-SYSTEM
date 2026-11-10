@@ -15,6 +15,7 @@ import { registerTrainerRoutes } from './server/routes/trainers.ts';
 import { registerWorkLocationRoutes } from './server/routes/workLocations.ts';
 import { registerLookupRoutes } from './server/routes/lookups.ts';
 import { registerCareerHistoryRoutes } from './server/routes/careerHistory.ts';
+import { registerSalaryScaleRoutes } from './server/routes/salaryScale.ts';
 import { startDueMovementsJob } from './server/careerMovements.ts';
 import { registerAnnualPlanRoutes } from './server/routes/annualPlans.ts';
 import { registerSalaryRoutes } from './server/routes/salaries.ts';
@@ -2277,6 +2278,7 @@ async function startServer() {
   registerAttendanceRoutes(app, routeCtx);
   registerOrgUnitRoutes(app, routeCtx);
   registerCareerHistoryRoutes(app, routeCtx); // B4b
+  registerSalaryScaleRoutes(app, routeCtx); // B4d
   const settingsLists = registerSettingsListRoutes(app, {
     SALARY_TABLE, asc, bothCases, camelToSnake, checkReferentialUsage, db, desc, eq, inMemoryEmployees: mem.inMemoryEmployees, jobTitlesCache,
     logRecalcError, mapKeys, registerLookupRoutes, registerWorkLocationRoutes, requireAdmin, requireAuth, requireWriter,

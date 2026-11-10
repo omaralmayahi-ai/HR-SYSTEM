@@ -8,7 +8,8 @@ import {
 import { 
   SALARY_TABLE, 
   PROMOTION_YEARS, 
-  ANNUAL_INCREMENTS, 
+  ANNUAL_INCREMENTS,
+  buildSalaryScaleMap, 
   getGradeLabel, 
   getGradeType,
   updatePromotionYear,
@@ -111,6 +112,7 @@ export default function SalaryScaleSettings() {
       setPromotionYears(promos);
       setOriginalPromotionYears({ ...promos });
 
+      buildSalaryScaleMap(recordsData); // B4d: العلاوة من السلّم النافذ
       const incs = { ...ANNUAL_INCREMENTS };
       setAnnualIncrements(incs);
       setOriginalAnnualIncrements({ ...incs });
@@ -339,7 +341,7 @@ export default function SalaryScaleSettings() {
 
     toast({
       title: 'تم تحميل النموذج الافتراضي في المسودة',
-      description: 'تم تحميل سلم الرواتب العراقي المعتمد لعام 2023 كمسودة. يرجى الضغط على زر حفظ التعديلات لحفظ التغييرات نهائياً.',
+      description: 'تم تحميل السلّم المضمّن بالنظام (المعمول به قبل اعتماد الجدول الملحق بقانون 22/2008) كمسودة على الإصدار النافذ. الحفظ يستبدل مبالغ الإصدار النافذ.',
     });
   };
 
@@ -632,7 +634,7 @@ export default function SalaryScaleSettings() {
                 <Sparkles size={16} />
               </div>
               <div className="text-xs text-amber-800 space-y-1">
-                <p className="font-bold">ملاحظة: تظهر حالياً القيم الافتراضية لسلم الرواتب العراقي الموحد لعام 2023</p>
+                <p className="font-bold">ملاحظة: الإصدار النافذ بلا مبالغ، وتظهر القيم المضمّنة بالنظام (السلّم المعمول به قبل اعتماد الجدول الملحق بقانون 22/2008)</p>
                 <p>لم يتم حفظ تخصيصات مخصصة في قاعدة البيانات بعد. يمكنك النقر على أي قيمة وتعديلها ليتم حفظها مخصصة تلقائياً، أو الضغط على <strong>"تعبئة سلم الرواتب"</strong> في الأعلى لتوليد كامل الجدول في قاعدة البيانات دفعة واحدة.</p>
               </div>
             </div>

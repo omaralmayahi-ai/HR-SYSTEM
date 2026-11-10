@@ -40,18 +40,8 @@ function calculatePeriodDiff(fromDateStr, toDateStr) {
   return parts.join(' و ') || `${months} شهر`;
 }
 
-const ANNUAL_INCREMENTS = {
-  1: 20000,
-  2: 17000,
-  3: 10000,
-  4: 8000,
-  5: 6000,
-  6: 6000,
-  7: 6000,
-  8: 3000,
-  9: 3000,
-  10: 3000
-};
+// B4d: مقدار العلاوة من السلّم النافذ (كان جدولاً ثابتاً بالقيم القديمة)
+import { ANNUAL_INCREMENTS, buildSalaryScaleMap } from '@/lib/salaryTable';
 
 export default function PromotionsDue() {
   const { toast } = useToast();
@@ -85,6 +75,8 @@ export default function PromotionsDue() {
   const fetchDueList = async () => {
     setLoading(true);
     try {
+      // B4d: مقدار العلاوة المعروض من السلّم النافذ
+      await apiClient.entities.SalaryScale.list().then(buildSalaryScaleMap).catch(() => {});
       const res = await apiClient.promotionsDue.getDueList();
       if (res) {
         setDueData({

@@ -299,6 +299,13 @@ export const apiClient = {
     }),
     getDueReminders: () => request('/api/promotion-delay-reasons/due-reminders')
   },
+  // B4d: إصدارات سلّم الرواتب
+  salaryScaleVersions: {
+    list: () => request('/api/salary-scale/versions'),
+    create: (data) => request('/api/salary-scale/versions', { method: 'POST', body: JSON.stringify(data) }),
+    activate: (id) => request(`/api/salary-scale/versions/${id}/activate`, { method: 'POST' }),
+    diff: (from, to) => request(`/api/salary-scale/diff?from=${from}&to=${to}`, { timeoutMs: 60000 }),
+  },
   // B4: الأوامر الإدارية والسجل الوظيفي المؤرخ
   careerHistory: {
     get: (employeeId) => request(`/api/employees/${employeeId}/history`),
