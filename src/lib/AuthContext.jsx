@@ -1,4 +1,5 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { hydrateSharedSettings, flushSharedSettings } from '@/lib/sharedSettings';
 import { apiClient } from '@/api/apiClient';
 
 const AuthContext = createContext();
@@ -369,6 +370,8 @@ export const AuthProvider = ({ children }) => {
       setIsLoadingAuth(true);
       const currentUser = await apiClient.auth.me();
       if (currentUser) {
+        // B6: الإعدادات المشتركة من الخادم قبل عرض الشاشات (قواعد المخصصات يقرأها محرك الرواتب)
+        try { await hydrateSharedSettings(currentUser.role); } catch (e) { console.warn('[B6] تعذّر تحميل الإعدادات المشتركة:', e?.message || e); }
         setUser(currentUser);
         setIsAuthenticated(true);
       } else {
@@ -387,6 +390,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = (shouldRedirect = true) => {
+    flushSharedSettings(); // B6: ما يضيع آخر تعديل بالخروج
     setUser(null);
     setIsAuthenticated(false);
     apiClient.auth.logout();

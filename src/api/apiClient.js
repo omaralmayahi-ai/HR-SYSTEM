@@ -65,6 +65,7 @@ export async function request(path, options = {}) {
     if (data?.details) err.details = data.details;
     err.status = response.status;
     if (data?.code) err.code = data.code;
+    err.data = data; // B6: تفاصيل التعارض (409) للإعدادات المشتركة
     // B2d: انقطاع قاعدة البيانات يُعرض شريطاً واضحاً في أعلى الشاشة (DbStatusBanner)
     if (data?.code === 'DB_UNAVAILABLE') setDbDown(true);
     throw err;
@@ -298,6 +299,16 @@ export const apiClient = {
       body: JSON.stringify({ reminderDate })
     }),
     getDueReminders: () => request('/api/promotion-delay-reasons/due-reminders')
+  },
+  // B6 (ق-13): أسابيع دورة الاختصاص لكل ترفيع
+  degreeTrackSettings: {
+    get: () => request('/api/settings/degree-track'),
+    put: (weeks) => request('/api/settings/degree-track', { method: 'PUT', body: JSON.stringify({ weeks_per_promotion: weeks }) }),
+  },
+  // B6: الإعدادات المشتركة (كانت بالمتصفح فقط)
+  sharedSettings: {
+    getAll: () => request('/api/shared-settings'),
+    put: (key, value, source, base) => request(`/api/shared-settings/${encodeURIComponent(key)}`, { method: 'PUT', body: JSON.stringify({ value, source, base }) }),
   },
   // B5: إنهاء الوحدة التنظيمية بتاريخ
   orgUnits: {

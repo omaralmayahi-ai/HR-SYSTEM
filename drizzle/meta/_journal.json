@@ -78,6 +78,13 @@
       "when": 1794305742134,
       "tag": "0010_org_units_titles_b5",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794334394291,
+      "tag": "0011_specialization_credits_auto",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,8 @@
 import type { Express } from 'express';
 import type { AuthRequest } from '../../../src/middleware/auth.ts';
 
+import { degreeTrackInputs, loadEngineContext, loadWeeksPerPromotion } from '../../engineContext.ts';
+
 export function registerPromotionsRoutes(app: Express, deps: any) {
   const {
     and, bothCases, calculateDegreeTrackSimulation, camelToSnake, db, eq,
@@ -128,18 +130,12 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
           }
 
           // 2. Check Degree Track Snapshot Deficit Settlement
-          const activeSnap = (genericMemoryStores['degree-track-snapshots'] || []).find(
-            s => parseInt(String(s.employee_id || s.employeeId)) === empId && (s.status === 'نشط' || !s.status)
-          );
+          // B6: من القاعدة (كانت تُقرأ من مخازن الذاكرة الفارغة منذ B2، فما يظهر أي مستحق للتسوية)
+          const { activeSnap, inputs: dtInputs } = degreeTrackInputs(bulk.get(empId), toEngineLeave);
 
           let hasHandledDegreeTrack = false;
           if (activeSnap) {
-            const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
-            const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-            const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId).map(toEngineLeave);
-            const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-
-            const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
+            const sim = calculateDegreeTrackSimulation(activeSnap, dtInputs);
             if (sim.hasDeficit) {
               hasHandledDegreeTrack = true;
               if (sim.realTimeNextPromotion?.isEligible && sim.realTimeNextPromotion?.eligibilityStatus === 'مستحق_للترفيع') {
@@ -502,19 +498,13 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
             newJobTitleId: resolvedTitleObj?.id || null
           });
         } else if (type === 'تسوية') {
-          const activeSnap = (genericMemoryStores['degree-track-snapshots'] || []).find(
-            s => parseInt(String(s.employee_id || s.employeeId)) === empId && (s.status === 'نشط' || !s.status)
-          );
+          // B6: من القاعدة بدل مخازن الذاكرة الفارغة
+          const { activeSnap, inputs: dtInputs } = degreeTrackInputs(await loadEngineContext(db, schema, empId), toEngineLeave);
           if (!activeSnap) {
             return res.status(400).json({ error: `الموظف (${empName}) ليس لديه مسار احتساب شهادة نشط للتسوية` });
           }
 
-          const specCredits = (genericMemoryStores['specialization-credits'] || []).filter(c => parseInt(String(c.employee_id || c.employeeId)) === empId);
-          const p = (genericMemoryStores['penalties'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-          const l = (genericMemoryStores['leaves'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId).map(toEngineLeave);
-          const a = (genericMemoryStores['attendance'] || []).filter(item => parseInt(String(item.employee_id || item.employeeId)) === empId);
-
-          const sim = calculateDegreeTrackSimulation(activeSnap, { specializationCredits: specCredits, penalties: p, leaves: l, attendances: a });
+          const sim = calculateDegreeTrackSimulation(activeSnap, dtInputs);
           if (!sim.hasDeficit || !sim.realTimeNextPromotion?.isEligible || sim.realTimeNextPromotion?.eligibilityStatus !== 'مستحق_للترفيع') {
             return res.status(400).json({
               error: `الموظف (${empName}) غير مستحق لتسوية مسار الشهادة حالياً: ${sim?.realTimeNextPromotion?.statusReason || 'شروط غير مستوفاة'}`
@@ -713,7 +703,8 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
           penalties: penRows.map(bothCases),
           leaves: leaveRows.map(bothCases).map(toEngineLeave),
           attendances: attRows.map(bothCases),
-          penaltyTypes: await loadPenaltyTypesForEngine()
+          penaltyTypes: await loadPenaltyTypesForEngine(),
+          weeksPerPromotion: await loadWeeksPerPromotion(db, schema), // B6 (ق-13)
         },
         {
           autoSettlementEnabled: isAutoEnabled

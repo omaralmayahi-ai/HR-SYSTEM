@@ -2,6 +2,8 @@
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
 
+import { bothCases, degreeTrackInputs } from '../../engineContext.ts';
+
 export function registerGenericEntitiesRoutes(app: Express, deps: any) {
   const {
     calculateDegreeTrackSimulation, camelToSnake, db, eq, genericEntitiesMap, genericMemoryStores,
@@ -27,7 +29,11 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
           if (empIdParam && targetTable.employeeId) {
             query = query.where(eq(targetTable.employeeId, parseInt(empIdParam as string))) as any;
           }
-          const records = await query;
+          let records = await query;
+          // B6 (ق-13): رصيد الاختصاص الملغى من المسؤول ما يظهر (إلا بطلب صريح)
+          if (endpoint === 'specialization-credits' && !req.query.include_cancelled) {
+            records = records.filter((r: any) => !r.isCancelled);
+          }
           return res.json(records.map((r: any) => mapKeys(r, camelToSnake)));
         }
       } catch (err: any) {
@@ -196,7 +202,9 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
             });
           } else {
             // Find next active qualification
-            const nextActive = (genericMemoryStores['qualifications'] || []).find(q => String(q.employee_id || q.employeeId) === String(empId) && String(q.id) !== String(id) && (q.is_active !== false && q.isActive !== false));
+            // B6: من القاعدة (مخزن الذاكرة فارغ منذ B2)
+            const nextActive = (await db.select().from(schema.qualifications).where(eq(schema.qualifications.employeeId, empId)))
+              .map(bothCases).find(q => String(q.id) !== String(id) && q.isActive !== false);
             if (nextActive) {
               await updateEmployeeCentralRecord(empId, {
                 education_level: nextActive.education_level || nextActive.level,
@@ -230,6 +238,22 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: 'معرّف السجل غير صالح' });
       let deletedRecord: any = (genericMemoryStores[endpoint] || []).find(r => String(r.id) === String(id));
+      // B6 (ق-13): الرصيد الآلي من التدريب ما يُحذف بل يُلغى، حتى ما يرجع بأول تعديل على التسجيل
+      if (endpoint === 'specialization-credits') {
+        try {
+          const [cr] = await db.select().from(schema.specializationCourseCredits).where(eq(schema.specializationCourseCredits.id, id));
+          if (cr && cr.sourceTrainingId != null) {
+            await db.update(schema.specializationCourseCredits)
+              .set({ isCancelled: true, cancelledReason: String(req.body?.reason || req.query.reason || 'ألغاه المسؤول') })
+              .where(eq(schema.specializationCourseCredits.id, id));
+            triggerRecalculateEligibility(cr.employeeId).catch(logRecalcError);
+            return res.json({ success: true, cancelled: true });
+          }
+        } catch (err: any) {
+          if (respondIfDbWriteError(res, err, 'إلغاء رصيد الاختصاص')) return;
+          return sendRouteError(res, err, 'إلغاء رصيد الاختصاص');
+        }
+      }
       try {
         const targetTable = (schema as any)[schemaKey];
         if (targetTable && targetTable.id) {
@@ -244,9 +268,9 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
       if (endpoint === 'qualifications' && deletedRecord) {
         const empId = parseInt(String(deletedRecord.employee_id || deletedRecord.employeeId));
         if (empId) {
-          const remainingActive = (genericMemoryStores['qualifications'] || []).filter(
-            q => String(q.employee_id || q.employeeId) === String(empId) && String(q.id) !== String(id) && (q.is_active !== false && q.isActive !== false)
-          );
+          // B6: من القاعدة (مخزن الذاكرة فارغ منذ B2)
+          const remainingActive = (await db.select().from(schema.qualifications).where(eq(schema.qualifications.employeeId, empId)))
+            .map(bothCases).filter(q => String(q.id) !== String(id) && q.isActive !== false);
           if (remainingActive.length > 0) {
             const top = remainingActive[0];
             await updateEmployeeCentralRecord(empId, {
@@ -398,7 +422,8 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
         penalties: simCtx.penalties,
         leaves: simCtx.leaves.map(toEngineLeave),
         attendances: simCtx.attendances,
-        penaltyTypes: await loadPenaltyTypesForEngine()
+        penaltyTypes: await loadPenaltyTypesForEngine(),
+        weeksPerPromotion: simCtx.weeksPerPromotion, // B6 (ق-13)
       });
 
       // Clear previous simulation steps for this snapshot and insert new ones
@@ -453,29 +478,13 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
   app.get('/api/degree-track-snapshots/:id/simulation', requireAuth, async (req, res) => {
     try {
       const snapId = parseInt(req.params.id);
-      let snapshot = (genericMemoryStores['degree-track-snapshots'] || []).find(s => parseInt(String(s.id)) === snapId);
-      if (!snapshot) {
-        try {
-          const dbSnaps = await db.select().from(schema.degreeTrackSnapshots).where(eq(schema.degreeTrackSnapshots.id, snapId));
-          if (dbSnaps && dbSnaps.length > 0) snapshot = dbSnaps[0];
-        } catch (e) {}
-      }
+      // B6: كل المدخلات من القاعدة (مخازن الذاكرة فارغة منذ B2)
+      const [snapshot] = await db.select().from(schema.degreeTrackSnapshots).where(eq(schema.degreeTrackSnapshots.id, snapId));
       if (!snapshot) return res.status(404).json({ error: 'سجل احتساب الشهادة غير موجود' });
 
-      const empId = parseInt(String(snapshot.employee_id || snapshot.employeeId));
-      const specializationCredits = (genericMemoryStores['specialization-credits'] || []).filter(
-        c => parseInt(String(c.employee_id || c.employeeId)) === empId
-      );
-      const penalties = (genericMemoryStores['penalties'] || []).filter(p => parseInt(String(p.employee_id || p.employeeId)) === empId);
-      const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empId);
-      const attendances = (genericMemoryStores['attendance'] || []).filter(a => parseInt(String(a.employee_id || a.employeeId)) === empId);
-
-      const simResult = calculateDegreeTrackSimulation(snapshot, {
-        specializationCredits,
-        penalties,
-        leaves,
-        attendances
-      });
+      const empId = parseInt(String(snapshot.employeeId));
+      const { inputs } = degreeTrackInputs(await loadEngineContext(db, schema, empId), toEngineLeave);
+      const simResult = calculateDegreeTrackSimulation(bothCases(snapshot), inputs);
 
       return res.json({
         snapshot: mapKeys(snapshot, camelToSnake),
@@ -491,25 +500,11 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
   app.get('/api/employees/:id/degree-track', requireAuth, async (req, res) => {
     try {
       const empId = parseInt(req.params.id);
-      const snapshot = (genericMemoryStores['degree-track-snapshots'] || []).find(
-        s => parseInt(String(s.employee_id || s.employeeId)) === empId && (s.status === 'نشط' || !s.status)
-      );
-
+      // B6: من القاعدة (كان يرجع «لا مسار نشط» لكل موظف لأن مخزن الذاكرة فارغ)
+      const { activeSnap: snapshot, inputs } = degreeTrackInputs(await loadEngineContext(db, schema, empId), toEngineLeave);
       if (!snapshot) return res.json({ hasActiveDegreeTrack: false, snapshot: null, simulation: null });
 
-      const specializationCredits = (genericMemoryStores['specialization-credits'] || []).filter(
-        c => parseInt(String(c.employee_id || c.employeeId)) === empId
-      );
-      const penalties = (genericMemoryStores['penalties'] || []).filter(p => parseInt(String(p.employee_id || p.employeeId)) === empId);
-      const leaves = (genericMemoryStores['leaves'] || []).filter(l => parseInt(String(l.employee_id || l.employeeId)) === empId);
-      const attendances = (genericMemoryStores['attendance'] || []).filter(a => parseInt(String(a.employee_id || a.employeeId)) === empId);
-
-      const simResult = calculateDegreeTrackSimulation(snapshot, {
-        specializationCredits,
-        penalties,
-        leaves,
-        attendances
-      });
+      const simResult = calculateDegreeTrackSimulation(snapshot, inputs);
 
       return res.json({
         hasActiveDegreeTrack: true,

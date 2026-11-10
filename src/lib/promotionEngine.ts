@@ -190,6 +190,7 @@ export interface EngineContextData {
   commendations?: CommendationRecord[];
   penalties?: PenaltyRecord[];
   penaltyTypes?: PenaltyTypesInput; // خريطة { 'إنذار': 6 } أو سجلات penalty_types من الإعدادات
+  weeksPerPromotion?: number; // B6 (ق-13): أسابيع دورة الاختصاص لكل ترفيع بمسار الشهادة
   attendances?: AttendanceRecord[];
   evaluations?: EvaluationRecord[];
   leaves?: LeaveRecord[];

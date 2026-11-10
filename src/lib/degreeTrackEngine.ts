@@ -184,8 +184,10 @@ export function getAvailableSpecializationCredits(
   employeeId: number | string,
   credits: SpecializationCreditEntity[] = []
 ): { totalWeeks: number } {
+  // B6 (ق-13): الرصيد الملغى من المسؤول ما يُحتسب
   const empCredits = credits.filter(
     c => String(c.employeeId || c.employee_id) === String(employeeId)
+      && !((c as any).isCancelled === true || (c as any).is_cancelled === true)
   );
   const totalWeeks = empCredits.reduce((sum, c) => sum + (parseInt(String(c.weeks), 10) || 0), 0);
   return { totalWeeks };
@@ -223,9 +225,12 @@ export function calculateDegreeTrackSimulation(
     leaves?: any[];
     evaluations?: any[];
     today?: string;
+    /** B6 (ق-13): أسابيع دورة الاختصاص لكل ترفيع (الافتراضي 2، إعداد قابل للتغيير) */
+    weeksPerPromotion?: number;
   } = {}
 ): DegreeTrackSimulationResult {
   const today = context.today || formatDateString(new Date());
+  const W = Number.isFinite(Number(context.weeksPerPromotion)) && Number(context.weeksPerPromotion) >= 0 ? Number(context.weeksPerPromotion) : 2;
 
   const employeeId = snapshot.employeeId || snapshot.employee_id || 0;
   // لا قيم مختلقة: أي مدخل مفقود يعيد «بيانات_ناقصة» بدل افتراض (3 / 7 / 2020-01-01 / 2026-01-01)
@@ -330,21 +335,19 @@ export function calculateDegreeTrackSimulation(
     const computedDate = addMonthsToDate(currentDate, 24 + cyclePenaltyDelayMonths);
 
     // Determine required training weeks for this step
-    let requiredWeeks = 2; // General rule: 2 weeks per promotion
+    let requiredWeeks = W; // القاعدة العامة: W أسابيع لكل ترفيع (افتراضياً أسبوعين)
     let isBundled = false;
 
     if (isTenYearExceptionApplied) {
       if (cycle === 1) {
-        // First step in 10-year exception consumes 2 weeks for the first 2 promotions
-        requiredWeeks = 2;
+        // أول ترفيعين بدورة واحدة (W أسابيع)
+        requiredWeeks = W;
         isBundled = true;
       } else if (cycle === 2) {
-        // Second step is bundled with the first (0 additional weeks required)
         requiredWeeks = 0;
         isBundled = true;
       } else {
-        // Subsequent steps (3, 4, ...) revert to general rule (2 weeks each)
-        requiredWeeks = 2;
+        requiredWeeks = W;
         isBundled = false;
       }
     }
@@ -745,7 +748,8 @@ export function processBatchDegreeTrackAutoSettlement(
         penalties: empPenalties,
         leaves: empLeaves,
         attendances: empAttendances,
-        today: options.today
+        today: options.today,
+        weeksPerPromotion: contextMap.weeksPerPromotion,
       });
 
       // Run isolated settlement
