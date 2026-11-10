@@ -41,6 +41,13 @@ export function registerEmployees2Routes(app: Express, deps: any) {
 
     // B4a (ق-15): ما يُحذف موظف عنده أي سجل؛ تُنهى خدمته بتغيير حالته. الحذف للإدخال الخاطئ فقط.
     const relatedCounts = countRelatedRecords(relatedSnapshot);
+    // B4b: حركات السجل الوظيفي المؤرخ سجلات أيضاً (والجدول إلحاقي بمفتاح RESTRICT)
+    const historyRows = await db.select({ id: schema.employeeFieldHistory.id }).from(schema.employeeFieldHistory)
+      .where(eq(schema.employeeFieldHistory.employeeId, id)).limit(1000);
+    if (historyRows.length > 0) {
+      relatedCounts.total += historyRows.length;
+      relatedCounts.byTable.employeeFieldHistory = historyRows.length;
+    }
     if (relatedCounts.total > 0) {
       return res.status(409).json({
         error: `لا يمكن حذف الموظف لأن عنده سجلات (${relatedCounts.total}). غيّر حالته إلى حالة غير فعّالة (مثل متقاعد أو مستقيل) بدل الحذف.`,
