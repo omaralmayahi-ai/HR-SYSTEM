@@ -551,6 +551,8 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
 
       try {
         await db.transaction(async (tx) => {
+          // B4c: سبب الحركات بالسجل المؤرخ (يلتقطها مشغّل employees_history_capture)
+          await tx.execute(sql`SELECT set_config('hr.reason', 'اعتماد دفعي من قائمة المستحقين', true), set_config('hr.user', ${String(req.user?.username || '')}, true)`);
           for (const item of validatedBatch) {
             if (item.type === 'علاوة') {
               await tx.update(schema.employees).set({

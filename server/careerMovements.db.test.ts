@@ -19,7 +19,6 @@ describe.skipIf(!enabled)('careerMovements على قاعدة حقيقية (B4b)'
     empId = e.id;
   });
 
-  afterAll(async () => { await pool?.end?.(); });
 
   const emp = async () => (await db.select().from(schema.employees).where(eq(schema.employees.id, empId)))[0];
 
@@ -71,4 +70,61 @@ describe.skipIf(!enabled)('careerMovements على قاعدة حقيقية (B4b)'
     await expect(cm.applyMovement(db, schema, { employeeId: empId, effectiveDate: '2026-01-01', changes: { grade: 14 }, source: 'تعديل مباشر' })).rejects.toThrow('غير صالحة');
     await expect(cm.applyMovement(db, schema, { employeeId: empId, effectiveDate: '2026-02-30', changes: { grade: 4 }, source: 'تعديل مباشر' })).rejects.toThrow('YYYY-MM-DD');
   });
+});
+
+describe.skipIf(!enabled)('التقاط التغييرات المباشرة بمشغّل القاعدة (B4c)', () => {
+  let db: any; let schema: any; let cm: any; let empId: number;
+  beforeAll(async () => {
+    const mod = await import('../src/db/index.ts');
+    db = mod.db; schema = mod.schema;
+    cm = await import('./careerMovements.ts');
+    const [e] = await db.insert(schema.employees).values({
+      fullName: 'اختبار الالتقاط', companyNumber: 'CAP-' + Date.now(), grade: 4, step: 5,
+      gradeDate: '2021-02-01', lastPromotionDate: '2021-02-01', lastIncrementDate: '2025-02-01', status: 'مستمر', department: 'الحسابات',
+    }).returning();
+    empId = e.id;
+  });
+  const rows = async (field: string) => (await db.execute(sql`SELECT value, valid_from::text vf, source, order_id, reason FROM employee_field_history WHERE employee_id=${empId} AND field=${field} ORDER BY id`)).rows;
+
+  it('ترفيع مباشر: سجل أساس + حركة بتاريخ آخر ترفيع الجديد', async () => {
+    await db.transaction(async (tx: any) => {
+      await tx.execute(sql`SELECT set_config('hr.reason', 'اختبار', true)`);
+      await tx.update(schema.employees).set({ grade: 5, step: 1, lastPromotionDate: '2025-02-01' }).where(eq(schema.employees.id, empId));
+    });
+    expect(await rows('grade')).toEqual([
+      { value: 4, vf: '2021-02-01', source: 'تقديري', order_id: null, reason: 'سجل أساس تقديري (ق-4)' },
+      { value: 5, vf: '2025-02-01', source: 'تعديل مباشر', order_id: null, reason: 'اختبار' },
+    ]);
+    expect((await rows('step')).map((r: any) => [r.value, r.vf])).toEqual([[5, null], [1, '2025-02-01']]);
+    expect(await rows('event')).toHaveLength(0); // الدرجة تغيّرت فما يُسجَّل حدث
+  });
+
+  it('تغيير الحالة مع رقم أمر ينشئ أمراً إدارياً ويربطه', async () => {
+    const num = 'ST-' + Date.now();
+    await db.update(schema.employees).set({ status: 'منسب', statusOrderNumber: num, statusOrderDate: '2026-10-01' }).where(eq(schema.employees.id, empId));
+    const st = await rows('status');
+    expect(st[st.length - 1]).toMatchObject({ value: 'منسب', vf: '2026-10-01', source: 'أمر' });
+    const [o] = await db.select().from(schema.administrativeOrders).where(eq(schema.administrativeOrders.orderNumber, num));
+    expect(o).toMatchObject({ orderDate: '2026-10-01', orderKind: 'تغيير حالة' });
+    expect(st[st.length - 1].order_id).toBe(o.id);
+  });
+
+  it('تسوية تاريخ آخر ترفيع بلا تغيير درجة = حدث', async () => {
+    await db.update(schema.employees).set({ lastPromotionDate: '2025-06-01' }).where(eq(schema.employees.id, empId));
+    expect((await rows('event')).map((r: any) => r.vf)).toEqual(['2025-06-01']);
+  });
+
+  it('حقل غير متتبع ما يسجّل شي، وapplyMovement ما يتكرر', async () => {
+    const before = (await db.execute(sql`SELECT count(*)::int n FROM employee_field_history WHERE employee_id=${empId}`)).rows[0].n;
+    await db.update(schema.employees).set({ phone: '0770' }).where(eq(schema.employees.id, empId));
+    await cm.applyMovement(db, schema, { employeeId: empId, effectiveDate: '2026-01-01', changes: { department: 'الأفراد' }, source: 'تعديل مباشر' });
+    const after = (await db.execute(sql`SELECT count(*)::int n FROM employee_field_history WHERE employee_id=${empId}`)).rows[0].n;
+    expect(after - before).toBe(2); // أساس + حركة القسم فقط، بلا تكرار من المشغّل
+  });
+});
+
+afterAll(async () => {
+  if (!enabled) return;
+  const mod = await import('../src/db/index.ts');
+  await (mod as any).pool?.end?.();
 });

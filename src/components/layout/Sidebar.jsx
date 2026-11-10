@@ -11,6 +11,7 @@ const navItems = [
   { path: '/', icon: LayoutDashboard, label: 'لوحة التحكم' },
   { path: '/employees', icon: Users, label: 'الموظفون' },
   { path: '/promotions-due', icon: Award, label: 'مستحقات الترفيع والعلاوة' },
+  { path: '/administrative-orders', icon: FileText, label: 'الأوامر الإدارية' },
   { path: '/salaries', icon: Wallet, label: 'الرواتب' },
   { path: '/leaves', icon: CalendarDays, label: 'الإجازات' },
   { path: '/attendance', icon: Clock, label: 'الحضور والغياب' },

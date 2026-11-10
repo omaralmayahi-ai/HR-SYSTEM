@@ -298,6 +298,14 @@ export const apiClient = {
       body: JSON.stringify({ reminderDate })
     }),
     getDueReminders: () => request('/api/promotion-delay-reasons/due-reminders')
+  },
+  // B4: الأوامر الإدارية والسجل الوظيفي المؤرخ
+  careerHistory: {
+    get: (employeeId) => request(`/api/employees/${employeeId}/history`),
+    recordMovement: (employeeId, data) => request(`/api/employees/${employeeId}/movements`, { method: 'POST', body: JSON.stringify(data) }),
+    listOrders: () => request('/api/administrative-orders'),
+    createOrder: (data) => request('/api/administrative-orders', { method: 'POST', body: JSON.stringify(data) }),
+    cancelOrder: (id, data) => request(`/api/administrative-orders/${id}/cancel`, { method: 'POST', body: JSON.stringify(data) }),
   }
 };
 

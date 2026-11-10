@@ -3,6 +3,7 @@
 import type { Express } from 'express';
 
 import { employeeListColumns } from '../../util/employeeColumns.ts';
+import { sql } from 'drizzle-orm';
 
 export function registerEmployeesRoutes(app: Express, deps: any) {
   const {
@@ -463,7 +464,11 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
     let dbAnswered = false;
     try {
       const [updatedEmployee] = Object.keys(cleanData).length > 0
-        ? await db.update(schema.employees).set(cleanData).where(eq(schema.employees.id, id)).returning()
+        ? await db.transaction(async (tx: any) => {
+            // B4c: اسم المستخدم وسبب التعديل بالسجل المؤرخ (يلتقطه مشغّل employees_history_capture)
+            await tx.execute(sql`SELECT set_config('hr.user', ${String((req as any).user?.username || '')}, true), set_config('hr.reason', ${String(req.body?.change_reason || req.body?.changeReason || '')}, true)`);
+            return tx.update(schema.employees).set(cleanData).where(eq(schema.employees.id, id)).returning();
+          })
         : await db.select().from(schema.employees).where(eq(schema.employees.id, id));
       dbAnswered = true;
 

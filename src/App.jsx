@@ -31,6 +31,7 @@ const OrgChart = lazy(() => import('@/pages/OrgChart'));
 const SystemSettings = lazy(() => import('@/pages/SystemSettings'));
 const ServiceManagement = lazy(() => import('@/pages/ServiceManagement'));
 const PromotionsDue = lazy(() => import('@/pages/PromotionsDue'));
+const AdministrativeOrders = lazy(() => import('@/pages/AdministrativeOrders'));
 
 const PageLoadingFallback = () => (
   <div className="flex items-center justify-center min-h-[60vh]" dir="rtl">
@@ -84,6 +85,7 @@ const AuthenticatedApp = () => {
           <Route path="/employees/:id/edit" element={<EmployeeForm />} />
           <Route path="/service-management" element={<ServiceManagement />} />
           <Route path="/promotions-due" element={<PromotionsDue />} />
+          <Route path="/administrative-orders" element={<AdministrativeOrders />} />
           <Route path="/salaries" element={<Salaries />} />
           <Route path="/leaves" element={<Leaves />} />
           <Route path="/attendance" element={<Attendance />} />
