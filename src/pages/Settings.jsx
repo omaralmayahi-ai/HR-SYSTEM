@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { apiClient } from '@/api/apiClient';
+import { apiClient, request } from '@/api/apiClient';
+import OfficialHolidaysManager from '@/components/settings/OfficialHolidaysManager';
 import { useToast } from '@/components/ui/use-toast';
 import {
   Palette, Clock, FileText, Database, KeyRound,
@@ -54,27 +55,6 @@ export default function Settings() {
   const [workStartHour, setWorkStartHour] = useState('08:00');
   const [workEndHour, setWorkEndHour] = useState('15:00');
   const [restDays, setRestDays] = useState(['الجمعة', 'السبت']);
-  // العطل الرسمية وفق قانون العطل الرسمية رقم 12 لسنة 2024 (كما وردت في مراجعة R4):
-  // العطل الميلادية بتواريخ ثابتة (شهر-يوم)، والعطل الهجرية تُحدَّد تواريخها سنوياً بقرار رسمي.
-  // 14 تموز غير مدرج في القانون. 3 تشرين الأول «يُتحقق» من وجود تعديل يدرجه.
-  const [holidays, setHolidays] = useState([
-    { name: 'رأس السنة الميلادية', date: '01-01', calendar: 'ميلادي' },
-    { name: 'عيد الجيش العراقي', date: '01-06', calendar: 'ميلادي' },
-    { name: 'ذكرى جرائم البعث', date: '03-16', calendar: 'ميلادي' },
-    { name: 'عيد نوروز', date: '03-21', calendar: 'ميلادي' },
-    { name: 'عيد العمال العالمي', date: '05-01', calendar: 'ميلادي' },
-    { name: 'اليوم الوطني العراقي (يُتحقق من إدراجه بتعديل لاحق)', date: '10-03', calendar: 'ميلادي', toVerify: true },
-    { name: 'يوم النصر العراقي', date: '12-10', calendar: 'ميلادي' },
-    { name: 'عيد الميلاد المجيد', date: '12-25', calendar: 'ميلادي' },
-    { name: 'رأس السنة الهجرية', date: '1 محرم', calendar: 'هجري' },
-    { name: 'ذكرى عاشوراء', date: '10 محرم', calendar: 'هجري' },
-    { name: 'المولد النبوي الشريف', date: '12 ربيع الأول', calendar: 'هجري' },
-    { name: 'عيد الفطر المبارك', date: '1-3 شوال', calendar: 'هجري' },
-    { name: 'عيد الأضحى المبارك', date: '10-13 ذي الحجة', calendar: 'هجري' },
-    { name: 'عيد الغدير', date: '18 ذي الحجة', calendar: 'هجري' },
-  ]);
-  const [newHolidayName, setNewHolidayName] = useState('');
-  const [newHolidayDate, setNewHolidayDate] = useState('');
 
   // Logs & Resets States
   const [logs, setLogs] = useState([]);
@@ -265,28 +245,6 @@ export default function Settings() {
     }
   };
 
-  const handleAddHoliday = (e) => {
-    e.preventDefault();
-    if (!newHolidayName || !newHolidayDate) return;
-    setHolidays([...holidays, { name: newHolidayName, date: newHolidayDate }]);
-    setNewHolidayName('');
-    setNewHolidayDate('');
-    toast({
-      title: 'تم إضافة العطلة الرسمية',
-      description: 'تم تسجيل المناسبة بنجاح في نظام العطلات السنوية.',
-    });
-  };
-
-  const handleRemoveHoliday = (index) => {
-    setHolidays(holidays.filter((_, i) => i !== index));
-    toast({
-      title: 'تم إزالة العطلة',
-      description: 'تم حذف العطلة الرسمية المحددة من جدول الدوام السنوي.',
-    });
-  };
-
-
-
   const handleLogoUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -340,6 +298,7 @@ export default function Settings() {
       const leavesList = await apiClient.entities.LeaveRequest.list().catch(() => []);
       const penaltiesList = await apiClient.entities.Penalty.list().catch(() => []);
       const salariesList = await apiClient.entities.SalaryRecord.list().catch(() => []);
+      const holidaysList = await request('/api/official-holidays').catch(() => []); // B7
       
       const backupData = {
         version: '1.0.0',
@@ -361,7 +320,7 @@ export default function Settings() {
           leaves: leavesList,
           penalties: penaltiesList,
           salaries: salariesList,
-          holidays: holidays,
+          official_holidays: holidaysList,
         }
       };
 
@@ -993,70 +952,8 @@ export default function Settings() {
                   </div>
                 </div>
 
-                {/* Holiday Calendar Management */}
-                <div className="space-y-4">
-                  <h3 className="text-sm font-bold text-slate-700">العطل الرسمية والدينية الثابتة</h3>
-                  
-                  <form onSubmit={handleAddHoliday} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <input
-                      type="text"
-                      placeholder="اسم المناسبة (مثال: المولد النبوي الشريف)"
-                      value={newHolidayName}
-                      onChange={(e) => setNewHolidayName(e.target.value)}
-                      required
-                      className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs focus:bg-white text-slate-800"
-                    />
-                    <input
-                      type="text"
-                      placeholder="التاريخ بصيغة MM-DD (مثال: 12-10)"
-                      value={newHolidayDate}
-                      onChange={(e) => setNewHolidayDate(e.target.value)}
-                      required
-                      className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs focus:bg-white text-slate-800 font-mono text-center"
-                    />
-                    <button
-                      type="submit"
-                      className="bg-[#1B3A6B] text-white hover:bg-opacity-95 font-medium rounded-xl text-xs py-2 flex items-center justify-center gap-1.5 transition-all"
-                    >
-                      <Plus size={14} />
-                      إضافة عطلة جديدة
-                    </button>
-                  </form>
-
-                  <div className="overflow-x-auto rounded-xl border border-slate-200">
-                    <table className="w-full text-right text-xs">
-                      <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200">
-                        <tr>
-                          <th className="px-4 py-3">اسم العطلة الرسمية</th>
-                          <th className="px-4 py-3 text-center">التاريخ السنوي (شهر-يوم)</th>
-                          <th className="px-4 py-3 text-left">التحكم</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-700">
-                        {holidays.map((h, index) => (
-                          <tr key={index} className="hover:bg-slate-50/50">
-                            <td className="px-4 py-2.5 font-medium">{h.name}</td>
-                            <td className="px-4 py-2.5 text-center font-mono text-slate-600">
-                              {h.date}
-                              {h.calendar === 'هجري' && (
-                                <span className="block text-[10px] text-amber-700 font-sans">هجري — يُحدَّد تاريخه سنوياً بقرار رسمي</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-2.5 text-left">
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveHoliday(index)}
-                                className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded-lg transition-colors"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+                {/* B7: تقويم العطل الرسمية من قاعدة البيانات */}
+                <OfficialHolidaysManager toast={toast} />
 
                 <div className="flex justify-end pt-4 border-t border-slate-100">
                   <button

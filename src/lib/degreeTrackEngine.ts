@@ -328,7 +328,8 @@ export function calculateDegreeTrackSimulation(
       if (!isPenaltyInEffect(p)) return;
       const pDate = p.penaltyDate || p.penalty_date || p.orderDate || p.order_date;
       if (pDate && isDateBetween(pDate, currentDate, cycleBaseEndDate)) {
-        cyclePenaltyDelayMonths += resolvePenaltyDelayMonths(p, context.penaltyTypes);
+        // B7 (ق-10): الأشد فقط
+        cyclePenaltyDelayMonths = Math.max(cyclePenaltyDelayMonths, resolvePenaltyDelayMonths(p, context.penaltyTypes));
       }
     });
 

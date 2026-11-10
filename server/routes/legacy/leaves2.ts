@@ -3,6 +3,9 @@
 import type { Express } from 'express';
 import type { AuthRequest } from '../../../src/middleware/auth.ts';
 
+import { sql, asc } from 'drizzle-orm';
+import { snapshotPenaltyDelayMonths } from '../../../src/lib/promotionEngine.ts';
+
 export function registerLeaves2Routes(app: Express, deps: any) {
   const {
     LEAVE_STATUS, adjustLeaveBalance, and, camelToSnake, db, deductLeaveBalanceOnApproval,
@@ -177,6 +180,22 @@ export function registerLeaves2Routes(app: Express, deps: any) {
     res.json(memList.map((item: any) => mapKeys(item, camelToSnake)));
   });
 
+  // B7 (ق-10): لقطة أشهر التأخير من نوع العقوبة وقت فرضها (قطع الراتب وتنزيل الدرجة يُحسبان بطريقتهما)
+  async function snapshotPenaltyDelay(penaltyType: any): Promise<number | null> {
+    const name = String(penaltyType || '').trim();
+    if (!name) return null;
+    const types = await db.select().from(schema.penaltyTypes).orderBy(asc(schema.penaltyTypes.id));
+    return snapshotPenaltyDelayMonths(name, types);
+  }
+  // أي حالة غير «نافذ» تُسقط أثر العقوبة بالمحرك، فلا تتغير الحالة إلا عبر /cancel بأمر
+  const isInEffectStatus = (s: any) => { const v = String(s ?? '').trim(); return v === '' || v === 'نافذ' || v === 'active'; };
+  const CANCEL_BASES = ['أمر إداري', 'قرار قضائي', 'كتاب شكر', 'انتهاء الأثر'];
+  const statusForBasis = (b: string) => (b === 'انتهاء الأثر' ? 'منتهي الأثر' : `ملغي ب${b}`);
+  const stripPenaltyProtected = (m: any) => {
+    delete m.delayMonths; delete m.cancelOrderNumber; delete m.cancelOrderDate; delete m.cancelReason;
+    delete m.appealStatus; // قبول الطعن يُسقط الأثر — يكون بأمر (سند «قرار قضائي») لا بالتعديل
+  };
+
   app.post('/api/penalties', requireAuth, requireWriter, async (req, res) => {
     try {
       const data = req.body;
@@ -197,6 +216,14 @@ export function registerLeaves2Routes(app: Express, deps: any) {
       if (!mappedData.employeeId || isNaN(mappedData.employeeId)) {
         return res.status(400).json({ error: 'يجب تحديد الموظف (employee_id) للعقوبة' });
       }
+
+      stripPenaltyProtected(mappedData);
+      if (!isInEffectStatus(mappedData.status)) {
+        return res.status(400).json({ error: 'سجّل العقوبة نافذة ثم ألغها بأمر الإلغاء (رقمه وتاريخه)' });
+      }
+      mappedData.status = 'نافذ';
+      const snap = await snapshotPenaltyDelay(mappedData.penaltyType);
+      if (snap !== null) mappedData.delayMonths = snap;
 
       let newPenalty: any = null;
       try {
@@ -223,6 +250,41 @@ export function registerLeaves2Routes(app: Express, deps: any) {
     }
   });
 
+  // B7 (ق-10): إلغاء العقوبة بأمر إداري (يبقى السجل، ويسقط أثرها من الاستحقاق)
+  app.post('/api/penalties/:id/cancel', requireAuth, requireWriter, async (req, res) => {
+    const id = parseInt(req.params.id);
+    const orderNumber = String(req.body?.order_number || '').trim();
+    const orderDate = String(req.body?.order_date || '').trim();
+    if (isNaN(id)) return res.status(400).json({ error: 'معرّف غير صالح' });
+    if (!orderNumber || orderNumber.length > 100 || !/^\d{4}-\d{2}-\d{2}$/.test(orderDate) || isNaN(new Date(orderDate + 'T00:00:00Z').getTime())) return res.status(400).json({ error: 'رقم أمر الإلغاء وتاريخه (YYYY-MM-DD) مطلوبان' });
+    const basis = String(req.body?.basis || 'أمر إداري').trim();
+    if (!CANCEL_BASES.includes(basis)) return res.status(400).json({ error: `سند الإلغاء: ${CANCEL_BASES.join(' / ')}` });
+    try {
+      const [cur] = await db.select().from(schema.penalties).where(eq(schema.penalties.id, id));
+      if (!cur) return res.status(404).json({ error: 'العقوبة غير موجودة' });
+      if (!isInEffectStatus(cur.status)) return res.status(409).json({ error: `العقوبة غير نافذة أصلاً (${cur.status})` });
+      const pDate = String(cur.penaltyDate || '').slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(pDate) && orderDate < pDate) return res.status(400).json({ error: `تاريخ أمر الإلغاء قبل تاريخ العقوبة (${pDate})` });
+      const updated = await db.transaction(async (tx: any) => {
+      const [u] = await tx.update(schema.penalties).set({
+        status: statusForBasis(basis), cancelOrderNumber: orderNumber, cancelOrderDate: orderDate,
+        cancelReason: String(req.body?.reason || '').trim() || null,
+      }).where(eq(schema.penalties.id, id)).returning();
+      await tx.insert(schema.activityLogs).values({
+        action: `إلغاء عقوبة ب${basis}`, userEmail: (req as any).user?.username || null,
+        details: `عقوبة #${id} (${cur.penaltyType}) للموظف #${cur.employeeId} — أمر ${orderNumber} في ${orderDate}`,
+      });
+      return u;
+      });
+      syncEntityRecord('penalties', mapKeys(updated, camelToSnake), 'update');
+      triggerRecalculateEligibility(cur.employeeId).catch(logRecalcError);
+      res.json(mapKeys(updated, camelToSnake));
+    } catch (err: any) {
+      if (respondIfDbWriteError(res, err, 'إلغاء العقوبة')) return;
+      sendRouteError(res, err, 'إلغاء العقوبة');
+    }
+  });
+
   app.put('/api/penalties/:id', requireAuth, requireWriter, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -242,6 +304,22 @@ export function registerLeaves2Routes(app: Express, deps: any) {
       delete mappedData.id;
       delete mappedData.createdAt;
 
+      // B7 (ق-10): الإلغاء فقط عبر /cancel بأمر، ولقطة التأخير يحددها الخادم
+      stripPenaltyProtected(mappedData);
+      const [current] = await db.select().from(schema.penalties).where(eq(schema.penalties.id, id));
+      if (!current) return res.status(404).json({ error: 'العقوبة غير موجودة' });
+      if (mappedData.status !== undefined && String(mappedData.status || '').trim() !== String(current.status || '').trim()) {
+        if (isInEffectStatus(current.status)) return res.status(400).json({ error: 'إلغاء العقوبة أو إنهاء أثرها يكون بأمر (رقمه وتاريخه) من زر «إلغاء بأمر»' });
+        return res.status(400).json({ error: 'العقوبة غير نافذة بأمر ولا تُعاد نافذة بالتعديل' });
+      }
+      if (mappedData.penaltyType !== undefined && String(mappedData.penaltyType || '').trim() !== String(current.penaltyType || '').trim()) {
+        mappedData.delayMonths = await snapshotPenaltyDelay(mappedData.penaltyType);
+      }
+
+      const penaltyCols = getTableColumns(schema.penalties) as Record<string, unknown>;
+      for (const k of Object.keys(mappedData)) if (!(k in penaltyCols)) delete mappedData[k];
+      if (Object.keys(mappedData).length === 0) return res.json(mapKeys(current, camelToSnake));
+
       let updatedPenalty: any = null;
       try {
         const [updated] = await db.update(schema.penalties).set(mappedData).where(eq(schema.penalties.id, id)).returning();
@@ -255,9 +333,8 @@ export function registerLeaves2Routes(app: Express, deps: any) {
       const memRecord = { ...cleanSnake, id };
       syncEntityRecord('penalties', memRecord, 'update');
 
-      if (mappedData.employeeId) {
-        triggerRecalculateEligibility(mappedData.employeeId).catch(logRecalcError);
-      }
+      triggerRecalculateEligibility(mappedData.employeeId || current.employeeId).catch(logRecalcError);
+      if (mappedData.employeeId && mappedData.employeeId !== current.employeeId) triggerRecalculateEligibility(current.employeeId).catch(logRecalcError);
 
       res.json(mapKeys(updatedPenalty || memRecord, camelToSnake));
     } catch (error: any) {

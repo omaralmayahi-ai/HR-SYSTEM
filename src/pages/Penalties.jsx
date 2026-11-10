@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { apiClient } from '@/api/apiClient';
+import { apiClient, request } from '@/api/apiClient';
 import { useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -144,6 +144,10 @@ export default function Penalties() {
   const [editingAppreciation, setEditingAppreciation] = useState(null);
   const [editingPenalty, setEditingPenalty] = useState(null);
   const [deleteConfirmTarget, setDeleteConfirmTarget] = useState(null);
+  // B7 (ق-10): إلغاء العقوبة بأمر (رقم وتاريخ) — يبقى السجل ويسقط أثره
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [cancelForm, setCancelForm] = useState({ order_number: '', order_date: '', basis: 'أمر إداري', reason: '' });
+  const [cancelSaving, setCancelSaving] = useState(false);
   const [duplicateAppreciationReport, setDuplicateAppreciationReport] = useState(null);
 
   // Query Employee Tab state
@@ -811,6 +815,30 @@ export default function Penalties() {
   };
 
   // Delete Penalty
+  const openCancelPenalty = (p) => {
+    setCancelForm({ order_number: '', order_date: '', basis: 'أمر إداري', reason: '' });
+    setCancelTarget(p);
+  };
+
+  const submitCancelPenalty = async () => {
+    if (!cancelTarget) return;
+    if (!cancelForm.order_number.trim() || !cancelForm.order_date) {
+      toast({ title: 'رقم أمر الإلغاء وتاريخه مطلوبان', variant: 'destructive' });
+      return;
+    }
+    setCancelSaving(true);
+    try {
+      await request(`/api/penalties/${cancelTarget.id}/cancel`, { method: 'POST', body: JSON.stringify(cancelForm) });
+      toast({ title: 'أُلغيت العقوبة', description: 'سقط أثرها من احتساب العلاوة والترفيع' });
+      setCancelTarget(null);
+      loadData();
+    } catch (err) {
+      toast({ title: 'تعذر الإلغاء', description: err.message, variant: 'destructive' });
+    } finally {
+      setCancelSaving(false);
+    }
+  };
+
   const handleDeletePenalty = (id, orderNum = '') => {
     setDeleteConfirmTarget({
       title: 'حذف عقوبة إدارية',
@@ -2050,9 +2078,9 @@ export default function Penalties() {
                     </SelectTrigger>
                     <SelectContent dir="rtl" className="text-right">
                       <SelectItem value="نافذ" dir="rtl" className="text-right">نافذ</SelectItem>
-                      <SelectItem value="ملغي بقرار قضائي" dir="rtl" className="text-right">ملغي بقرار قضائي</SelectItem>
-                      <SelectItem value="ملغي بكتاب شكر" dir="rtl" className="text-right">ملغي بكتاب شكر (مشمول بالمحاصصة القانونية)</SelectItem>
-                      <SelectItem value="منتهي الأثر" dir="rtl" className="text-right">منتهي الأثر</SelectItem>
+                      {penaltyForm.status && penaltyForm.status !== 'نافذ' && (
+                        <SelectItem value={penaltyForm.status} dir="rtl" className="text-right">{penaltyForm.status}</SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
@@ -2403,9 +2431,12 @@ export default function Penalties() {
                                   {finAmt > 0 ? formatCurrency(finAmt) : '—'}
                                 </td>
                                 <td className="px-4 py-3">
-                                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800">
+                                  <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${(p.status || 'نافذ') !== 'نافذ' ? 'bg-slate-100 text-slate-500 line-through' : 'bg-rose-100 text-rose-800'}`}>
                                     {p.status || 'نافذ'}
                                   </span>
+                                  {(p.cancel_order_number) && (
+                                    <span className="block text-[10px] text-slate-500 mt-0.5">أمر {p.cancel_order_number} في {p.cancel_order_date}</span>
+                                  )}
                                 </td>
                                 <td className="px-4 py-3 text-center">
                                   <div className="flex items-center justify-center gap-1">
@@ -2430,6 +2461,15 @@ export default function Penalties() {
                                     >
                                       <Edit3 size={15} />
                                     </button>
+                                    {(p.status || 'نافذ') === 'نافذ' && (
+                                      <button
+                                        onClick={() => openCancelPenalty(p)}
+                                        className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg"
+                                        title="إلغاء بأمر"
+                                      >
+                                        <RotateCcw size={15} />
+                                      </button>
+                                    )}
                                     <button
                                       onClick={() => handleDeletePenalty(p.id)}
                                       className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg"
@@ -2931,6 +2971,49 @@ export default function Penalties() {
               className="text-white rounded-xl text-xs font-bold px-5 hover:opacity-90 transition-opacity"
             >
               تم الحفظ
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* B7: إلغاء عقوبة بأمر */}
+      <Dialog open={!!cancelTarget} onOpenChange={(open) => { if (!open) setCancelTarget(null); }}>
+        <DialogContent dir="rtl" className="max-w-md text-right rounded-2xl p-6">
+          <DialogHeader dir="rtl" className="text-right">
+            <DialogTitle className="text-base font-bold text-amber-800 flex items-center gap-2">
+              <RotateCcw size={20} className="text-amber-600" />
+              إلغاء عقوبة «{cancelTarget?.penalty_type || cancelTarget?.penaltyType}» بأمر
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-slate-600">يبقى سجل العقوبة للتاريخ، ويسقط أثرها من احتساب العلاوة والترفيع.</p>
+          <div className="grid grid-cols-2 gap-3 py-2">
+            <div>
+              <Label className="text-xs font-semibold">رقم أمر الإلغاء *</Label>
+              <Input value={cancelForm.order_number} onChange={(e) => setCancelForm(f => ({ ...f, order_number: e.target.value }))} className="mt-1 rounded-xl text-xs" />
+            </div>
+            <div>
+              <Label className="text-xs font-semibold">تاريخه *</Label>
+              <Input type="date" value={cancelForm.order_date} onChange={(e) => setCancelForm(f => ({ ...f, order_date: e.target.value }))} className="mt-1 rounded-xl text-xs" />
+            </div>
+            <div className="col-span-2">
+              <Label className="text-xs font-semibold">سند الإلغاء</Label>
+              <select value={cancelForm.basis} onChange={(e) => setCancelForm(f => ({ ...f, basis: e.target.value }))}
+                className="w-full mt-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs">
+                <option>أمر إداري</option>
+                <option>قرار قضائي</option>
+                <option>كتاب شكر</option>
+                <option>انتهاء الأثر</option>
+              </select>
+            </div>
+            <div className="col-span-2">
+              <Label className="text-xs font-semibold">السبب (اختياري)</Label>
+              <Input value={cancelForm.reason} onChange={(e) => setCancelForm(f => ({ ...f, reason: e.target.value }))} className="mt-1 rounded-xl text-xs" />
+            </div>
+          </div>
+          <DialogFooter dir="rtl" className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <Button type="button" variant="outline" onClick={() => setCancelTarget(null)} className="rounded-xl text-xs font-bold px-4">رجوع</Button>
+            <Button type="button" disabled={cancelSaving} onClick={submitCancelPenalty} className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold px-5">
+              {cancelSaving ? 'جاري الإلغاء…' : 'تأكيد الإلغاء'}
             </Button>
           </DialogFooter>
         </DialogContent>
