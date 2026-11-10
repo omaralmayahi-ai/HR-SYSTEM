@@ -912,7 +912,16 @@ export const employeeStatuses = pgTable('employee_statuses', {
   id: serial('id').primaryKey(),
   name: text('name').notNull().unique('employee_statuses_name_key'), // اسم حالة الموظف، يجب أن يكون فريداً
   createdAt: timestamp('created_at').defaultNow(),
-});
+  // B4a (ق-14): المدير يحدد معنى كل حالة بدل القوائم الثابتة بالكود
+  isActive: boolean('is_active').notNull().default(false), // يُحسب ضمن الموظفين الفعّالين
+  payrollEligible: boolean('payroll_eligible').notNull().default(false), // يُولَّد له راتب تلقائياً
+  accruesLeave: boolean('accrues_leave').notNull().default(false), // يتراكم له رصيد الإجازات الشهري
+  sortOrder: integer('sort_order').notNull().default(100),
+  isDefault: boolean('is_default').notNull().default(false), // حالة الموظف الجديد (واحدة فقط)
+  updatedAt: timestamp('updated_at', { withTimezone: true }),
+}, (t) => [
+  uniqueIndex('employee_statuses_single_default').on(t.isDefault).where(sql`${t.isDefault}`),
+]);
 
 // 30-د. أرشيف المحذوفات (Soft Delete Archive) - سجل مركزي لكل عنصر يُحذف من النظام بدلاً من حذفه نهائياً.
 // عند "حذف" أي سجل (موظف حالياً، ويمكن توسيعه لاحقاً لأنواع أخرى) يُنقل هنا كنسخة كاملة (JSON) بدلاً من إزالته

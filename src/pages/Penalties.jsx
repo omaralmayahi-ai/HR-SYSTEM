@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { useSearchParams } from 'react-router-dom';
 import { formatCurrency, getGradeLabel, getStepLabel } from '@/lib/salaryTable';
 import { fetchPenaltyTypesSorted, subscribeToSettingsUpdates } from '@/lib/settingsUtils';
+import { useEmployeeStatuses, statusNames } from '@/lib/employeeStatuses';
 
 const PENALTY_TYPES = ['إنذار شفهي', 'إنذار خطي', 'خصم يوم', 'خصم أيام', 'وقف عن الدوام', 'إحالة للتحقيق', 'تنزيل درجة', 'فصل'];
 const SENIORITY_OPTIONS = ['قدم شهر واحد', 'قدم 6 اشهر', 'معنوي فقط بدون اثر'];
@@ -120,6 +121,7 @@ function EmployeeSearchSelect({ employees, value, onChange, placeholder = "اب�
 }
 
 export default function Penalties() {
+  const employeeStatusList = useEmployeeStatuses();
   const { toast } = useToast();
   const { appPublicSettings } = useAuth();
   const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
@@ -338,7 +340,7 @@ export default function Penalties() {
   ])).filter(Boolean).sort();
 
   const serviceTypeOptions = ['دائم', 'مؤقت', 'عقد', 'إعارة', 'منسب', 'أجر'];
-  const statusOptions = ['مستمر', 'منسب', 'منقول', 'متقاعد', 'متقاعد مع تمديد', 'مستقيل', 'موقوف', 'مجاز'];
+  const statusOptions = statusNames(employeeStatusList);
   const ethnicityOptions = ['عربي/ة', 'كردي/ة', 'تركماني/ة', 'كلداني/ة', 'آشوري/ة', 'سرياني/ة', 'أرمني/ة', 'أخرى', 'غير محدد'];
   const religionOptions = ['مسلم', 'مسيحي', 'صابئي', 'يزيدي', 'أخرى', 'غير محدد'];
 

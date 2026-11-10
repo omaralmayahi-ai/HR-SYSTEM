@@ -3,6 +3,7 @@ import { apiClient } from '@/api/apiClient';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { FileText, Printer, Users, Wallet, CalendarDays, Star, GraduationCap } from 'lucide-react';
+import { loadEmployeeStatuses } from '@/lib/employeeStatuses';
 import { formatCurrency, calculateSalary, loadPayrollSettings, isPayrollActiveEmployee } from '@/lib/salaryTable';
 
 const REPORT_TYPES = [
@@ -46,12 +47,13 @@ export default function Reports() {
         setReportData({ type: 'employee_summary', emp, career, leaves, penalties, evals });
       } else if (selectedReport === 'salary_sheet') {
         // نفس سلم الرواتب وإعدادات الاحتساب المستخدمة في شاشة الرواتب
-        const [allEmps, { options, errors }] = await Promise.all([
+        const [allEmps, { options, errors }, statuses] = await Promise.all([
           apiClient.entities.Employee.list(),
           loadPayrollSettings(apiClient),
+          loadEmployeeStatuses(),
         ]);
         const now = new Date();
-        const emps = (Array.isArray(allEmps) ? allEmps : []).filter(isPayrollActiveEmployee);
+        const emps = (Array.isArray(allEmps) ? allEmps : []).filter(e => isPayrollActiveEmployee(e, statuses));
         const rows = emps.map(emp => ({
           emp,
           calc: calculateSalary(emp, { ...options, targetMonth: now.getMonth() + 1, targetYear: now.getFullYear() })

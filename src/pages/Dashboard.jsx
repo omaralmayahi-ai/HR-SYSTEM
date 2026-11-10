@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '@/api/apiClient';
+import { loadEmployeeStatuses, isActiveEmployee } from '@/lib/employeeStatuses';
 import { Users, CalendarDays, GraduationCap, Star, Hourglass, AlertTriangle, ShieldAlert, Bell, Clock, Award } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -93,7 +94,9 @@ export default function Dashboard() {
         const totalDuePromotions = promotionsDueRes?.summary?.totalDue ?? null;
         const orNull = (key, v) => (failed.has(key) ? null : v);
 
-        const active = employees.filter(e => e.status === 'فعال' || e.status === 'مستمر' || e.status === 'متقاعد مع تمديد').length;
+        // B4a (ق-14): «فعّال» يحدده المدير من إعدادات حالات الموظف
+        const statusList = await loadEmployeeStatuses();
+        const active = employees.filter(e => isActiveEmployee(e, statusList)).length;
         
         const retirementAge = settingsRes?.retirementAge || settingsRes?.retirement_age || 60;
         const notificationDays = settingsRes?.retirementNotificationDays || settingsRes?.retirement_notification_days || 180;

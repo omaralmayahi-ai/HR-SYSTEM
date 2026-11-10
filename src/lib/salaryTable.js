@@ -1024,8 +1024,14 @@ export function calculateSalary(employee, ...args) {
 // لا يُولَّد لها راتب تلقائياً.
 export const PAYROLL_ACTIVE_STATUSES = ['مستمر', 'مستمر بالخدمة', 'فعال'];
 
-export function isPayrollActiveEmployee(employee) {
+/** B4a: مع قائمة الحالات من الخادم يُقرأ علم «راتب تلقائي»؛ بدونها السلوك القديم. */
+export function isPayrollActiveEmployee(employee, statuses) {
   const status = String(employee?.status ?? employee?.employeeStatus ?? '').trim();
+  if (Array.isArray(statuses) && statuses.length > 0) {
+    // الحالة الفارغة ما تُولَّد لها راتب (نفس السلوك قبل B4a)
+    if (!status) return false;
+    return !!statuses.find(s => String(s.name).trim() === status)?.payroll_eligible;
+  }
   return PAYROLL_ACTIVE_STATUSES.includes(status);
 }
 

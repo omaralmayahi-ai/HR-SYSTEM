@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { invalidateEmployeeStatuses } from '@/lib/employeeStatuses';
 import { apiClient, request } from '@/api/apiClient';
 import { Link } from 'react-router-dom';
 import { Plus, Search, Eye, Edit, Trash2, Filter, RotateCcw, ChevronDown, ChevronUp, Users, Sparkles, QrCode, Settings2, Loader2 } from 'lucide-react';
@@ -367,6 +368,7 @@ export default function Employees() {
     setStatusManagerError('');
     try {
       await apiClient.entities.EmployeeStatus.create({ name });
+      invalidateEmployeeStatuses();
       setNewStatusName('');
       await loadLookups();
       await loadStatusCounts();
@@ -375,6 +377,18 @@ export default function Employees() {
       setStatusManagerError(err.message || 'تعذّرت إضافة الحالة');
     } finally {
       setStatusManagerBusy(false);
+    }
+  };
+
+  // B4a (ق-14): تحديد معنى الحالة (فعّال / راتب تلقائي / تراكم إجازات / افتراضية)
+  const handleStatusFlag = async (status, key, value) => {
+    setStatusManagerError('');
+    try {
+      await apiClient.entities.EmployeeStatus.update(status.id, { [key]: value });
+      invalidateEmployeeStatuses();
+      await loadLookups();
+    } catch (err) {
+      setStatusManagerError(err.message || 'تعذّر تعديل الحالة');
     }
   };
 
@@ -391,6 +405,7 @@ export default function Employees() {
     setStatusManagerError('');
     try {
       await apiClient.entities.EmployeeStatus.delete(status.id);
+      invalidateEmployeeStatuses();
       await loadLookups();
       await loadStatusCounts();
       toast({ title: 'تم حذف الحالة', description: `تم حذف حالة (${status.name}) بنجاح`, variant: 'success' });
@@ -1163,13 +1178,13 @@ export default function Employees() {
 
       {/* Manage Employee Statuses Modal */}
       <Dialog open={showStatusManager} onOpenChange={(open) => { setShowStatusManager(open); if (!open) { setStatusManagerError(''); setNewStatusName(''); } }}>
-        <DialogContent className="max-w-md rounded-2xl p-4 sm:p-5" dir="rtl">
+        <DialogContent className="max-w-lg rounded-2xl p-4 sm:p-5" dir="rtl">
           <DialogHeader className="text-right pb-1">
             <DialogTitle className="text-base font-bold text-[#1B3A6B]">إدارة حالات الموظف</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-1">
             <p className="text-[11px] text-slate-500 leading-relaxed">
-              يمكن حذف حالة فقط بشرط ألا يستخدمها أي موظف حالياً، لتفادي فقدان تصنيف موظفين فعليين بالخطأ.
+              «فعّال» يحدد من يُحسب ضمن الموظفين الفعّالين، و«راتب تلقائي» من يُولَّد له راتب، و«تراكم إجازات» من يُضاف له الرصيد الشهري. الحذف مسموح فقط لحالة ما يستخدمها أي موظف وليست الافتراضية.
             </p>
 
             <div className="flex items-center gap-2">
@@ -1198,11 +1213,27 @@ export default function Employees() {
             <div className="space-y-1.5 max-h-72 overflow-y-auto">
               {employeeStatuses.map(s => (
                 <div key={s.id} className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-700">{s.name}</span>
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      ({statusCounts[s.name] || 0} موظف)
-                    </span>
+                  <div className="flex flex-col gap-1.5 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-700">{s.name}</span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        ({statusCounts[s.name] || 0} موظف)
+                      </span>
+                      {s.is_default && <span className="text-[10px] font-bold text-[#1B3A6B] bg-blue-50 rounded px-1.5">افتراضية</span>}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600">
+                      {[['is_active', 'فعّال'], ['payroll_eligible', 'راتب تلقائي'], ['accrues_leave', 'تراكم إجازات']].map(([key, label]) => (
+                        <label key={key} className="flex items-center gap-1 cursor-pointer">
+                          <input type="checkbox" checked={!!s[key]} onChange={e => handleStatusFlag(s, key, e.target.checked)} />
+                          {label}
+                        </label>
+                      ))}
+                      {!s.is_default && (
+                        <button type="button" onClick={() => handleStatusFlag(s, 'is_default', true)} className="text-[10px] text-slate-400 hover:text-[#1B3A6B] underline">
+                          اجعلها افتراضية
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <button
                     type="button"
@@ -1228,7 +1259,7 @@ export default function Employees() {
         onClose={() => setConfirmDeleteEmployee(null)}
         onConfirm={confirmDeleteEmployeeAction}
         title="تأكيد حذف الموظف"
-        description={confirmDeleteEmployee ? `سيتم نقل بيانات الموظف "${confirmDeleteEmployee.full_name || ''}" إلى أرشيف المحذوفات، ويمكن لمدير النظام استعادتها لاحقاً من نافذة الإعدادات، أو تأكيد حذفها بشكل نهائي من هناك. لن يُحذف السجل نهائياً الآن.` : ''}
+        description={confirmDeleteEmployee ? `الحذف متاح فقط لموظف أُدخل بالخطأ وما عنده أي سجل: "${confirmDeleteEmployee.full_name || ''}" ينتقل إلى أرشيف المحذوفات ويمكن استعادته. لإنهاء خدمة موظف فعلي غيّر حالته بدل الحذف.` : ''}
         confirmText="نعم، انقل إلى الأرشيف"
         cancelText="تراجع"
       />

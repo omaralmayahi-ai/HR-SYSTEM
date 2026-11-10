@@ -54,6 +54,7 @@ import { respondIfDbWriteError, sendRouteError, HttpError, classifyDbError, setD
 import { installRouteRegistry } from './server/routeRegistry.ts';
 import { syncEnrollmentToTrainingCourses } from './server/trainingSync.ts';
 import { resolveAccrualParams, accrueBalance, isValidAccrualMonth, ACCRUAL_ELIGIBLE_STATUSES, ACCRUAL_UPDATE_SQL, ACCRUAL_CLAIM_SQL, LEGAL_MONTHLY_REGULAR_LEAVE_DAYS, LEGAL_MAX_REGULAR_LEAVE_ACCUMULATION, DEFAULT_MONTHLY_SICK_LEAVE_DAYS, DEFAULT_MAX_SICK_LEAVE_ACCUMULATION } from './server/leaveAccrual.ts';
+import { createStatusRegistry, dbStatusLoader } from './server/statusRegistry.ts';
 import { LEAVE_STATUS, normalizeLeaveStatus, isApprovedLeaveStatus, isRejectedOrCancelledLeaveStatus, leaveStatusVariants, toEngineLeave } from './server/leaveStatus.ts';
 
 
@@ -117,7 +118,9 @@ async function startServer() {
   app.use('/api', dbGate.middleware);
 
   // B3: سياق مسارات المجالات المنقولة إلى server/routes/
-  const routeCtx: RouteContext = { db, schema, pool, requireAuth, requireWriter, requireAdmin, sendRouteError, respondIfDbWriteError };
+  // B4a (ق-14): معنى حالات الموظف من القاعدة
+  const statusRegistry = createStatusRegistry(dbStatusLoader(db, schema));
+  const routeCtx: RouteContext = { db, schema, pool, requireAuth, requireWriter, requireAdmin, sendRouteError, respondIfDbWriteError, statusRegistry };
 
   // System Settings Store & API
   // B3: كل الحالة المشتركة القابلة لإعادة الإسناد (كانت 32 «let») في كائن واحد يُمرَّر إلى الوحدات.
@@ -183,7 +186,7 @@ async function startServer() {
           await client.query('ROLLBACK');
           alreadyExecuted = true;
         } else {
-          const upd = await client.query(ACCRUAL_UPDATE_SQL, [params.regularDays, params.regularCap, params.sickDays, params.sickCap]);
+          const upd = await client.query(ACCRUAL_UPDATE_SQL, [params.regularDays, params.regularCap, params.sickDays, params.sickCap, await statusRegistry.namesWhere('accruesLeave'), await statusRegistry.emptyStatusHas('accruesLeave')]);
           processedCount = upd.rowCount || 0;
           await client.query('UPDATE leave_accrual_runs SET employees_count = $1 WHERE month = $2', [processedCount, currentMonth]);
           const st = await client.query('UPDATE system_settings SET last_leave_accrual_month = $1, last_leave_accrual_date = $2', [currentMonth, accrualDate]);

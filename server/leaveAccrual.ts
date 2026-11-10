@@ -53,9 +53,11 @@ export function isValidAccrualMonth(month: any): boolean {
   return typeof month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(month);
 }
 
+/** B4a: القائمة الاحتياطية فقط؛ القائمة الفعلية من statusRegistry (accrues_leave). */
 export const ACCRUAL_ELIGIBLE_STATUSES = ['مستمر', 'مستمر بالخدمة', 'فعال'];
 
-/** SQL applying one month of accrual to all continuing employees ($1 reg days, $2 reg cap, $3 sick days, $4 sick cap). */
+/** SQL applying one month of accrual ($1 reg days, $2 reg cap, $3 sick days, $4 sick cap,
+ * $5 text[] eligible statuses, $6 boolean: employees with empty status are eligible). */
 export const ACCRUAL_UPDATE_SQL = `
   UPDATE employees
   SET initial_regular_leave_balance = CASE
@@ -66,7 +68,7 @@ export const ACCRUAL_UPDATE_SQL = `
         WHEN COALESCE(initial_sick_leave_balance, 0) >= $4 THEN initial_sick_leave_balance
         ELSE ROUND(LEAST(COALESCE(initial_sick_leave_balance, 0)::numeric + $3::numeric, $4::numeric), 2)::real
       END
-  WHERE status IN ('مستمر', 'مستمر بالخدمة', 'فعال') OR status IS NULL`;
+  WHERE btrim(status) = ANY($5::text[]) OR ($6::boolean AND (status IS NULL OR btrim(status) = ''))`;
 
 /** Claims the month in leave_accrual_runs; returns no row when the month was already accrued. */
 export const ACCRUAL_CLAIM_SQL = `

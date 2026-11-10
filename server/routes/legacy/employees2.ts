@@ -2,6 +2,8 @@
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
 
+import { countRelatedRecords } from '../../employeeDeletion.ts';
+
 export function registerEmployees2Routes(app: Express, deps: any) {
   const {
     EMPLOYEE_CASCADE_TABLES, buildEmployeeCascadeSnapshot, camelToSnake, checkEmployeeRelatedRecords, db, desc,
@@ -36,6 +38,16 @@ export function registerEmployees2Routes(app: Express, deps: any) {
     // التقاط ملخّص وصفي (لعرضه فقط في الاستجابة) + نسخة كاملة من كل السجلات المرتبطة قبل حذف أي شيء
     const relatedCheck = await checkEmployeeRelatedRecords(id);
     const relatedSnapshot = await buildEmployeeCascadeSnapshot(id);
+
+    // B4a (ق-15): ما يُحذف موظف عنده أي سجل؛ تُنهى خدمته بتغيير حالته. الحذف للإدخال الخاطئ فقط.
+    const relatedCounts = countRelatedRecords(relatedSnapshot);
+    if (relatedCounts.total > 0) {
+      return res.status(409).json({
+        error: `لا يمكن حذف الموظف لأن عنده سجلات (${relatedCounts.total}). غيّر حالته إلى حالة غير فعّالة (مثل متقاعد أو مستقيل) بدل الحذف.`,
+        code: 'EMPLOYEE_HAS_RECORDS',
+        breakdown: relatedCounts.byTable,
+      });
+    }
 
     let archivedRowId: number | null = null;
     try {
