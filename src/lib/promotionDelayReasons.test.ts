@@ -222,7 +222,8 @@ describe('Promotion Delay Reasons & Follow-up Reminders Engine (Phase 4)', () =>
     const res = syncPromotionDelayReasons(101, currentRawReasons, existingStore, undefined, today);
 
     expect(res.added).toHaveLength(0);
-    expect(res.updated).toHaveLength(1);
+    // سبب العقوبة ما تغيّر وصفه ولا أثره ← ما يُكتب (أداء لوحة التحكم، 10 تشرين الثاني 2026)
+    expect(res.updated).toHaveLength(0);
     expect(res.resolved).toHaveLength(1);
 
     const resolved = res.resolved[0];

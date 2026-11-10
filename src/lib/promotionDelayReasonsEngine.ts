@@ -237,7 +237,13 @@ export function syncPromotionDelayReasons(
       };
 
       storeCopy[existingIdx] = updatedRecord;
-      updated.push(updatedRecord);
+      // أداء: يُعدّ «محدَّثاً» فقط إذا تغيّر شيء فعلاً (كان كل سبب يُكتب بكل احتساب: آلاف التحديثات
+      // بكل فتح للوحة التحكم)
+      const wasResolved = !!(cur.isResolved ?? cur.is_resolved);
+      const changed = (cur.description ?? null) !== (raw.description ?? null)
+        || (cur.affects ?? null) !== (raw.affects ?? null)
+        || wasResolved;
+      if (changed) updated.push(updatedRecord);
     } else {
       // Brand new reason: calculate reminder_date automatically
       const defaultDays = getDefaultReminderDaysForType(raw.reasonType, settings);

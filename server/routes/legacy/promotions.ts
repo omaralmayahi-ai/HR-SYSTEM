@@ -21,6 +21,7 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
 
       // إصلاح عاجل: الموظفون ومدخلات المحرك من القاعدة بقراءة واحدة لكل جدول (كانت من الذاكرة ← قائمة فارغة بعد B2e)
       const bulk = await loadAllEngineContexts(db, schema);
+      const penaltyTypes = await loadPenaltyTypesForEngine();
       for (const rawEmp of bulk.employees) {
         try {
           const emp: any = bothCases(rawEmp);
@@ -34,7 +35,7 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
           }
 
           // Recalculate standard eligibility
-          const eligibility = await triggerRecalculateEligibility(empId, bulk.get(empId));
+          const eligibility = await triggerRecalculateEligibility(empId, bulk.get(empId), { penaltyTypes, penaltyTypesLoaded: true });
 
           const currentTitle = emp.jobTitle || emp.job_title || 'موظف';
           const basePromotionDate = emp.lastPromotionDate || emp.last_promotion_date || emp.gradeDate || emp.grade_date || emp.currentAppointmentDate || emp.current_appointment_date || emp.appointmentDate || emp.appointment_date || emp.firstAppointmentDate || emp.first_appointment_date || '';
@@ -335,6 +336,9 @@ export function registerPromotionsRoutes(app: Express, deps: any) {
         totalSettlement: dueForSettlement.length,
         totalDue: dueForIncrement.length + dueForPromotion.length + dueForSettlement.length
       };
+
+      // أداء: لوحة التحكم تحتاج العدد فقط (القائمة الكاملة ~17 ميغابايت لـ 6000 موظف)
+      if (req.query.summary === '1') return res.json({ summary });
 
       res.json({
         dueForIncrement,
