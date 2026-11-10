@@ -33,6 +33,7 @@ function StatCard({ title, value, icon: Icon, color, bg, link, subtitle, loading
 }
 
 export default function Dashboard() {
+  const [dueLoading, setDueLoading] = useState(false);
   const [stats, setStats] = useState({
     total: 0,
     active: 0,
@@ -71,7 +72,6 @@ export default function Dashboard() {
           serviceRecordsRes,
           settingsRes,
           dueRemindersRes,
-          promotionsDueRes
         ] = await Promise.all([
           safe(apiClient.entities.Employee.list(), 'employees'),
           // ترشيح الحالة يُمرَّر للخادم، ويُعاد تطبيقه محلياً احتياطاً
@@ -81,8 +81,20 @@ export default function Dashboard() {
           safe(apiClient.entities.ServiceRecord.list(), 'serviceRecords'),
           safe(apiClient.settings.get(), 'settings'),
           safe(apiClient.promotionDelayReasons.getDueReminders(), 'reminders'),
-          safe(apiClient.promotionsDue.getDueList(), 'promotionsDue')
         ]);
+
+        // أداء: قائمة المستحقين أثقل طلب (احتساب لكل الموظفين)، فما تعطّل بقية البطاقات؛ تُحمَّل بعدها
+        setDueLoading(true);
+        apiClient.promotionsDue.getDueList({ summaryOnly: true })
+          .then(res => { if (isMounted) setStats(prev => ({ ...prev, due_promotions: res?.summary?.totalDue ?? null })); })
+          .catch(err => {
+            console.error('Dashboard: failed to load promotionsDue', err);
+            if (isMounted) {
+              setStats(prev => ({ ...prev, due_promotions: null }));
+              setLoadErrors(prev => Array.from(new Set([...(prev || []), 'promotionsDue'])));
+            }
+          })
+          .finally(() => { if (isMounted) setDueLoading(false); });
 
         if (!isMounted) return;
 
@@ -91,7 +103,6 @@ export default function Dashboard() {
         const evals = Array.isArray(evalsRes) ? evalsRes.filter(e => e.status === 'مرفوع للاعتماد') : [];
         const trainings = Array.isArray(trainingsRes) ? trainingsRes.filter(t => t.status === 'جاري') : [];
         const serviceRecords = Array.isArray(serviceRecordsRes) ? serviceRecordsRes : [];
-        const totalDuePromotions = promotionsDueRes?.summary?.totalDue ?? null;
         const orNull = (key, v) => (failed.has(key) ? null : v);
 
         // B4a (ق-14): «فعّال» يحدده المدير من إعدادات حالات الموظف
@@ -142,7 +153,7 @@ export default function Dashboard() {
           total: orNull('employees', employees.length),
           active: orNull('employees', active),
           pending_leaves: orNull('leaves', leaves.length),
-          due_promotions: orNull('promotionsDue', totalDuePromotions),
+          due_promotions: undefined,
           pending_evals: orNull('evals', evals.length),
           ongoing_trainings: orNull('trainings', trainings.length),
           service_records_count: orNull('serviceRecords', serviceRecords.length),
@@ -155,7 +166,7 @@ export default function Dashboard() {
           setDueDelayReminders(dueRemindersRes);
         }
         setRemindersError(failed.has('reminders'));
-        setLoadErrors(Array.from(failed));
+        setLoadErrors(prev => Array.from(new Set([...Array.from(failed), ...(prev || []).filter(k => k === "promotionsDue")])));
       } catch (err) {
         console.error('Error loading dashboard data:', err);
         setLoadErrors(['dashboard']);
@@ -194,7 +205,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="إجمالي الموظفين" value={stats.total} icon={Users} color="text-[#1B3A6B]" bg="bg-blue-50" link="/employees" loading={loading} />
         <StatCard title="الموظفون الفعالون" value={stats.active} icon={Users} color="text-emerald-600" bg="bg-emerald-50" link="/employees" loading={loading} />
-        <StatCard title="مستحقو الترفيع والعلاوة" value={stats.due_promotions} icon={Award} color="text-purple-700" bg="bg-purple-50" link="/promotions-due" subtitle="علاوات وترفيعات مستحقة" loading={loading} />
+        <StatCard title="مستحقو الترفيع والعلاوة" value={stats.due_promotions} icon={Award} color="text-purple-700" bg="bg-purple-50" link="/promotions-due" subtitle="علاوات وترفيعات مستحقة" loading={loading || dueLoading} />
         <StatCard title="سجلات الخدمة والتمديد" value={stats.service_records_count} icon={Hourglass} color="text-indigo-600" bg="bg-indigo-50" link="/service-management" loading={loading} />
       </div>
 

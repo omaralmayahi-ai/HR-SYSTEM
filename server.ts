@@ -1974,7 +1974,8 @@ async function startServer() {
     console.error('[ELIGIBILITY] فشلت إعادة احتساب الاستحقاق:', err?.message || err);
   }
 
-  async function triggerRecalculateEligibility(employeeId: number | string, preloaded?: LoadedEngineContext) {
+  // أداء (لوحة التحكم): opts.penaltyTypes يُحمَّل مرة واحدة للحساب الجماعي بدل استعلام لكل موظف
+  async function triggerRecalculateEligibility(employeeId: number | string, preloaded?: LoadedEngineContext, opts: { penaltyTypes?: any[] | undefined; penaltyTypesLoaded?: boolean } = {}) {
     if (!employeeId) return null;
     const empIdNum = parseInt(String(employeeId));
     if (isNaN(empIdNum)) return null;
@@ -2006,7 +2007,7 @@ async function startServer() {
       // قواعد الترفيع: من القاعدة؛ إن كانت فارغة فالقواعد القانونية الافتراضية
       gradeRules: loaded.gradeRules.length ? loaded.gradeRules : settingsLists.getGradePromotionRulesDefaults(),
       // أنواع العقوبات من الإعدادات (جدول penalty_types) بدل الجدول الثابت في المحرك
-      penaltyTypes: await loadPenaltyTypesForEngine()
+      penaltyTypes: opts.penaltyTypesLoaded ? opts.penaltyTypes : await loadPenaltyTypesForEngine()
     } as EngineContextData;
 
     const fullResult = recalculateEligibilitySync(emp, context);
@@ -2138,14 +2139,18 @@ async function startServer() {
       };
     }
 
-    try {
-      await db.update(schema.employees)
-        .set({
-          nextPromotionDueDate: promoDue,
-          nextIncrementDueDate: incrDue,
-        })
-        .where(eq(schema.employees.id, empIdNum));
-    } catch (e) {}
+    // أداء: الكتابة فقط إذا تغيّر التاريخ (كانت تكتب لكل موظف بكل فتح للوحة التحكم)
+    const sameDate = (a: any, b: any) => String(a ?? '') === String(b ?? '');
+    if (!sameDate(emp.nextPromotionDueDate, promoDue) || !sameDate(emp.nextIncrementDueDate, incrDue)) {
+      try {
+        await db.update(schema.employees)
+          .set({
+            nextPromotionDueDate: promoDue,
+            nextIncrementDueDate: incrDue,
+          })
+          .where(eq(schema.employees.id, empIdNum));
+      } catch (e) {}
+    }
 
     // Sync Promotion Delay Reasons (Phase 4: Transparency & Reminders)
     try {

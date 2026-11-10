@@ -280,7 +280,8 @@ export const apiClient = {
     })
   },
   promotionsDue: {
-    getDueList: async () => request('/api/promotions/due-list'),
+    // احتساب لكل الموظفين: مهلة أطول من الافتراضية (15 ثانية)
+    getDueList: async ({ summaryOnly = false } = {}) => request(`/api/promotions/due-list${summaryOnly ? '?summary=1' : ''}`, { timeoutMs: 90000 }),
     approveBatch: async (data) => request('/api/promotions/approve-batch', {
       method: 'POST',
       body: JSON.stringify(data)
