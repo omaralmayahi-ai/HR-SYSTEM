@@ -5,7 +5,8 @@ import { apiClient } from '@/api/apiClient';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, Users, Coins, Clock3 } from 'lucide-react';
+import { Plus, Users, Coins, Clock3, Calculator } from 'lucide-react';
+import { LinesTable } from '@/components/payroll/PayrollLinesTable';
 
 const FACTS = ['يدرس', 'متزوج', 'موظف', 'عاجز', 'حضانة بحكم', 'متوفى', 'يستلم الإعالة'];
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Baghdad' }).format(new Date()); // بتوقيت بغداد
@@ -53,6 +54,7 @@ export default function EmployeePayrollTab({ employeeId }) {
 
   return (
     <div className="space-y-4" dir="rtl">
+      <SalaryPreview employeeId={employeeId} />
       {(family?.pending?.length > 0) && (
         <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs text-sky-800 flex items-center gap-2"><Clock3 className="w-4 h-4" /> {family.pending.length} عملية عائلة بانتظار الاعتماد: {family.pending.map(p => p.summary).join(' · ')}</div>
       )}
@@ -150,6 +152,52 @@ export default function EmployeePayrollTab({ employeeId }) {
             <div className="col-span-2">{field('reason', 'السبب')}</div>
           </div>
           <div className="flex gap-2 justify-end"><Button variant="outline" size="sm" onClick={() => setForm(null)}>إلغاء</Button><Button size="sm" className="bg-[#1B3A6B]" onClick={send}>إرسال للاعتماد</Button></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// B8a3: سطور الشهر بتفسيرها (معاينة بالبنود الفعّالة) وتاريخ الرواتب المعتمدة
+function SalaryPreview({ employeeId }) {
+  const t = new Date();
+  const [ym, setYm] = useState({ year: t.getFullYear(), month: t.getMonth() + 1 });
+  const [p, setP] = useState(null);
+  const [hist, setHist] = useState([]);
+  const [error, setError] = useState('');
+  useEffect(() => { apiClient.payroll.employeeHistory(employeeId).then(setHist).catch(() => {}); }, [employeeId]);
+  useEffect(() => { setError(''); apiClient.payroll.preview(employeeId, ym.year, ym.month).then(setP).catch(e => { setP(null); setError(e.message); }); }, [employeeId, ym.year, ym.month]);
+  const n = (v) => (v === null || v === undefined ? '—' : Number(v).toLocaleString('ar-IQ', { maximumFractionDigits: 3 }));
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold text-sm flex items-center gap-2"><Calculator className="w-4 h-4" /> الراتب</h3>
+        <div className="flex gap-1 items-center text-xs">
+          <Input type="number" className="w-16 h-8" value={ym.month} onChange={e => setYm(v => ({ ...v, month: Number(e.target.value) }))} />
+          <Input type="number" className="w-20 h-8" value={ym.year} onChange={e => setYm(v => ({ ...v, year: Number(e.target.value) }))} />
+        </div>
+      </div>
+      {error && <p className="text-xs text-rose-600">{error}</p>}
+      {p && (
+        <>
+          <p className="text-[11px] text-slate-500">{p.note}</p>
+          {!p.computed && <p className="text-xs text-amber-700">{(p.issues || []).map(i => i.message).join('، ')}</p>}
+          {p.computed && (
+            <>
+              <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                {[['الاسمي', p.nominal], ['المخصصات', p.allowances], ['الاستقطاعات', p.deductions], ['الصافي', p.net]].map(([l, v]) => <div key={l} className="bg-slate-50 rounded-lg p-2"><div className="text-slate-500">{l}</div><div className="font-bold">{n(v)}</div></div>)}
+              </div>
+              <div className="overflow-auto"><LinesTable lines={p.lines} /></div>
+              {p.issues?.length > 0 && <div className="text-xs bg-amber-50 rounded-lg p-2">{p.issues.map((i, k) => <div key={k}>⚠ {i.message}</div>)}</div>}
+            </>
+          )}
+        </>
+      )}
+      {hist.length > 0 && (
+        <div>
+          <div className="text-xs font-bold mb-1">الرواتب المعتمدة</div>
+          <table className="w-full text-xs"><thead><tr className="text-slate-500 border-b">{['الفترة', 'الفئة', 'الحالة', 'الاسمي', 'المخصصات', 'الاستقطاعات', 'الصافي'].map(h => <th key={h} className="p-1.5 text-right font-medium">{h}</th>)}</tr></thead>
+            <tbody>{hist.map(h => <tr key={h.period_id} className="border-b"><td className="p-1.5">{h.year}/{h.month}</td><td className="p-1.5">{h.category}</td><td className="p-1.5">{h.status}</td><td className="p-1.5">{n(h.nominal)}</td><td className="p-1.5">{n(h.allowances)}</td><td className="p-1.5">{n(h.deductions)}</td><td className="p-1.5 font-bold">{n(h.net)}</td></tr>)}</tbody></table>
         </div>
       )}
     </div>

@@ -114,7 +114,7 @@ export function registerPayrollRoutes(app: Express, ctx: RouteContext) {
   app.post('/api/payroll/family/extensions', requireAuth, requireWriter, submitRoute('family_extension', req => req.body));
 
   // العمليات بانتظار الاعتماد
-  app.get('/api/payroll/pending', requireAuth, async (req, res) => {
+  app.get('/api/payroll/pending', requireAuth, requireWriter, async (req, res) => {
     try {
       const state = String(req.query.state || 'بانتظار');
       const list = await db.select().from(schema.pendingOperations).where(eq(schema.pendingOperations.state, state)).orderBy(desc(schema.pendingOperations.enteredAt)).limit(500);

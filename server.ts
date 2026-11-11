@@ -19,6 +19,7 @@ import { registerSalaryScaleRoutes } from './server/routes/salaryScale.ts';
 import { registerSharedSettingsRoutes } from './server/routes/sharedSettings.ts';
 import { registerOfficialHolidaysRoutes } from './server/routes/officialHolidays.ts';
 import { registerPayrollRoutes } from './server/routes/payroll.ts';
+import { registerPayrollPeriodRoutes } from './server/routes/payrollPeriods.ts';
 import { startDueMovementsJob } from './server/careerMovements.ts';
 import { registerAnnualPlanRoutes } from './server/routes/annualPlans.ts';
 import { registerSalaryRoutes } from './server/routes/salaries.ts';
@@ -2311,6 +2312,7 @@ async function startServer() {
   registerSharedSettingsRoutes(app, routeCtx); // B6
   registerOfficialHolidaysRoutes(app, routeCtx); // B7
   registerPayrollRoutes(app, routeCtx); // B8a1
+  registerPayrollPeriodRoutes(app, routeCtx); // B8a3
   const settingsLists = registerSettingsListRoutes(app, {
     SALARY_TABLE, asc, bothCases, camelToSnake, checkReferentialUsage, db, desc, eq, inMemoryEmployees: mem.inMemoryEmployees, jobTitlesCache,
     logRecalcError, mapKeys, registerLookupRoutes, registerWorkLocationRoutes, requireAdmin, requireAuth, requireWriter,
