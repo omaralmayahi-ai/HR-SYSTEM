@@ -114,6 +114,9 @@ export function registerCareerHistoryRoutes(app: Express, ctx: RouteContext) {
       const orderId = b.order_id === undefined || b.order_id === null || b.order_id === '' ? null : Number(b.order_id);
       if (orderId !== null && !Number.isInteger(orderId)) throw new MovementError('معرّف الأمر غير صالح');
       const changes: Record<string, any> = b.changes && typeof b.changes === 'object' ? { ...b.changes } : {};
+      if (Object.prototype.hasOwnProperty.call(changes, 'family_mode')) {
+        return res.status(409).json({ error: 'نمط الاستحقاق العائلي يتغير من تبويب «الراتب والعائلة» بعملية تنتظر اعتماد مدير آخر' });
+      }
       // B8a0: تغيير القسم أو الشعبة بحركة يحدد الوحدة التنظيمية بمعرّفها بنفس الحركة (حقل رواتب)
       if ((changes.department !== undefined || changes.section !== undefined) && changes.org_unit_id === undefined) {
         const [cur] = await db.select({ department: schema.employees.department, section: schema.employees.section, orgUnitId: schema.employees.orgUnitId })

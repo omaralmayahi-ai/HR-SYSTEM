@@ -314,6 +314,26 @@ export const apiClient = {
   orgUnits: {
     end: (id, data) => request(`/api/org-units/${id}/end`, { method: 'POST', body: JSON.stringify(data || {}) }),
   },
+  // B8a1: بنود الرواتب والإسناد والعائلة والاعتماد الثاني
+  payroll: {
+    meta: () => request('/api/payroll/meta'),
+    items: () => request('/api/payroll/items'),
+    itemHistory: (id) => request(`/api/payroll/items/${id}/history`),
+    proposeVersion: (id, data) => request(`/api/payroll/items/${id}/versions`, { method: 'POST', body: JSON.stringify(data) }),
+    assignments: (employeeId) => request(`/api/payroll/assignments${employeeId ? `?employee_id=${employeeId}` : ''}`),
+    assign: (data) => request('/api/payroll/assignments', { method: 'POST', body: JSON.stringify(data) }),
+    endAssignment: (id, data) => request(`/api/payroll/assignments/${id}/end`, { method: 'POST', body: JSON.stringify(data) }),
+    family: (employeeId) => request(`/api/payroll/family/${employeeId}`),
+    addMember: (employeeId, data) => request(`/api/payroll/family/${employeeId}/members`, { method: 'POST', body: JSON.stringify(data) }),
+    addFact: (data) => request('/api/payroll/family/facts', { method: 'POST', body: JSON.stringify(data) }),
+    setMode: (employeeId, data) => request(`/api/payroll/family/${employeeId}/mode`, { method: 'POST', body: JSON.stringify(data) }),
+    addExtension: (data) => request('/api/payroll/family/extensions', { method: 'POST', body: JSON.stringify(data) }),
+    pending: (state) => request(`/api/payroll/pending${state ? `?state=${encodeURIComponent(state)}` : ''}`),
+    approve: (id, reason) => request(`/api/payroll/pending/${id}/approve`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    reject: (id, reason) => request(`/api/payroll/pending/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    cancel: (id) => request(`/api/payroll/pending/${id}/cancel`, { method: 'POST' }),
+    dataQuality: () => request('/api/payroll/data-quality', { timeoutMs: 60000 }),
+  },
   // B4d: إصدارات سلّم الرواتب
   salaryScaleVersions: {
     list: () => request('/api/salary-scale/versions'),

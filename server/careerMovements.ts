@@ -27,6 +27,7 @@ export const TRACKED_FIELDS = {
   contract_type: 'contractType',
   free_transport: 'freeTransport',
   risk_exposure: 'riskExposure',
+  family_mode: 'familyMode', // B8a1
 } as const;
 
 export type TrackedField = keyof typeof TRACKED_FIELDS;
@@ -37,6 +38,7 @@ export const FIELD_LABELS: Record<TrackedField, string> = {
   primary_responsibility: 'المسؤولية الأساسية', acting_responsibility: 'المسؤولية بالوكالة',
   education_level: 'الشهادة', marital_status: 'الحالة الاجتماعية', gender: 'الجنس', org_unit_id: 'الوحدة التنظيمية',
   contract_type: 'نوع العقد', free_transport: 'النقل المجاني', risk_exposure: 'الخطورة',
+  family_mode: 'نمط الاستحقاق العائلي',
 };
 
 /**
@@ -45,7 +47,7 @@ export const FIELD_LABELS: Record<TrackedField, string> = {
  */
 export const PAY_FIELDS: TrackedField[] = [
   'grade', 'step', 'education_level', 'marital_status', 'primary_responsibility', 'acting_responsibility',
-  'work_location', 'org_unit_id', 'service_type', 'contract_type', 'free_transport', 'risk_exposure',
+  'work_location', 'org_unit_id', 'service_type', 'contract_type', 'free_transport', 'risk_exposure', 'family_mode',
 ];
 
 export const SOURCES = ['تقديري', 'أمر', 'تعديل مباشر', 'ترحيل قديم', 'تصحيح'] as const;

@@ -447,6 +447,8 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
     delete mappedData.employeeIdNumber;
 
     const cleanData = sanitizeEmployeeData(mappedData);
+    // B8a1: بيانات العائلة القديمة (JSON) مجمّدة بعد نقلها لجداول العائلة؛ التعديل من تبويب «الراتب والعائلة» بالاعتماد
+    delete (cleanData as any).childrenDetails; delete (cleanData as any).spousesData; delete (cleanData as any).spouseNames;
     // B5: ربط الموظف بوحدته التنظيمية (org_unit_id صريح أو من نصّي القسم والشعبة)
     try {
       const [cur] = await db.select({ orgUnitId: schema.employees.orgUnitId }).from(schema.employees).where(eq(schema.employees.id, id));

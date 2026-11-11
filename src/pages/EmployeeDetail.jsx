@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import EmployeeCareerHistory from '@/components/employee/EmployeeCareerHistory';
+import EmployeePayrollTab from '@/components/employee/EmployeePayrollTab';
 import { apiClient, request } from '@/api/apiClient';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -2323,6 +2324,7 @@ export default function EmployeeDetail() {
           <TabsTrigger value="retirement" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">ملف التقاعد ({retirements.length})</TabsTrigger>
           <TabsTrigger value="documents" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">المستندات والمرفقات ({documents.length})</TabsTrigger>
           <TabsTrigger value="career-history" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">السجل الوظيفي</TabsTrigger>
+          <TabsTrigger value="payroll-b8" className="rounded-lg text-xs font-bold px-4 py-2.5 data-[state=active]:bg-[#1B3A6B] data-[state=active]:text-white">الراتب والعائلة</TabsTrigger>
         </TabsList>
 
         {/* 1. Personal Tab */}
@@ -4796,6 +4798,10 @@ export default function EmployeeDetail() {
         {/* 12. Documents Tab */}
         <TabsContent value="career-history" className="mt-5">
           <EmployeeCareerHistory employeeId={id} onChanged={fetchData} />
+        </TabsContent>
+
+        <TabsContent value="payroll-b8" className="mt-5">
+          <EmployeePayrollTab employeeId={id} />
         </TabsContent>
 
         <TabsContent value="documents" className="mt-5">

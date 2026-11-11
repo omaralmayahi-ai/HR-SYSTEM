@@ -819,8 +819,14 @@ export default function EmployeeForm() {
                   />
                 </div>
 
+                {/* B8a1: بعد إنشاء الموظف، العائلة تُدار من تبويب «الراتب والعائلة» بصفحته (مؤرخة وبالاعتماد الثاني) */}
+                {isEdit && (
+                  <div className="col-span-full bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs text-sky-800">
+                    أفراد العائلة وحقائقهم (الدراسة، الزواج، التوظيف) ونمط الاستحقاق تُدار من صفحة الموظف ← تبويب «الراتب والعائلة»، وكل تغيير ينتظر اعتماد مدير آخر. التفاصيل أدناه للاطلاع فقط ولا تُحفظ من هنا.
+                  </div>
+                )}
                 {/* حقول بيانات الزوجة / الزوجات عند اختيار متزوج */}
-                {form.marital_status === 'متزوج' && (
+                {form.marital_status === 'متزوج' && !isEdit && (
                   <div className="col-span-full bg-rose-50/50 border border-rose-200/80 rounded-2xl p-4.5 space-y-3.5 animate-in fade-in duration-200">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-rose-200/60 pb-2.5">
                       <div className="flex items-center gap-2">
@@ -875,7 +881,7 @@ export default function EmployeeForm() {
                 )}
 
                 {/* حقول بيانات وتفاصيل الأطفال عند تحديد عدد الأطفال */}
-                {form.children_count > 0 && (
+                {form.children_count > 0 && !isEdit && (
                   <div className="col-span-full bg-blue-50/50 border border-blue-200/80 rounded-2xl p-4.5 space-y-3.5 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between border-b border-blue-200/60 pb-2.5">
                       <div className="flex items-center gap-2">
