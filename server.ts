@@ -18,6 +18,7 @@ import { registerCareerHistoryRoutes } from './server/routes/careerHistory.ts';
 import { registerSalaryScaleRoutes } from './server/routes/salaryScale.ts';
 import { registerSharedSettingsRoutes } from './server/routes/sharedSettings.ts';
 import { registerOfficialHolidaysRoutes } from './server/routes/officialHolidays.ts';
+import { registerPayrollRoutes } from './server/routes/payroll.ts';
 import { startDueMovementsJob } from './server/careerMovements.ts';
 import { registerAnnualPlanRoutes } from './server/routes/annualPlans.ts';
 import { registerSalaryRoutes } from './server/routes/salaries.ts';
@@ -662,6 +663,8 @@ async function startServer() {
         clean[k] = v;
       }
     }
+    // B8a1: نمط الاستحقاق العائلي يتغير بعملية معتمدة فقط (/api/payroll/family/:id/mode)
+    delete clean.familyMode;
     // B8a0: النص الفارغ بعمود رقمي أو منطقي = فارغ (الاستمارة ترسل '' لحقل رواتب ما مسجل)
     for (const [k, col] of Object.entries(getTableColumns(schema.employees)) as any[]) {
       if (clean[k] === '' && ['PgInteger', 'PgReal', 'PgBoolean', 'PgSerial', 'PgNumeric'].includes(col?.columnType)) clean[k] = null;
@@ -2307,6 +2310,7 @@ async function startServer() {
   registerSalaryScaleRoutes(app, routeCtx); // B4d
   registerSharedSettingsRoutes(app, routeCtx); // B6
   registerOfficialHolidaysRoutes(app, routeCtx); // B7
+  registerPayrollRoutes(app, routeCtx); // B8a1
   const settingsLists = registerSettingsListRoutes(app, {
     SALARY_TABLE, asc, bothCases, camelToSnake, checkReferentialUsage, db, desc, eq, inMemoryEmployees: mem.inMemoryEmployees, jobTitlesCache,
     logRecalcError, mapKeys, registerLookupRoutes, registerWorkLocationRoutes, requireAdmin, requireAuth, requireWriter,

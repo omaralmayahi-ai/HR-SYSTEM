@@ -54,6 +54,7 @@ export const employees = pgTable('employees', {
   contractType: text('contract_type'), // B8a0: نوع العقد (لفئة الرواتب، ق-1)
   freeTransport: boolean('free_transport'), // B8a0: مشمول بالنقل المجاني (شرط مخصص الموقع، ت5)
   riskExposure: text('risk_exposure'), // B8a0: التعرّض للخطورة (عمل/موقع بقرار، ت6)
+  familyMode: text('family_mode'), // B8a1: نمط الاستحقاق العائلي (كامل / الأطفال فقط / محجوب / لا يستحق) — فارغ = لم يُحدد
   grade: integer('grade'),
   step: integer('step'),
   gradeDate: text('grade_date'),
@@ -1372,4 +1373,170 @@ export const payrollAudit = pgTable('payroll_audit', {
 }, (t) => [
   index('payroll_audit_entity').on(t.entity, t.entityId),
   index('payroll_audit_at').on(t.at),
+]);
+
+// ===================== B8a1: الرواتب — الفئات والبنود والإسناد والعائلة والاعتماد الثاني =====================
+
+// ق-1: فئات الرواتب المستقلة (الدائميون، أنواع العقود، الأجر اليومي)
+export const payrollCategories = pgTable('payroll_categories', {
+  id: serial('id').primaryKey(),
+  code: text('code').notNull().unique('payroll_categories_code_key'),
+  name: text('name').notNull(),
+  kind: text('kind').notNull(), // دائم | عقد | أجر يومي
+  payBasis: text('pay_basis').notNull().default('شهري'), // شهري | يومي
+  isActive: boolean('is_active').notNull().default(false),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// انتماء الموظف للفئة من نوع خدمته ونوع عقده (contract_type فارغ = أي نوع)
+export const payrollCategoryRules = pgTable('payroll_category_rules', {
+  id: serial('id').primaryKey(),
+  serviceType: text('service_type').notNull(),
+  contractType: text('contract_type'),
+  categoryId: integer('category_id').notNull(),
+}, (t) => [
+  foreignKey({ name: 'payroll_category_rules_category_fkey', columns: [t.categoryId], foreignColumns: [payrollCategories.id] }).onDelete('restrict'),
+  uniqueIndex('payroll_category_rules_key').on(t.serviceType, sql`coalesce(${t.contractType}, '')`),
+]);
+
+// البند: الخصائص الثابتة (القسم 6.1 من المتطلبات)
+export const payItems = pgTable('pay_items', {
+  id: serial('id').primaryKey(),
+  code: text('code').notNull().unique('pay_items_code_key'),
+  name: text('name').notNull(),
+  direction: text('direction').notNull(), // + مخصص | - استقطاع
+  itemGroup: text('item_group').notNull(), // الشهادة، المنصب، الموقع، العائلية، القانونية، العقوبات، الأقساط، القضائية، أخرى
+  classification: text('classification').notNull(), // عام | ثابت | تقديري | مؤقت
+  assignmentMode: text('assignment_mode').notNull(), // تلقائي | بأمر
+  method: text('method').notNull(), // percent | flat | tiered | family | installments | manual | brackets | hours
+  categoryId: integer('category_id').notNull(),
+  payrollCode: text('payroll_code'), // رمز كشف الرواتب للمطابقة
+  beneficiary: text('beneficiary'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  foreignKey({ name: 'pay_items_category_fkey', columns: [t.categoryId], foreignColumns: [payrollCategories.id] }).onDelete('restrict'),
+]);
+
+// نسخ البند المؤرخة بزمنين: الخصائص المؤرخة كلها بـ props، والتصحيح يستبدل ولا يكتب فوق
+export const payItemVersions = pgTable('pay_item_versions', {
+  id: serial('id').primaryKey(),
+  itemId: integer('item_id').notNull(),
+  validFrom: date('valid_from', { mode: 'string' }).notNull(),
+  validTo: date('valid_to', { mode: 'string' }), // آخر يوم (شامل)؛ فارغ = مفتوح
+  props: jsonb('props').notNull(),
+  orderId: integer('order_id'),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
+  supersededAt: timestamp('superseded_at', { withTimezone: true }),
+  supersededBy: integer('superseded_by'),
+  enteredBy: text('entered_by'),
+  approvedBy: text('approved_by'),
+  publishedAt: timestamp('published_at', { withTimezone: true }),
+  note: text('note'),
+}, (t) => [
+  foreignKey({ name: 'pay_item_versions_item_fkey', columns: [t.itemId], foreignColumns: [payItems.id] }).onDelete('restrict'),
+  foreignKey({ name: 'pay_item_versions_order_fkey', columns: [t.orderId], foreignColumns: [administrativeOrders.id] }).onDelete('restrict'),
+  index('pay_item_versions_item').on(t.itemId, t.validFrom),
+]);
+
+// الإسناد الفردي والحجب (الحجب = قيمة صفر) — الصفوف المعتمدة فقط؛ المعلّق بـ pending_operations
+export const employeePayAssignments = pgTable('employee_pay_assignments', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id').notNull(),
+  itemId: integer('item_id').notNull(),
+  kind: text('kind').notNull(), // منح | تعديل | حجب
+  valueKind: text('value_kind'), // نسبة | مبلغ | فارغ = قيمة القاعدة
+  value: numeric('value', { precision: 18, scale: 6, mode: 'string' }),
+  validFrom: date('valid_from', { mode: 'string' }).notNull(),
+  validTo: date('valid_to', { mode: 'string' }),
+  principal: numeric('principal', { precision: 18, scale: 6, mode: 'string' }),
+  installment: numeric('installment', { precision: 18, scale: 6, mode: 'string' }),
+  installmentsCount: integer('installments_count'),
+  multiAllowed: boolean('multi_allowed').notNull().default(false),
+  orderId: integer('order_id').notNull(),
+  reason: text('reason').notNull(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
+  supersededAt: timestamp('superseded_at', { withTimezone: true }),
+  supersededBy: integer('superseded_by'),
+  enteredBy: text('entered_by'),
+  approvedBy: text('approved_by'),
+}, (t) => [
+  foreignKey({ name: 'employee_pay_assignments_employee_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('restrict'),
+  foreignKey({ name: 'employee_pay_assignments_item_fkey', columns: [t.itemId], foreignColumns: [payItems.id] }).onDelete('restrict'),
+  foreignKey({ name: 'employee_pay_assignments_order_fkey', columns: [t.orderId], foreignColumns: [administrativeOrders.id] }).onDelete('restrict'),
+  index('employee_pay_assignments_emp').on(t.employeeId, t.itemId),
+]);
+
+// العائلة (كانت JSON بلا تواريخ)
+export const familyMembers = pgTable('family_members', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id').notNull(),
+  relation: text('relation').notNull(), // زوج | زوجة | ابن | بنت | طفل (الجنس غير معروف)
+  name: text('name'),
+  birthDate: date('birth_date', { mode: 'string' }),
+  spouseEmployeeId: integer('spouse_employee_id'), // الزوج موظف بالشركة
+  sourceRef: text('source_ref'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  foreignKey({ name: 'family_members_employee_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('restrict'),
+  foreignKey({ name: 'family_members_spouse_employee_fkey', columns: [t.spouseEmployeeId], foreignColumns: [employees.id] }).onDelete('restrict'),
+  index('family_members_employee').on(t.employeeId),
+]);
+
+// حقائق العضو المؤرخة بزمنين (إلحاقي): يدرس، متزوج، موظف، عاجز، حضانة، متوفى، يستلم الإعالة
+export const familyMemberFacts = pgTable('family_member_facts', {
+  id: serial('id').primaryKey(),
+  memberId: integer('member_id').notNull(),
+  fact: text('fact').notNull(),
+  value: jsonb('value').notNull(),
+  validFrom: date('valid_from', { mode: 'string' }), // فارغ = معروف منذ البداية (تقديري)
+  orderId: integer('order_id'),
+  source: text('source').notNull(), // أمر | تقديري | ترحيل قديم | تصحيح
+  reason: text('reason'),
+  supersedesId: integer('supersedes_id'),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
+  recordedBy: text('recorded_by'),
+}, (t) => [
+  foreignKey({ name: 'family_member_facts_member_fkey', columns: [t.memberId], foreignColumns: [familyMembers.id] }).onDelete('restrict'),
+  foreignKey({ name: 'family_member_facts_order_fkey', columns: [t.orderId], foreignColumns: [administrativeOrders.id] }).onDelete('restrict'),
+  foreignKey({ name: 'family_member_facts_supersedes_fkey', columns: [t.supersedesId], foreignColumns: [t.id] }).onDelete('restrict'),
+  index('family_member_facts_member').on(t.memberId, t.fact),
+]);
+
+// تمديد استحقاق الطفل بعد العمر، بأمر ولمدة (س8.5)
+export const familyExtensions = pgTable('family_extensions', {
+  id: serial('id').primaryKey(),
+  memberId: integer('member_id').notNull(),
+  validFrom: date('valid_from', { mode: 'string' }).notNull(),
+  validTo: date('valid_to', { mode: 'string' }).notNull(),
+  orderId: integer('order_id'),
+  reason: text('reason'),
+  source: text('source').notNull().default('أمر'),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
+  recordedBy: text('recorded_by'),
+}, (t) => [
+  foreignKey({ name: 'family_extensions_member_fkey', columns: [t.memberId], foreignColumns: [familyMembers.id] }).onDelete('restrict'),
+  foreignKey({ name: 'family_extensions_order_fkey', columns: [t.orderId], foreignColumns: [administrativeOrders.id] }).onDelete('restrict'),
+]);
+
+// العمليات الحساسة بانتظار الاعتماد: حمولة فقط، تُطبَّق عند الاعتماد بمعاملة واحدة (مب9)
+export const pendingOperations = pgTable('pending_operations', {
+  id: serial('id').primaryKey(),
+  opType: text('op_type').notNull(),
+  employeeId: integer('employee_id'),
+  itemId: integer('item_id'),
+  payload: jsonb('payload').notNull(),
+  baseToken: text('base_token'), // حالة الهدف وقت الإدخال: اختلافها عند الاعتماد = تعارض
+  summary: text('summary'),
+  enteredBy: text('entered_by').notNull(),
+  enteredAt: timestamp('entered_at', { withTimezone: true }).defaultNow().notNull(),
+  state: text('state').notNull().default('بانتظار'), // بانتظار | معتمد | مرفوض | ملغى
+  decidedBy: text('decided_by'),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  decisionReason: text('decision_reason'),
+  resultRef: text('result_ref'),
+}, (t) => [
+  index('pending_operations_state').on(t.state, t.enteredAt),
 ]);
