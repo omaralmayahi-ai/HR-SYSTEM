@@ -1540,3 +1540,108 @@ export const pendingOperations = pgTable('pending_operations', {
 }, (t) => [
   index('pending_operations_state').on(t.state, t.enteredAt),
 ]);
+
+// ===================== B8a3: الفترات والاحتسابات الثابتة والمتغيرات =====================
+
+// الفترة الشهرية لكل فئة رواتب (س11.1). الحالة تتغير بالانتقالات المسموحة فقط (مشغّل).
+export const payrollPeriods = pgTable('payroll_periods', {
+  id: serial('id').primaryKey(),
+  categoryId: integer('category_id').notNull(),
+  year: integer('year').notNull(),
+  month: integer('month').notNull(),
+  kind: text('kind').notNull().default('عادية'), // عادية | استثنائية (B8b)
+  parentId: integer('parent_id'),
+  paySource: text('pay_source').notNull().default('ظلّي'), // ظلّي | فعلي (ق-14)
+  status: text('status').notNull().default('مفتوحة'), // مفتوحة | محتسبة | معتمدة | مُصدَرة
+  currentRunId: integer('current_run_id'),
+  openedBy: text('opened_by').notNull(),
+  openedAt: timestamp('opened_at', { withTimezone: true }).defaultNow().notNull(),
+  approvedBy: text('approved_by'),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  issuedBy: text('issued_by'),
+  issuedAt: timestamp('issued_at', { withTimezone: true }),
+  dispatchLetter: text('dispatch_letter'),
+  notes: text('notes'),
+}, (t) => [
+  foreignKey({ name: 'payroll_periods_category_fkey', columns: [t.categoryId], foreignColumns: [payrollCategories.id] }).onDelete('restrict'),
+  uniqueIndex('payroll_periods_regular_key').on(t.categoryId, t.year, t.month).where(sql`kind = 'عادية'`),
+  index('payroll_periods_status').on(t.categoryId, t.status),
+]);
+
+// كل احتساب سجل ثابت: السطور والنتائج تنتمي له، وإعادة الاحتساب = احتساب جديد.
+export const payrollRuns = pgTable('payroll_runs', {
+  id: serial('id').primaryKey(),
+  periodId: integer('period_id').notNull(),
+  state: text('state').notNull().default('جاري'), // جاري | محتسب | معتمد | مُصدَر | ملغى | فاشل
+  fingerprint: text('fingerprint'),
+  knownAt: timestamp('known_at', { withTimezone: true }).notNull(),
+  computedBy: text('computed_by').notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  totals: jsonb('totals'),
+  cancelReason: text('cancel_reason'),
+}, (t) => [
+  foreignKey({ name: 'payroll_runs_period_fkey', columns: [t.periodId], foreignColumns: [payrollPeriods.id] }).onDelete('restrict'),
+  index('payroll_runs_period').on(t.periodId),
+]);
+
+export const payrollResults = pgTable('payroll_results', {
+  runId: integer('run_id').notNull(),
+  employeeId: integer('employee_id').notNull(),
+  computed: boolean('computed').notNull(),
+  nominal: numeric('nominal', { precision: 18, scale: 6 }).notNull(),
+  allowances: numeric('allowances', { precision: 18, scale: 6 }).notNull(),
+  deductions: numeric('deductions', { precision: 18, scale: 6 }).notNull(),
+  netExact: numeric('net_exact', { precision: 18, scale: 6 }).notNull(),
+  net: numeric('net', { precision: 18, scale: 6 }).notNull(),
+  negative: numeric('negative', { precision: 18, scale: 6 }).notNull(),
+  flags: jsonb('flags').notNull(),
+  issues: jsonb('issues').notNull(),
+  snapshot: jsonb('snapshot').notNull(), // لقطة مجمّدة: الاسم، الرقم، التشكيل، الدرجة والمرحلة
+}, (t) => [
+  uniqueIndex('payroll_results_run_employee').on(t.runId, t.employeeId),
+  foreignKey({ name: 'payroll_results_run_fkey', columns: [t.runId], foreignColumns: [payrollRuns.id] }).onDelete('restrict'),
+  index('payroll_results_employee').on(t.employeeId),
+]);
+
+export const payrollLines = pgTable('payroll_lines', {
+  id: serial('id').primaryKey(),
+  runId: integer('run_id').notNull(),
+  employeeId: integer('employee_id').notNull(),
+  seq: integer('seq').notNull(),
+  itemId: integer('item_id'), // فارغ = الراتب الاسمي
+  itemCode: text('item_code').notNull(),
+  itemName: text('item_name').notNull(), // نص مجمّد
+  direction: text('direction').notNull(),
+  kind: text('kind').notNull(),
+  itemVersionId: integer('item_version_id'),
+  scaleVersionId: integer('scale_version_id'),
+  assignmentId: integer('assignment_id'),
+  segmentFrom: date('segment_from'),
+  segmentTo: date('segment_to'),
+  share: text('share'),
+  base: numeric('base', { precision: 18, scale: 6 }),
+  rate: text('rate'),
+  amount: numeric('amount', { precision: 18, scale: 6 }).notNull(),
+  explain: jsonb('explain'),
+}, (t) => [
+  foreignKey({ name: 'payroll_lines_run_fkey', columns: [t.runId], foreignColumns: [payrollRuns.id] }).onDelete('restrict'),
+  index('payroll_lines_run_emp').on(t.runId, t.employeeId),
+]);
+
+// المتغيرات الشهرية تُشتق عند الاعتماد (س11.2)
+export const payrollVariances = pgTable('payroll_variances', {
+  id: serial('id').primaryKey(),
+  runId: integer('run_id').notNull(),
+  employeeId: integer('employee_id').notNull(),
+  itemId: integer('item_id'),
+  itemCode: text('item_code').notNull(),
+  itemName: text('item_name').notNull(),
+  before: numeric('before', { precision: 18, scale: 6 }).notNull(),
+  after: numeric('after', { precision: 18, scale: 6 }).notNull(),
+  cause: text('cause').notNull(),
+  orderRef: text('order_ref'),
+}, (t) => [
+  foreignKey({ name: 'payroll_variances_run_fkey', columns: [t.runId], foreignColumns: [payrollRuns.id] }).onDelete('restrict'),
+  index('payroll_variances_run').on(t.runId, t.employeeId),
+]);

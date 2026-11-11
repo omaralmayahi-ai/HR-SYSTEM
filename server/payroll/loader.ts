@@ -24,17 +24,17 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
   const fieldsArr = sql.raw(`ARRAY[${ENGINE_FIELDS.map(f => `'${f}'`).join(',')}]::text[]`);
 
   const [rules, versions, scaleRows, items, itemVersions, deg, resp, locs, units, emps] = await runAll([
-    () => db.execute(sql`SELECT service_type, contract_type, category_id FROM payroll_category_rules`),
+    () => db.execute(sql`SELECT service_type, contract_type, category_id FROM payroll_category_rules ORDER BY id`),
     () => db.execute(sql`SELECT id, effective_from::text ef FROM salary_scale_versions WHERE status = 'معتمد' AND coalesce(approved_at, '-infinity') <= ${knownAt}::timestamptz AND effective_from <= ${end}::date ORDER BY effective_from`),
-    () => db.execute(sql`SELECT s.version_id, s.grade, s.step, s.amount FROM salary_scale s JOIN salary_scale_versions v ON v.id = s.version_id WHERE v.status = 'معتمد' AND coalesce(v.approved_at, '-infinity') <= ${knownAt}::timestamptz AND v.effective_from <= ${end}::date`),
-    () => db.execute(sql`SELECT id, code, name, direction, classification, assignment_mode, method, category_id FROM pay_items WHERE category_id = ${o.categoryId}`),
+    () => db.execute(sql`SELECT s.version_id, s.grade, s.step, s.amount FROM salary_scale s JOIN salary_scale_versions v ON v.id = s.version_id WHERE v.status = 'معتمد' AND coalesce(v.approved_at, '-infinity') <= ${knownAt}::timestamptz AND v.effective_from <= ${end}::date ORDER BY s.version_id, s.grade, s.step`),
+    () => db.execute(sql`SELECT id, code, name, direction, classification, assignment_mode, method, category_id FROM pay_items WHERE category_id = ${o.categoryId} ORDER BY id`),
     () => db.execute(sql`SELECT v.id, v.item_id, v.valid_from::text vf, v.valid_to::text vt, v.props FROM pay_item_versions v JOIN pay_items i ON i.id = v.item_id
       WHERE i.category_id = ${o.categoryId} AND v.recorded_at <= ${knownAt}::timestamptz AND (v.superseded_at IS NULL OR v.superseded_at > ${knownAt}::timestamptz)
-        AND v.valid_from <= ${end}::date AND (v.valid_to IS NULL OR v.valid_to >= ${start}::date) ORDER BY v.valid_from`),
-    () => db.execute(sql`SELECT id, name FROM education_degrees`),
-    () => db.execute(sql`SELECT id, name FROM responsibility_allowances`),
-    () => db.execute(sql`SELECT id, name FROM work_locations`),
-    () => db.execute(sql`SELECT id, parent_id FROM org_units`),
+        AND v.valid_from <= ${end}::date AND (v.valid_to IS NULL OR v.valid_to >= ${start}::date) ORDER BY v.valid_from, v.id`),
+    () => db.execute(sql`SELECT id, name FROM education_degrees ORDER BY id`),
+    () => db.execute(sql`SELECT id, name FROM responsibility_allowances ORDER BY id`),
+    () => db.execute(sql`SELECT id, name FROM work_locations ORDER BY id`),
+    () => db.execute(sql`SELECT id, parent_id FROM org_units ORDER BY id`),
     () => db.execute(sql`SELECT e.id, e.full_name, e.company_number, e.department, e.section, e.job_title, e.current_appointment_date, e.first_appointment_date, e.appointment_date,
         ${sql.raw(ENGINE_FIELDS.map(f => `e.${f}`).join(', '))} FROM employees e WHERE e.created_at <= ${knownAt}::timestamptz ${idFilter} ORDER BY e.id`),
   ]);
@@ -79,16 +79,16 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
         a.principal::text principal, a.installment::text installment, a.installments_count
       FROM employee_pay_assignments a WHERE a.employee_id = ANY(${idArr})
         AND a.recorded_at <= ${knownAt}::timestamptz AND (a.superseded_at IS NULL OR a.superseded_at > ${knownAt}::timestamptz)
-        AND a.valid_from <= ${end}::date AND (a.valid_to IS NULL OR a.valid_to >= ${start}::date)`),
-    () => db.execute(sql`SELECT id, employee_id, relation, name, birth_date::text bd FROM family_members WHERE employee_id = ANY(${idArr}) AND created_at <= ${knownAt}::timestamptz`),
+        AND a.valid_from <= ${end}::date AND (a.valid_to IS NULL OR a.valid_to >= ${start}::date) ORDER BY a.employee_id, a.valid_from, a.id`),
+    () => db.execute(sql`SELECT id, employee_id, relation, name, birth_date::text bd FROM family_members WHERE employee_id = ANY(${idArr}) AND created_at <= ${knownAt}::timestamptz ORDER BY employee_id, id`),
     () => db.execute(sql`
       WITH known AS (SELECT f.* FROM family_member_facts f JOIN family_members m ON m.id = f.member_id
         WHERE m.employee_id = ANY(${idArr}) AND (f.recorded_at <= ${knownAt}::timestamptz OR f.source = 'ترحيل قديم'))
       SELECT k.member_id, k.fact, k.value, k.valid_from::text vf FROM known k WHERE NOT EXISTS (SELECT 1 FROM known c WHERE c.supersedes_id = k.id)
         AND NOT EXISTS (SELECT 1 FROM administrative_orders o WHERE o.cancels_order_id = k.order_id AND o.created_at <= ${knownAt}::timestamptz)
-      ORDER BY k.member_id, k.fact, k.valid_from NULLS FIRST, k.recorded_at`),
+      ORDER BY k.member_id, k.fact, k.valid_from NULLS FIRST, k.recorded_at, k.id`),
     () => db.execute(sql`SELECT x.member_id, x.valid_from::text vf, x.valid_to::text vt FROM family_extensions x JOIN family_members m ON m.id = x.member_id
-      WHERE m.employee_id = ANY(${idArr}) AND x.recorded_at <= ${knownAt}::timestamptz`),
+      WHERE m.employee_id = ANY(${idArr}) AND x.recorded_at <= ${knownAt}::timestamptz ORDER BY x.member_id, x.valid_from, x.id`),
   ]);
 
   const tl = new Map<number, Record<string, { from: string | null; value: any }[]>>();

@@ -2,9 +2,10 @@
 // الإدخال يحفظ حمولة فقط؛ الاعتماد (مدير غير المُدخل) يطبّقها على الجداول بمعاملة واحدة مع سجل التدقيق.
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { applyMovement, isIsoDate, todayBaghdad } from '../careerMovements.ts';
+import { unapproveInTx } from './periods.ts';
 import { PayrollError, validateProps, activationProblems, ensureOrder, supersedeAndInsert } from './catalog.ts';
 
-export const OP_TYPES = ['item_version', 'assignment', 'assignment_end', 'family_member', 'family_fact', 'family_mode', 'family_extension'] as const;
+export const OP_TYPES = ['item_version', 'assignment', 'assignment_end', 'family_member', 'family_fact', 'family_mode', 'family_extension', 'period_unapprove'] as const;
 export type OpType = typeof OP_TYPES[number];
 
 const MULTI_METHODS = new Set(['installments', 'manual']);
@@ -43,6 +44,10 @@ async function baseToken(db: any, schema: any, op: OpType, p: any): Promise<stri
     if (p.multi_allowed) return null; // الأقساط والأوامر اليدوية تتعدد؛ ما تتعارض ببعضها
     const r = rows(await db.execute(sql`SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') t FROM employee_pay_assignments
       WHERE employee_id = ${Number(p.employee_id)} AND item_id = ${Number(p.item_id)} AND superseded_at IS NULL AND NOT multi_allowed`));
+    return r[0]?.t ?? '';
+  }
+  if (op === 'period_unapprove') {
+    const r = rows(await db.execute(sql`SELECT status || ':' || coalesce(current_run_id::text, '') t FROM payroll_periods WHERE id = ${Number(p.period_id)}`));
     return r[0]?.t ?? '';
   }
   // العائلة: حالة عائلة الموظف كلها (الأفراد والحقائق الحية والتمديدات والنمط)
@@ -174,6 +179,14 @@ export async function prepare(db: any, schema: any, op: OpType, raw: any): Promi
       p.employee_id = m.employeeId;
       return { payload: p, summary: `تمديد ${m.name || m.relation} من ${p.valid_from} إلى ${p.valid_to}`, employeeId: m.employeeId, itemId: null, warnings };
     }
+    case 'period_unapprove': {
+      const [per] = await db.select().from(schema.payrollPeriods).where(eq(schema.payrollPeriods.id, Number(p.period_id)));
+      if (!per) throw new PayrollError('الفترة غير موجودة', 404);
+      if (per.status !== 'معتمدة') throw new PayrollError(`الفترة ${per.status}؛ إلغاء الاعتماد للفترة المعتمدة قبل الإصدار فقط`, 409);
+      if (!String(p.reason ?? '').trim()) throw new PayrollError('سبب إلغاء الاعتماد مطلوب');
+      p.period_id = per.id; p.reason = String(p.reason).trim();
+      return { payload: p, summary: `إلغاء اعتماد فترة ${per.year}/${per.month}: ${p.reason}`, employeeId: null, itemId: null, warnings };
+    }
   }
   throw new PayrollError('نوع عملية غير معروف');
 }
@@ -284,6 +297,8 @@ async function applyOp(tx: any, schema: any, op: OpType, p: any, enteredBy: stri
       const [x] = await tx.insert(schema.familyExtensions).values({ memberId: Number(p.member_id), validFrom: p.valid_from, validTo: p.valid_to, orderId: order?.id ?? null, reason: p.reason ?? null, recordedBy: enteredBy }).returning();
       return { extension_id: x.id };
     }
+    case 'period_unapprove':
+      return unapproveInTx(tx, schema, Number(p.period_id), p.reason, enteredBy, approver);
   }
 }
 
@@ -307,7 +322,7 @@ export async function decide(db: any, schema: any, id: number, decision: 'approv
       return { state: 'مرفوض' };
     }
     // قفل لكل هدف حتى ما يعتمد اثنان بنفس اللحظة على نفس الهدف
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`payroll:${op.employeeId ?? ''}:${op.itemId ?? ''}`}))`);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${op.opType === 'period_unapprove' ? `payroll:period:${op.payload.period_id}` : `payroll:${op.employeeId ?? ''}:${op.itemId ?? ''}`}))`);
     const token = await baseToken(tx, schema, op.opType, op.payload);
     if (op.baseToken !== null && token !== op.baseToken) {
       throw new PayrollError('الهدف تغيّر بعد إدخال العملية (اعتُمدت عملية أخرى عليه)؛ ترفض هذه ويُعاد إدخالها', 409);

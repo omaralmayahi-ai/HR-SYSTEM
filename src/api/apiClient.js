@@ -333,6 +333,30 @@ export const apiClient = {
     reject: (id, reason) => request(`/api/payroll/pending/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
     cancel: (id) => request(`/api/payroll/pending/${id}/cancel`, { method: 'POST' }),
     dataQuality: () => request('/api/payroll/data-quality', { timeoutMs: 60000 }),
+    // B8a3: الفترات والاحتساب والاعتماد والكشوف
+    periods: (category = 'PERM') => request(`/api/payroll/periods?category=${encodeURIComponent(category)}`),
+    openPeriod: (data) => request('/api/payroll/periods', { method: 'POST', body: JSON.stringify(data) }),
+    period: (id, check) => request(`/api/payroll/periods/${id}${check ? '?check=1' : ''}`, { timeoutMs: 60000 }),
+    computePeriod: (id) => request(`/api/payroll/periods/${id}/compute`, { method: 'POST', timeoutMs: 300000 }),
+    review: (id, threshold) => request(`/api/payroll/periods/${id}/review${threshold ? `?threshold=${threshold}` : ''}`, { timeoutMs: 60000 }),
+    approvePeriod: (id) => request(`/api/payroll/periods/${id}/approve`, { method: 'POST', timeoutMs: 300000 }),
+    issuePeriod: (id, dispatch_letter) => request(`/api/payroll/periods/${id}/issue`, { method: 'POST', body: JSON.stringify({ dispatch_letter }) }),
+    unapprovePeriod: (id, reason) => request(`/api/payroll/periods/${id}/unapprove`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    periodResults: (id, params = {}) => request(`/api/payroll/periods/${id}/results?${new URLSearchParams(params)}`),
+    periodEmployee: (id, employeeId) => request(`/api/payroll/periods/${id}/employees/${employeeId}`),
+    employeeHistory: (employeeId) => request(`/api/payroll/employees/${employeeId}/history`),
+    preview: (employeeId, year, month) => request(`/api/payroll/preview/${employeeId}?year=${year}&month=${month}`, { timeoutMs: 60000 }),
+    downloadStatement: async (id, kind, item) => {
+      const token = localStorage.getItem('hr_session_token');
+      const res = await fetch(`/api/payroll/periods/${id}/statements/${kind}${item ? `?item=${encodeURIComponent(item)}` : ''}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!res.ok) { let msg = 'تعذّر التصدير'; try { msg = (await res.json()).error || msg; } catch {} throw new Error(msg); }
+      const cd = res.headers.get('Content-Disposition') || '';
+      const m = /filename\*=UTF-8''([^;]+)/.exec(cd);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = m ? decodeURIComponent(m[1]) : `${kind}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    },
   },
   // B4d: إصدارات سلّم الرواتب
   salaryScaleVersions: {

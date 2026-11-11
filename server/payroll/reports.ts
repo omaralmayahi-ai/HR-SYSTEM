@@ -1,0 +1,213 @@
+// server/payroll/reports.ts — B8a3: تقرير المراجعة قبل الاعتماد (س11.3) والكشوف (13).
+// كل الكشوف تُبنى من بيانات الاحتساب المجمّدة فقط (لقطة الموظف واسم البند المجمّد بالسطر)، فإعادة إخراج كشف
+// مُصدَر بعد تغيير البيانات أو المسميات تطابق الأصل حرفياً (حالة 7).
+import { sql } from 'drizzle-orm';
+import * as XLSX from 'xlsx';
+import { PayrollError } from './catalog.ts';
+import { money, toDecimal, sum } from './money.ts';
+
+const rows = (r: any) => ((r as any).rows ?? r) as any[];
+const num = (v: any) => (v === null || v === undefined ? 0 : Number(v));
+
+export async function periodWithRun(db: any, periodId: number, runId?: number) {
+  const [p] = rows(await db.execute(sql`SELECT p.*, c.name AS category_name, c.code AS category_code FROM payroll_periods p JOIN payroll_categories c ON c.id = p.category_id WHERE p.id = ${periodId}`));
+  if (!p) throw new PayrollError('الفترة غير موجودة', 404);
+  const rid = runId ?? p.current_run_id;
+  if (!rid) throw new PayrollError('الفترة بلا احتساب', 409);
+  const [run] = rows(await db.execute(sql`SELECT * FROM payroll_runs WHERE id = ${rid} AND period_id = ${periodId}`));
+  if (!run) throw new PayrollError('الاحتساب غير موجود لهذه الفترة', 404);
+  return { period: p, run };
+}
+
+async function previousRun(db: any, period: any) {
+  const [prev] = rows(await db.execute(sql`SELECT id, current_run_id, approved_at FROM payroll_periods WHERE category_id = ${period.category_id} AND kind = 'عادية'
+    AND (year * 12 + month) < ${period.year * 12 + period.month} AND status IN ('معتمدة', 'مُصدَرة') ORDER BY year DESC, month DESC LIMIT 1`));
+  return prev || null;
+}
+
+/** تقرير المراجعة (س11.3). threshold = نسبة تغيّر الصافي/عدد المستحقين اللي تُعلَّم. */
+export async function reviewReport(db: any, periodId: number, threshold = 10) {
+  const { period, run } = await periodWithRun(db, periodId);
+  const results = rows(await db.execute(sql`SELECT employee_id, computed, net::text net, negative::text negative, flags, issues, snapshot FROM payroll_results WHERE run_id = ${run.id}`));
+  const prev = await previousRun(db, period);
+  const prevNet = new Map<number, string>();
+  const prevSnap = new Map<number, any>();
+  if (prev?.current_run_id) for (const r of rows(await db.execute(sql`SELECT employee_id, net::text net, computed, snapshot FROM payroll_results WHERE run_id = ${prev.current_run_id}`))) {
+    if (r.computed) prevNet.set(Number(r.employee_id), r.net);
+    prevSnap.set(Number(r.employee_id), r);
+  }
+  const who = (r: any) => ({ employee_id: Number(r.employee_id), name: r.snapshot?.full_name, company_number: r.snapshot?.company_number, department: r.snapshot?.department });
+
+  const netChanges: any[] = [], negatives: any[] = [], capped: any[] = [], unverifiedGrade: any[] = [], withheldGeneral: any[] = [], newEmployees: any[] = [];
+  const issuesByCode: Record<string, any[]> = {};
+  for (const r of results) {
+    for (const i of r.issues || []) (issuesByCode[i.code] ||= []).push({ ...who(r), message: i.message, item: i.itemCode ?? null, date: i.date ?? null });
+    if (!r.computed) continue;
+    if (r.flags?.negative) negatives.push({ ...who(r), negative: r.negative });
+    if (r.flags?.cap_reached) capped.push(who(r));
+    if (r.flags?.unverified_grade) unverifiedGrade.push({ ...who(r), grade: r.snapshot?.grade });
+    if (r.flags?.general_withheld?.length) withheldGeneral.push({ ...who(r), items: r.flags.general_withheld });
+    const before = prevNet.get(Number(r.employee_id));
+    if (prev && before === undefined) newEmployees.push({ ...who(r), net: r.net });
+    if (before !== undefined) {
+      const b = num(before), a = num(r.net);
+      const pct = b === 0 ? (a === 0 ? 0 : 100) : Math.abs(a - b) / b * 100;
+      if (pct > threshold) netChanges.push({ ...who(r), before, after: r.net, change_pct: Math.round(pct * 10) / 10 });
+    }
+  }
+  const computedNow = new Set(results.filter(r => r.computed).map(r => Number(r.employee_id)));
+  const leavers = prev ? [...prevNet.keys()].filter(id => !computedNow.has(id)).map(id => ({ ...who(prevSnap.get(id)), net_before: prevNet.get(id) })) : [];
+
+  // البنود اللي تغيّر عدد مستحقيها أكثر من النسبة
+  const counts = async (rid: number) => new Map(rows(await db.execute(sql`SELECT item_code, item_name, count(DISTINCT employee_id)::int n FROM payroll_lines
+    WHERE run_id = ${rid} AND kind IN ('item', 'deduction') AND amount <> 0 GROUP BY item_code, item_name`)).map(r => [r.item_code, r]));
+  const cur = await counts(run.id);
+  const itemChanges: any[] = [];
+  if (prev?.current_run_id) {
+    const old = await counts(Number(prev.current_run_id));
+    for (const code of new Set([...cur.keys(), ...old.keys()])) {
+      const a = cur.get(code)?.n ?? 0, b = old.get(code)?.n ?? 0;
+      const pct = b === 0 ? (a === 0 ? 0 : 100) : Math.abs(a - b) / b * 100;
+      if (pct > threshold) itemChanges.push({ item_code: code, item_name: (cur.get(code) || old.get(code)).item_name, before: b, after: a, change_pct: Math.round(pct * 10) / 10 });
+    }
+  }
+  // تغييرات المستخدمين والأدوار منذ اعتماد الفترة السابقة (خطر المدير الثاني — قرار B8)
+  const since = prev?.approved_at ?? period.opened_at;
+  const userChanges = rows(await db.execute(sql`SELECT at, actor, action, before->>'username' AS before_user, after->>'username' AS after_user,
+      before->>'role' AS before_role, after->>'role' AS after_role FROM payroll_audit WHERE entity = 'users' AND action <> 'تغيير كلمة مرور' AND at >= ${since}::timestamptz ORDER BY at`));
+  // بنود فعّالة بقيم «يُتحقق» تمنع الاعتماد
+  const unverifiedItems = rows(await db.execute(sql`SELECT DISTINCT i.code, i.name FROM pay_item_versions v JOIN pay_items i ON i.id = v.item_id
+    WHERE i.category_id = ${period.category_id} AND v.superseded_at IS NULL AND v.props->>'status' = 'فعّال' AND v.props->>'verification' = 'يُتحقق'
+      AND v.valid_from <= (make_date(${period.year}, ${period.month}, 1) + interval '1 month - 1 day')::date AND (v.valid_to IS NULL OR v.valid_to >= make_date(${period.year}, ${period.month}, 1))`));
+
+  return {
+    period: { id: period.id, year: period.year, month: period.month, status: period.status, category: period.category_name },
+    run: { id: run.id, state: run.state, computed_by: run.computed_by, finished_at: run.finished_at, totals: run.totals },
+    previous_period: prev?.id ?? null, threshold,
+    sections: {
+      net_changes: netChanges.sort((a, b) => b.change_pct - a.change_pct),
+      negative_net: negatives, cap_reached: capped, item_beneficiary_changes: itemChanges,
+      issues: issuesByCode, unverified_grades: unverifiedGrade, general_withheld: withheldGeneral,
+      new_employees: newEmployees, leavers, user_role_changes: userChanges, unverified_items: unverifiedItems,
+    },
+    blocking: unverifiedItems.length ? ['بنود فعّالة بقيم «يُتحقق»'] : [],
+  };
+}
+
+// ---------------- الكشوف ----------------
+export const STATEMENTS = { full: 'الكشف الكامل', variances: 'كشف المتغيرات', item: 'كشف البند', exceptions: 'تقرير الاستثناءات' } as const;
+export type StatementKind = keyof typeof STATEMENTS;
+
+const catName = (period: any, run: any) => run.totals?.category_name ?? period.category_name;
+const catCode = (period: any, run: any) => run.totals?.category_code ?? period.category_code;
+const USER_MARK = '\u0000المستخرج';
+function header(period: any, run: any, title: string, extra?: string) {
+  const issued = period.status === 'مُصدَرة';
+  return [
+    [title + (extra ? ` — ${extra}` : '')],
+    [`الفئة: ${catName(period, run)}`, `الفترة: ${period.year}/${String(period.month).padStart(2, '0')}`, `رقم الفترة: ${period.id}`, `الاحتساب: ${run.id}`],
+    [issued ? `أُصدر: ${new Date(period.issued_at).toISOString().slice(0, 10)}` : `الحالة: ${period.status} (غير نهائي)`, `كتاب الإرسال: ${period.dispatch_letter ?? '—'}`, `المصدر: ${period.pay_source}`, USER_MARK],
+    [],
+  ];
+}
+
+/** بيانات الكشف كجداول (تُختبر مباشرة) — بلا أي قراءة من جداول البيانات الحية. */
+export async function statementData(db: any, periodId: number, kind: StatementKind, opts: { itemCode?: string; runId?: number } = {}) {
+  const { period, run } = await periodWithRun(db, periodId, opts.runId);
+  const results = rows(await db.execute(sql`SELECT employee_id, computed, nominal::text nominal, allowances::text allowances, deductions::text deductions, net::text net, flags, issues, snapshot
+    FROM payroll_results WHERE run_id = ${run.id} ORDER BY snapshot->>'department' NULLS LAST, snapshot->>'section' NULLS LAST, snapshot->>'company_number', employee_id`));
+  const lines = rows(await db.execute(sql`SELECT employee_id, item_code, item_name, kind, direction, amount::text amount, assignment_id, explain, segment_from::text sf, segment_to::text st, share
+    FROM payroll_lines WHERE run_id = ${run.id} ORDER BY employee_id, seq`));
+  const byEmp = new Map<number, any[]>();
+  for (const l of lines) { const k = Number(l.employee_id); (byEmp.get(k) || byEmp.set(k, []).get(k)!).push(l); }
+  const idCols = (r: any) => [r.snapshot?.company_number ?? '', r.snapshot?.full_name ?? '', r.snapshot?.department ?? '', r.snapshot?.section ?? '', `${r.snapshot?.grade ?? ''}/${r.snapshot?.step ?? ''}`];
+  const idHead = ['رقم الشركة', 'الاسم', 'القسم', 'الشعبة', 'الدرجة/المرحلة'];
+  const sheets: { name: string; rows: any[][] }[] = [];
+
+  if (kind === 'full') {
+    // أعمدة البنود بترتيب ظهورها، باسمها المجمّد؛ التخفيض بسبب السقف عمود مستقل
+    const cols: { key: string; name: string }[] = [];
+    const seen = new Set<string>();
+    for (const l of lines) {
+      if (l.kind === 'nominal') continue;
+      const key = l.kind === 'cap' ? `${l.item_code}#cap` : l.item_code;
+      if (!seen.has(key)) { seen.add(key); cols.push({ key, name: l.kind === 'cap' ? `تخفيض سقف: ${l.item_code}` : l.item_name }); }
+    }
+    const body: any[][] = [];
+    const deptTotals = new Map<string, Map<string, bigint>>();
+    for (const r of results.filter(r => r.computed)) {
+      const amounts = new Map<string, bigint>();
+      for (const l of byEmp.get(Number(r.employee_id)) || []) {
+        if (l.kind === 'nominal') continue;
+        const key = l.kind === 'cap' ? `${l.item_code}#cap` : l.item_code;
+        amounts.set(key, (amounts.get(key) ?? 0n) + money(l.amount));
+      }
+      body.push([...idCols(r), num(r.nominal), ...cols.map(c => (amounts.has(c.key) ? Number(toDecimal(amounts.get(c.key)!)) : '')), num(r.allowances), num(r.deductions), num(r.net)]);
+      const dept = r.snapshot?.department || 'بلا قسم';
+      const dt = deptTotals.get(dept) || new Map<string, bigint>(); deptTotals.set(dept, dt);
+      for (const [k, v] of [['nominal', r.nominal], ['allowances', r.allowances], ['deductions', r.deductions], ['net', r.net]] as const) dt.set(k, (dt.get(k) ?? 0n) + money(v));
+      dt.set('count', (dt.get('count') ?? 0n) + 1n);
+    }
+    sheets.push({ name: 'الكشف الكامل', rows: [...header(period, run, STATEMENTS.full), [...idHead, 'الاسمي', ...cols.map(c => c.name), 'المخصصات', 'الاستقطاعات', 'الصافي'], ...body] });
+    const keys = ['nominal', 'allowances', 'deductions', 'net'] as const;
+    const grand = new Map<string, bigint>();
+    const totalRows = [...deptTotals.entries()].map(([d, t]) => {
+      for (const k of [...keys, 'count']) grand.set(k, (grand.get(k) ?? 0n) + (t.get(k) ?? 0n));
+      return [d, Number(t.get('count')), ...keys.map(k => Number(toDecimal(t.get(k)!)))];
+    });
+    sheets.push({ name: 'المجاميع حسب القسم', rows: [['القسم', 'العدد', 'الاسمي', 'المخصصات', 'الاستقطاعات', 'الصافي'], ...totalRows,
+      ['المجموع', Number(grand.get('count') ?? 0n), ...keys.map(k => Number(toDecimal(grand.get(k) ?? 0n)))]] });
+  } else if (kind === 'variances') {
+    const vs = rows(await db.execute(sql`SELECT v.employee_id, v.item_code, v.item_name, v.before::text b, v.after::text a, v.cause, v.order_ref, r.snapshot
+      FROM payroll_variances v JOIN payroll_results r ON r.run_id = v.run_id AND r.employee_id = v.employee_id WHERE v.run_id = ${run.id} ORDER BY r.snapshot->>'company_number', v.item_code`));
+    sheets.push({ name: 'المتغيرات', rows: [...header(period, run, STATEMENTS.variances), [...idHead, 'البند', 'قبل', 'بعد', 'الفرق', 'السبب', 'الأمر/الإسناد'],
+      ...vs.map(v => [...idCols(v), v.item_name, num(v.b), num(v.a), Number(toDecimal(money(v.a) - money(v.b))), v.cause, v.order_ref ?? ''])] });
+  } else if (kind === 'item') {
+    const code = String(opts.itemCode || '').trim();
+    if (!code) throw new PayrollError('رمز البند مطلوب لكشف البند');
+    const body: any[][] = [];
+    let itemName = code;
+    for (const r of results) {
+      const ls = (byEmp.get(Number(r.employee_id)) || []).filter(l => l.item_code === code);
+      if (!ls.length) continue;
+      itemName = ls[0].item_name;
+      const total = sum(ls.filter(l => l.kind !== 'cap').map(l => money(l.amount)));
+      const cap = sum(ls.filter(l => l.kind === 'cap').map(l => money(l.amount)));
+      const withheld = ls.some(l => l.explain?.withheld);
+      const assign = ls.find(l => l.explain?.assignment)?.explain?.assignment;
+      body.push([...idCols(r), Number(toDecimal(total)), cap === 0n ? '' : Number(toDecimal(cap)), withheld ? 'محجوب' : (assign ? `إسناد فردي ${assign.id}` : 'تلقائي'), ls.map(l => l.explain?.level).filter(Boolean)[0] ?? '']);
+    }
+    sheets.push({ name: 'كشف البند', rows: [...header(period, run, STATEMENTS.item, itemName), [...idHead, 'المبلغ', 'تخفيض السقف', 'السلوك', 'المستوى'], ...body] });
+  } else if (kind === 'exceptions') {
+    const body: any[][] = [];
+    for (const r of results) {
+      const ls = byEmp.get(Number(r.employee_id)) || [];
+      for (const l of ls) {
+        if (l.explain?.withheld) body.push([...idCols(r), 'حجب', l.item_name, Number(l.amount), `إسناد ${l.explain.withheld.assignment_id}`]);
+        else if (l.explain?.assignment) body.push([...idCols(r), 'إسناد فردي', l.item_name, Number(l.amount), `${l.explain.assignment.kind} ${l.explain.assignment.id}`]);
+        if (l.kind === 'cap') body.push([...idCols(r), 'سقف 200%', l.item_name, Number(l.amount), `الأولوية ${l.explain?.priority ?? '—'}`]);
+      }
+      if (r.flags?.segments > 1) body.push([...idCols(r), 'شهر جزئي/مقاطع', '', '', `${r.flags.segments} مقاطع`]);
+      if (r.flags?.negative) body.push([...idCols(r), 'صافٍ سالب', '', '', 'صُرف صفراً']);
+      for (const i of r.issues || []) if (i.code !== 'NOT_IN_PERIOD') body.push([...idCols(r), `تنبيه ${i.code}`, i.itemCode ?? '', '', i.message]);
+    }
+    sheets.push({ name: 'الاستثناءات', rows: [...header(period, run, STATEMENTS.exceptions), [...idHead, 'النوع', 'البند', 'المبلغ', 'التفصيل'], ...body] });
+  } else {
+    throw new PayrollError('نوع كشف غير معروف');
+  }
+  return { period, run, sheets };
+}
+
+export async function statementWorkbook(db: any, periodId: number, kind: StatementKind, user: string, opts: { itemCode?: string; runId?: number } = {}) {
+  const data = await statementData(db, periodId, kind, opts);
+  const wb = XLSX.utils.book_new();
+  wb.Workbook = { Views: [{ RTL: true }] } as any;
+  for (const s of data.sheets) {
+    // المستخرج يُكتب بالرأس (السطر الثالث) — الكشف نفسه ما يتغير
+    const rowsOut = s.rows.map(r => r.map(c => (c === USER_MARK ? `استخرجه: ${user}` : c)));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rowsOut), s.name.slice(0, 31));
+  }
+  const buf: Buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const fname = `${STATEMENTS[kind]}-${data.period.year}-${String(data.period.month).padStart(2, '0')}-${catCode(data.period, data.run)}.xlsx`;
+  return { buf, fname, period: data.period, run: data.run };
+}
