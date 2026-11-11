@@ -109,7 +109,7 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
             graduationYear: cleanSnake.graduation_year || data.graduationYear,
             education_order: cleanSnake.evaluation_order || cleanSnake.equation_number || cleanSnake.education_order || data.equationNumber || data.evaluationOrder,
             evaluation_order: cleanSnake.evaluation_order || cleanSnake.equation_number || cleanSnake.education_order || data.equationNumber || data.evaluationOrder
-          });
+          }, { effectiveDate: cleanSnake.equation_date || data.equationDate || cleanSnake.graduation_date || data.graduationDate, reason: 'إضافة شهادة', user: (req as any).user?.username });
         }
       }
 
@@ -199,7 +199,7 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
               graduationYear: savedRecord.graduation_year || data.graduationYear,
               education_order: savedRecord.evaluation_order || savedRecord.equation_number || savedRecord.education_order || data.equationNumber || data.evaluationOrder,
               evaluation_order: savedRecord.evaluation_order || savedRecord.equation_number || savedRecord.education_order || data.equationNumber || data.evaluationOrder
-            });
+            }, { effectiveDate: savedRecord.equation_date || savedRecord.equationDate || savedRecord.graduation_date || savedRecord.graduationDate, reason: 'تعديل شهادة', user: (req as any).user?.username });
           } else {
             // Find next active qualification
             // B6: من القاعدة (مخزن الذاكرة فارغ منذ B2)
@@ -216,7 +216,7 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
                 graduationYear: nextActive.graduation_year || nextActive.graduationYear || 0,
                 education_order: nextActive.evaluation_order || nextActive.equation_number || nextActive.education_order || '',
                 evaluation_order: nextActive.evaluation_order || nextActive.equation_number || nextActive.education_order || ''
-              });
+              }, { reason: 'تعطيل شهادة', user: (req as any).user?.username });
             }
           }
         }
@@ -283,7 +283,7 @@ export function registerGenericEntitiesRoutes(app: Express, deps: any) {
               graduationYear: top.graduation_year || top.graduationYear || 0,
               education_order: top.evaluation_order || top.equation_number || top.education_order || '',
               evaluation_order: top.evaluation_order || top.equation_number || top.education_order || ''
-            });
+            }, { reason: 'حذف شهادة', user: (req as any).user?.username });
           }
         }
       }

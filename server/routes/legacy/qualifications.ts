@@ -138,7 +138,7 @@ export function registerQualificationsRoutes(app: Express, deps: any) {
       created_at: new Date().toISOString()
     };
     syncEntityRecord('qualifications', memItem, 'insert');
-    await syncEmployeeEducationQualification(employeeId);
+    await syncEmployeeEducationQualification(employeeId, { user: (req as any).user?.username, reason: 'تغيير بسجل الشهادات' });
 
     const recordMapped = {
       ...memItem,
@@ -216,7 +216,7 @@ export function registerQualificationsRoutes(app: Express, deps: any) {
 
     const empId = parseInt(String(updatedRec?.employeeId || memItem.employee_id || memItem.employeeId));
     if (empId) {
-      await syncEmployeeEducationQualification(empId);
+      await syncEmployeeEducationQualification(empId, { user: (req as any).user?.username, reason: 'تغيير بسجل الشهادات' });
       triggerRecalculateEligibility(empId).catch(logRecalcError);
     }
     saveLocalDb();
@@ -275,7 +275,7 @@ export function registerQualificationsRoutes(app: Express, deps: any) {
     }
 
     if (empId) {
-      await syncEmployeeEducationQualification(empId);
+      await syncEmployeeEducationQualification(empId, { user: (req as any).user?.username, reason: 'تغيير بسجل الشهادات' });
       triggerRecalculateEligibility(empId).catch(logRecalcError);
     }
     saveLocalDb();
@@ -326,7 +326,7 @@ export function registerQualificationsRoutes(app: Express, deps: any) {
     syncEntityRecord('qualifications', { id }, 'delete');
 
     if (empId) {
-      await syncEmployeeEducationQualification(empId);
+      await syncEmployeeEducationQualification(empId, { user: (req as any).user?.username, reason: 'تغيير بسجل الشهادات' });
       triggerRecalculateEligibility(empId).catch(logRecalcError);
     }
     saveLocalDb();
@@ -407,7 +407,7 @@ export function registerQualificationsRoutes(app: Express, deps: any) {
     if (data.step) empUpdate.step = parseInt(data.step);
     if (data.confirmation_date || data.confirmationDate) empUpdate.currentAppointmentDate = data.confirmation_date || data.confirmationDate;
     if (data.order_number || data.orderNumber) empUpdate.appointmentOrder = data.order_number || data.orderNumber;
-    await updateEmployeeCentralRecord(employeeId, empUpdate);
+    await updateEmployeeCentralRecord(employeeId, empUpdate, { effectiveDate: data.order_date || data.orderDate || data.confirmation_date || data.confirmationDate, reason: 'تكليف/تنسيب', user: (req as any).user?.username });
 
     const store = genericMemoryStores['job-assignments'] || mem.inMemoryJobAssignments || [];
     const newId = record?.id || (store.reduce((max, j) => Math.max(max, parseInt(j.id) || 0), 0) || 0) + 1;
@@ -532,7 +532,7 @@ export function registerQualificationsRoutes(app: Express, deps: any) {
         empUpdate.lastIncrementDate = actionDate;
       }
     }
-    await updateEmployeeCentralRecord(employeeId, empUpdate);
+    await updateEmployeeCentralRecord(employeeId, empUpdate, { effectiveDate: actionDate, reason: movementType || 'حركة ترفيع/علاوة', user: (req as any).user?.username });
 
     const store = genericMemoryStores['promotions'] || mem.inMemoryPromotions || [];
     const newId = record?.id || (store.reduce((max, p) => Math.max(max, parseInt(p.id) || 0), 0) || 0) + 1;
@@ -895,7 +895,7 @@ export function registerQualificationsRoutes(app: Express, deps: any) {
       await updateEmployeeCentralRecord(employeeId, {
         department: toTarget,
         workLocation: toTarget
-      });
+      }, { effectiveDate: data.start_date || data.startDate, reason: 'نقل', user: (req as any).user?.username });
     }
 
     const store = genericMemoryStores['transfers'] || mem.inMemoryTransfers || [];
@@ -993,7 +993,7 @@ export function registerQualificationsRoutes(app: Express, deps: any) {
     await updateEmployeeCentralRecord(employeeId, {
       status: 'متقاعد',
       retirementNumber: data.pension_order_number || data.pensionOrderNumber || 'إحالة إلى التقاعد'
-    });
+    }, { effectiveDate: data.retirement_date || data.retirementDate, reason: 'إحالة على التقاعد', user: (req as any).user?.username });
 
     const store = genericMemoryStores['retirements'] || mem.inMemoryRetirements || [];
     const existingIdx = store.findIndex(r => parseInt(String(r.employee_id || r.employeeId)) === employeeId);

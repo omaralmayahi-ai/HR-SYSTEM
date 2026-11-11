@@ -5,6 +5,7 @@ import type { Express } from 'express';
 import { employeeListColumns } from '../../util/employeeColumns.ts';
 import { attachOrgUnit, loadUnits } from '../../orgUnitsService.ts';
 import { sql } from 'drizzle-orm';
+import { payFieldsChanged, FIELD_LABELS, TRACKED_FIELDS } from '../../careerMovements.ts';
 
 export function registerEmployeesRoutes(app: Express, deps: any) {
   const {
@@ -209,6 +210,9 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
       let skippedCount = 0;
       const rejectedRows: any[] = [];
       const processedEmployees: any[] = [];
+      // B8a0: تحديث حقول الرواتب بالاستيراد يحتاج تاريخ نفاذ للملف كله؛ بدونه تُترك هذي الحقول وتُذكر
+      const importEffective = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.effective_date || '')) ? String(req.body.effective_date) : '';
+      const payFieldWarnings: any[] = [];
 
       for (let idx = 0; idx < employees.length; idx++) {
         const empItem = employees[idx];
@@ -262,10 +266,16 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
           }
 
           if (existingEmp && action === 'update') {
-            const [updated] = await db.update(schema.employees)
-              .set(cleanData)
-              .where(eq(schema.employees.id, existingEmp.id))
-              .returning();
+            const payChanged = payFieldsChanged(existingEmp, cleanData);
+            if (payChanged.length > 0 && !importEffective) {
+              for (const f of payChanged) delete (cleanData as any)[TRACKED_FIELDS[f]];
+              payFieldWarnings.push({ rowNumber: rowNum, companyNumber: companyNum, fields: payChanged.map(f => FIELD_LABELS[f]) });
+            }
+            // B8a0: تحديث الاستيراد يُسجَّل بسبب «استيراد» وتاريخ نفاذ الملف إن وُجد، ويظهر بتقرير مراجعة الرواتب
+            const [updated] = await db.transaction(async (tx: any) => {
+              await tx.execute(sql`SELECT set_config('hr.user', ${String((req as any).user?.username || '')}, true), set_config('hr.reason', 'استيراد من ملف', true), set_config('hr.effective_date', ${importEffective}, true)`);
+              return tx.update(schema.employees).set(cleanData).where(eq(schema.employees.id, existingEmp.id)).returning();
+            });
 
             handled = true;
             updatedCount++;
@@ -324,6 +334,8 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
         updatedCount,
         skippedCount,
         rejectedRows,
+        payFieldWarnings,
+        payFieldNote: payFieldWarnings.length > 0 ? 'حقول رواتب تغيّرت بالملف ولم تُحدَّث لأن الاستيراد بلا تاريخ نفاذ؛ سجّلها بأمر من السجل الوظيفي أو أعد الاستيراد بتاريخ نفاذ' : undefined,
         employees: processedEmployees
       });
     } catch (error: any) {
@@ -477,7 +489,26 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
       const [updatedEmployee] = Object.keys(cleanData).length > 0
         ? await db.transaction(async (tx: any) => {
             // B4c: اسم المستخدم وسبب التعديل بالسجل المؤرخ (يلتقطه مشغّل employees_history_capture)
-            await tx.execute(sql`SELECT set_config('hr.user', ${String((req as any).user?.username || '')}, true), set_config('hr.reason', ${String(req.body?.change_reason || req.body?.changeReason || '')}, true)`);
+            const changeReason = String(req.body?.change_reason || req.body?.changeReason || '').trim();
+            const isCorrection = req.body?.correction === true || req.body?.correction === 'true';
+            // B8a0 (قرار عمر): حقول الرواتب تتغير بأمر وتاريخ نفاذ من السجل الوظيفي؛ الاستمارة للتصحيح فقط
+            const [cur] = await tx.select().from(schema.employees).where(eq(schema.employees.id, id)).for('update');
+            // الوحدة تُعاد مطابقتها من النص بكل حفظ؛ إذا القسم والشعبة ما تغيّرا فهذا مو تغيير وحدة
+            const sameText = (a: any, b: any) => String(a ?? '').trim() === String(b ?? '').trim();
+            if (cur && cur.orgUnitId != null && cleanData.orgUnitId !== undefined && cleanData.orgUnitId !== cur.orgUnitId
+                && sameText(cleanData.department ?? cur.department, cur.department) && sameText(cleanData.section ?? cur.section, cur.section)) {
+              delete cleanData.orgUnitId;
+            }
+            const payChanged = cur ? payFieldsChanged(cur, cleanData) : [];
+            if (payChanged.length > 0 && !isCorrection) {
+              throw Object.assign(new Error(
+                `هذي الحقول تأثر بالراتب وتتغير بأمر إداري وتاريخ نفاذ من تبويب «السجل الوظيفي»: ${payChanged.map(f => FIELD_LABELS[f]).join('، ')}. ` +
+                'إذا القيمة المسجلة خطأ إدخال، اختر «تصحيح خطأ إدخال» واكتب السبب.'), { status: 409, code: 'PAY_FIELDS_NEED_ORDER', fields: payChanged });
+            }
+            if (payChanged.length > 0 && isCorrection && !changeReason) {
+              throw Object.assign(new Error('سبب التصحيح مطلوب'), { status: 400, code: 'CORRECTION_REASON_REQUIRED', fields: payChanged });
+            }
+            await tx.execute(sql`SELECT set_config('hr.user', ${String((req as any).user?.username || '')}, true), set_config('hr.reason', ${changeReason}, true), set_config('hr.correction', ${payChanged.length > 0 && isCorrection ? '1' : ''}, true), set_config('hr.correction_fields', ${payChanged.join(',')}, true)`);
             return tx.update(schema.employees).set(cleanData).where(eq(schema.employees.id, id)).returning();
           })
         : await db.select().from(schema.employees).where(eq(schema.employees.id, id));
@@ -487,6 +518,9 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
         updatedFromDb = updatedEmployee;
       }
     } catch (error: any) {
+      if (error?.code === 'PAY_FIELDS_NEED_ORDER' || error?.code === 'CORRECTION_REASON_REQUIRED') {
+        return res.status(error.status).json({ error: error.message, code: error.code, fields: error.fields });
+      }
       if (respondIfDbWriteError(res, error, 'تعديل بيانات الموظف')) return;
     }
     if (dbAnswered && !updatedFromDb) {

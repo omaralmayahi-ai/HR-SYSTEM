@@ -2,6 +2,7 @@
 import type { Express } from 'express';
 import type { RouteContext } from '../context.ts';
 import { desc, eq, sql } from 'drizzle-orm';
+import { attachOrgUnit } from '../orgUnitsService.ts';
 import {
   applyMovement, employeeTimeline, isIsoDate, MovementError, rebuildEmployeeFields, todayBaghdad, isTrackedField,
   type TrackedField,
@@ -112,10 +113,19 @@ export function registerCareerHistoryRoutes(app: Express, ctx: RouteContext) {
     try {
       const orderId = b.order_id === undefined || b.order_id === null || b.order_id === '' ? null : Number(b.order_id);
       if (orderId !== null && !Number.isInteger(orderId)) throw new MovementError('معرّف الأمر غير صالح');
+      const changes: Record<string, any> = b.changes && typeof b.changes === 'object' ? { ...b.changes } : {};
+      // B8a0: تغيير القسم أو الشعبة بحركة يحدد الوحدة التنظيمية بمعرّفها بنفس الحركة (حقل رواتب)
+      if ((changes.department !== undefined || changes.section !== undefined) && changes.org_unit_id === undefined) {
+        const [cur] = await db.select({ department: schema.employees.department, section: schema.employees.section, orgUnitId: schema.employees.orgUnitId })
+          .from(schema.employees).where(eq(schema.employees.id, id));
+        const target: Record<string, any> = { department: changes.department ?? cur?.department, section: changes.section ?? cur?.section };
+        await attachOrgUnit(db, schema, target, { department: target.department, section: target.section });
+        if (target.orgUnitId != null && target.orgUnitId !== cur?.orgUnitId) changes.org_unit_id = target.orgUnitId;
+      }
       const result = await applyMovement(db, schema, {
         employeeId: id,
         effectiveDate: String(b.effective_date ?? '').trim(),
-        changes: b.changes && typeof b.changes === 'object' ? b.changes : {},
+        changes,
         event: b.event,
         orderId,
         source: orderId !== null ? 'أمر' : 'تعديل مباشر',

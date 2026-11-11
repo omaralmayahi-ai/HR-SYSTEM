@@ -2,6 +2,7 @@
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
 import type { AuthRequest } from '../../../src/middleware/auth.ts';
+import { sql as sqlTag } from 'drizzle-orm';
 
 export function registerAuth2Routes(app: Express, deps: any) {
   const {
@@ -48,13 +49,17 @@ export function registerAuth2Routes(app: Express, deps: any) {
           return res.status(400).json({ error: 'كلمة المرور يجب أن تكون نصاً صريحاً جديداً' });
         }
         const hashedPassword = await bcrypt.hash(password, 10);
-        const [newUser] = await db.insert(schema.users).values({
-          username,
-          password: hashedPassword,
-          name,
-          email,
-          role: role || 'user'
-        }).returning();
+        // B8a0: مشغّل users_audit يسجّل الإنشاء باسم المنفّذ
+        const [newUser] = await db.transaction(async (tx: any) => {
+          await tx.execute(sqlTag`SELECT set_config('hr.user', ${String((req as any).user?.username || '')}, true)`);
+          return tx.insert(schema.users).values({
+            username,
+            password: hashedPassword,
+            name,
+            email,
+            role: role || 'user'
+          }).returning();
+        });
 
         if (newUser) {
           return res.status(201).json({
@@ -137,10 +142,10 @@ export function registerAuth2Routes(app: Express, deps: any) {
           return res.json(safeCur);
         }
 
-        const [updatedUser] = await db.update(schema.users)
-          .set(updateData)
-          .where(eq(schema.users.id, id))
-          .returning();
+        const [updatedUser] = await db.transaction(async (tx: any) => {
+          await tx.execute(sqlTag`SELECT set_config('hr.user', ${String((req as any).user?.username || '')}, true)`);
+          return tx.update(schema.users).set(updateData).where(eq(schema.users.id, id)).returning();
+        });
 
         if (updatedUser) {
           return res.json({
@@ -191,7 +196,10 @@ export function registerAuth2Routes(app: Express, deps: any) {
         if (userToDelete && userToDelete.username === 'admin') {
           return res.status(400).json({ error: 'لا يمكن حذف حساب مدير النظام الرئيسي' });
         }
-        await db.delete(schema.users).where(eq(schema.users.id, id));
+        await db.transaction(async (tx: any) => {
+          await tx.execute(sqlTag`SELECT set_config('hr.user', ${String((req as any).user?.username || '')}, true)`);
+          await tx.delete(schema.users).where(eq(schema.users.id, id));
+        });
       } catch (dbErr) {
         if (respondIfDbWriteError(res, dbErr, 'حذف السجل')) return;
         console.warn('Database fallback for deleting user');

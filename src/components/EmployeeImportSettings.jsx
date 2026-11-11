@@ -702,8 +702,13 @@ export default function EmployeeImportSettings() {
         rejectedCount: result.rejectedCount || 0,
         insertedCount: result.insertedCount || 0,
         updatedCount: result.updatedCount || 0,
-        rejectedRows: result.rejectedRows || []
+        rejectedRows: result.rejectedRows || [],
+        payFieldWarnings: result.payFieldWarnings || [],
+        payFieldNote: result.payFieldNote || ''
       });
+      if ((result.payFieldWarnings || []).length > 0) {
+        toast({ title: 'حقول رواتب ما تحدّثت', description: `${result.payFieldWarnings.length} موظف: ${result.payFieldNote}`, variant: 'warning' });
+      }
 
       if (result.rejectedCount > 0) {
         toast({
@@ -764,6 +769,15 @@ export default function EmployeeImportSettings() {
             </Button>
           </div>
 
+          {migrationReport.payFieldWarnings?.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 space-y-1 mb-3">
+              <div className="font-bold">{migrationReport.payFieldNote}</div>
+              {migrationReport.payFieldWarnings.slice(0, 50).map((w, i) => (
+                <div key={i}>الصف {w.rowNumber} — {w.companyNumber}: {w.fields.join('، ')}</div>
+              ))}
+              {migrationReport.payFieldWarnings.length > 50 && <div>… و{migrationReport.payFieldWarnings.length - 50} أخرى</div>}
+            </div>
+          )}
           {migrationReport.rejectedCount > 0 ? (
             <div className="space-y-3">
               <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-800 font-semibold flex items-center gap-2">

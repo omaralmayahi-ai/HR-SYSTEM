@@ -19,6 +19,14 @@ export const TRACKED_FIELDS = {
   service_type: 'serviceType',
   primary_responsibility: 'primaryResponsibility',
   acting_responsibility: 'actingResponsibility',
+  // B8a0: حقول الرواتب
+  education_level: 'educationLevel',
+  marital_status: 'maritalStatus',
+  gender: 'gender',
+  org_unit_id: 'orgUnitId',
+  contract_type: 'contractType',
+  free_transport: 'freeTransport',
+  risk_exposure: 'riskExposure',
 } as const;
 
 export type TrackedField = keyof typeof TRACKED_FIELDS;
@@ -27,9 +35,20 @@ export const FIELD_LABELS: Record<TrackedField, string> = {
   grade: 'الدرجة', step: 'المرحلة', job_title: 'العنوان الوظيفي', department: 'القسم', section: 'الشعبة',
   work_location: 'موقع العمل', status: 'الحالة', service_type: 'نوع الخدمة',
   primary_responsibility: 'المسؤولية الأساسية', acting_responsibility: 'المسؤولية بالوكالة',
+  education_level: 'الشهادة', marital_status: 'الحالة الاجتماعية', gender: 'الجنس', org_unit_id: 'الوحدة التنظيمية',
+  contract_type: 'نوع العقد', free_transport: 'النقل المجاني', risk_exposure: 'الخطورة',
 };
 
-export const SOURCES = ['تقديري', 'أمر', 'تعديل مباشر', 'ترحيل قديم'] as const;
+/**
+ * B8a0 (قرار عمر): الحقول المؤثرة بالراتب ما تتغير من استمارة الموظف إلا «تصحيح خطأ إدخال».
+ * التغيير الحقيقي حركة بأمر وتاريخ نفاذ (applyMovement) أو مسار يمرر تاريخه (hr.effective_date).
+ */
+export const PAY_FIELDS: TrackedField[] = [
+  'grade', 'step', 'education_level', 'marital_status', 'primary_responsibility', 'acting_responsibility',
+  'work_location', 'org_unit_id', 'service_type', 'contract_type', 'free_transport', 'risk_exposure',
+];
+
+export const SOURCES = ['تقديري', 'أمر', 'تعديل مباشر', 'ترحيل قديم', 'تصحيح'] as const;
 export type MovementSource = typeof SOURCES[number];
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -54,12 +73,93 @@ export function normalizeFieldValue(field: TrackedField, value: unknown): string
   if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
   if (field === 'grade' || field === 'step') {
     const n = Number(value);
-    if (!Number.isInteger(n) || n < 1 || n > (field === 'grade' ? 10 : 11)) {
+    if (!Number.isInteger(n) || n < 1 || n > (field === 'grade' ? 13 : 11)) {
       throw new MovementError(`قيمة ${FIELD_LABELS[field]} غير صالحة: ${value}`);
     }
     return n;
   }
+  if (field === 'org_unit_id') {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 1) throw new MovementError(`قيمة ${FIELD_LABELS[field]} غير صالحة: ${value}`);
+    return n;
+  }
+  if (field === 'free_transport') {
+    if (value === true || value === 'true' || value === 'نعم' || value === 1 || value === '1') return true as any;
+    if (value === false || value === 'false' || value === 'لا' || value === 0 || value === '0') return false as any;
+    throw new MovementError(`قيمة ${FIELD_LABELS[field]} غير صالحة: ${value}`);
+  }
   return String(value).trim();
+}
+
+/** يقارن قيمة عمود الموظف بالقيمة الجديدة بعد التطبيع (للتعرّف على تغيير حقل رواتب). */
+export function payFieldsChanged(current: any, patch: Record<string, any>): TrackedField[] {
+  const changed: TrackedField[] = [];
+  for (const f of PAY_FIELDS) {
+    const col = TRACKED_FIELDS[f];
+    if (!Object.prototype.hasOwnProperty.call(patch, col)) continue;
+    const a = current?.[col], b = patch[col];
+    const norm = (v: any) => (v === null || v === undefined || (typeof v === 'string' && v.trim() === '') ? null : String(v).trim());
+    // أول إدخال لحقل فارغ = إكمال بيانات لا تغيير (يُسجَّل «تعديل مباشر» ويظهر بتقرير المراجعة)
+    if (norm(a) === null) continue;
+    if (norm(a) !== norm(b)) changed.push(f);
+  }
+  return changed;
+}
+
+/**
+ * B8a0: قيم الحقول لعدة موظفين بيوم معيّن «كما كانت معروفة» بلحظة knownAt (افتراضياً الآن).
+ * - صف مُستبدل بتصحيح سُجّل قبل knownAt لا يُحتسب؛ وبعده يُحتسب (ما كان معروفاً وقتها).
+ * - أمر أُلغي بأمر أُنشئ قبل knownAt يُسقط صفوفه.
+ * - صفوف الأساس «تقديري» تُعامل معروفة منذ الأزل (تُنشأ متأخرة عند أول حركة).
+ * - حقل بلا صفوف ⇒ قيمة عمود الموظف الحالية (أساس افتراضي)، ويُعلَّم virtual.
+ */
+export async function fieldsAsOf(db: any, opts: { employeeIds: number[]; fields: TrackedField[]; day: string; knownAt?: Date | string | null }) {
+  const { employeeIds, fields, day } = opts;
+  const out = new Map<number, Map<TrackedField, { value: any; validFrom: string | null; source: string; virtual?: boolean; rowId?: number }>>();
+  if (employeeIds.length === 0 || fields.length === 0) return out;
+  if (!isIsoDate(day)) throw new MovementError('اليوم بصيغة YYYY-MM-DD');
+  const knownAt = opts.knownAt ? new Date(opts.knownAt as any).toISOString() : new Date().toISOString();
+  const res = await db.execute(sql`
+    WITH known AS (
+      SELECT h.* FROM employee_field_history h
+      WHERE h.employee_id = ANY(${sql.raw(`ARRAY[${employeeIds.map(Number).filter(Number.isInteger).join(',')}]::int[]`)})
+        AND h.field = ANY(${sql.raw(`ARRAY[${fields.filter(isTrackedField).map(f => `'${f}'`).join(',')}]::text[]`)})
+        AND (h.recorded_at <= ${knownAt}::timestamptz OR h.source = 'تقديري')
+    ), live AS (
+      SELECT k.* FROM known k
+      WHERE NOT EXISTS (SELECT 1 FROM known c WHERE c.supersedes_id = k.id)
+        AND NOT EXISTS (SELECT 1 FROM administrative_orders o
+                        WHERE o.cancels_order_id = k.order_id AND o.created_at <= ${knownAt}::timestamptz)
+    )
+    SELECT DISTINCT ON (employee_id, field) employee_id, field, value, valid_from::text AS valid_from, source, id
+    FROM live
+    WHERE valid_from IS NULL OR valid_from <= ${day}::date
+    ORDER BY employee_id, field, valid_from DESC NULLS LAST, recorded_at DESC, id DESC`);
+  const rows: any[] = (res as any).rows ?? res;
+  for (const r of rows) {
+    const id = Number(r.employee_id);
+    if (!out.has(id)) out.set(id, new Map());
+    out.get(id)!.set(r.field, { value: r.value, validFrom: r.valid_from, source: r.source, rowId: Number(r.id) });
+  }
+  // الحقول بلا أي صف: القيمة الحالية بالعمود أساساً افتراضياً
+  const missing = employeeIds.filter(id => fields.some(f => !out.get(id)?.has(f)));
+  if (missing.length > 0) {
+    const idsSql = sql.raw(`ARRAY[${missing.map(Number).join(',')}]::int[]`);
+    const emps = await db.execute(sql`SELECT * FROM employees WHERE id = ANY(${idsSql})`);
+    // (موظف، حقل) عنده صفوف بس كلها بعد اليوم ⇒ ما كان سارياً، فلا أساس افتراضي
+    const hasRows = await db.execute(sql`SELECT DISTINCT employee_id, field FROM employee_field_history WHERE employee_id = ANY(${idsSql})`);
+    const withRows = new Set((((hasRows as any).rows ?? hasRows) as any[]).map(r => `${r.employee_id}|${r.field}`));
+    for (const e of ((emps as any).rows ?? emps) as any[]) {
+      const id = Number(e.id);
+      if (!out.has(id)) out.set(id, new Map());
+      const m = out.get(id)!;
+      for (const f of fields) {
+        if (m.has(f) || withRows.has(`${id}|${f}`)) continue;
+        m.set(f, { value: e[f] ?? null, validFrom: null, source: 'تقديري', virtual: true });
+      }
+    }
+  }
+  return out;
 }
 
 /** تاريخ معروف لبداية القيمة الحالية (ق-4)؛ بدونه null — ما نخترع تاريخاً. */

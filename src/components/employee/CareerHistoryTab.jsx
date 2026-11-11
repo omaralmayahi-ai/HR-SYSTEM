@@ -25,13 +25,17 @@ export default function CareerHistoryTab({ employeeId }) {
   const handleSave = async () => {
     await apiClient.entities.CareerHistory.create({ ...form, employee_id: employeeId });
     if (form.to_grade || form.to_step) {
-      const update = {};
-      if (form.to_grade) update.grade = parseInt(form.to_grade);
-      if (form.to_step) update.step = parseInt(form.to_step);
-      if (form.movement_date) update.grade_date = form.movement_date;
-      if (form.new_job_title) update.job_title = form.new_job_title;
-      if (form.to_department) update.department = form.to_department;
-      await apiClient.entities.Employee.update(employeeId, update);
+      // B8a0: الدرجة والمرحلة تتغير بحركة مؤرخة على السجل الوظيفي (لا تعديل مباشر لصف الموظف)
+      const changes = {};
+      if (form.to_grade) changes.grade = parseInt(form.to_grade);
+      if (form.to_step) changes.step = parseInt(form.to_step);
+      if (form.new_job_title) changes.job_title = form.new_job_title;
+      if (form.to_department) changes.department = form.to_department;
+      await apiClient.careerHistory.recordMovement(employeeId, {
+        effective_date: form.movement_date || new Date().toISOString().slice(0, 10),
+        changes,
+        reason: form.order_number ? `أمر ${form.order_number}` : 'حركة من سجل الخدمة',
+      });
     }
     toast({ title: 'تمت إضافة الحركة الوظيفية' });
     setShowForm(false);
