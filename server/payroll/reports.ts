@@ -4,7 +4,7 @@
 import { sql } from 'drizzle-orm';
 import * as XLSX from 'xlsx';
 import { PayrollError } from './catalog.ts';
-import { money, toDecimal, sum } from './money.ts';
+import { money, toDecimal, sum, roundDinar, applyRate, rate } from './money.ts';
 
 const rows = (r: any) => ((r as any).rows ?? r) as any[];
 const num = (v: any) => (v === null || v === undefined ? 0 : Number(v));
@@ -38,6 +38,7 @@ export async function reviewReport(db: any, periodId: number, threshold = 10) {
   }
   const who = (r: any) => ({ employee_id: Number(r.employee_id), name: r.snapshot?.full_name, company_number: r.snapshot?.company_number, department: r.snapshot?.department });
 
+  const statesUsed: any[] = [], deferred: any[] = [];
   const netChanges: any[] = [], negatives: any[] = [], capped: any[] = [], unverifiedGrade: any[] = [], withheldGeneral: any[] = [], newEmployees: any[] = [];
   const issuesByCode: Record<string, any[]> = {};
   for (const r of results) {
@@ -47,6 +48,8 @@ export async function reviewReport(db: any, periodId: number, threshold = 10) {
     if (r.flags?.cap_reached) capped.push(who(r));
     if (r.flags?.unverified_grade) unverifiedGrade.push({ ...who(r), grade: r.snapshot?.grade });
     if (r.flags?.general_withheld?.length) withheldGeneral.push({ ...who(r), items: r.flags.general_withheld });
+    if (r.flags?.states?.length) statesUsed.push({ ...who(r), states: r.flags.states, unverified: !!r.flags.unverified_state });
+    if (r.flags?.deferred?.length) deferred.push({ ...who(r), deferred: r.flags.deferred });
     const before = prevNet.get(Number(r.employee_id));
     if (prev && before === undefined) newEmployees.push({ ...who(r), net: r.net });
     if (before !== undefined) {
@@ -88,6 +91,7 @@ export async function reviewReport(db: any, periodId: number, threshold = 10) {
       net_changes: netChanges.sort((a, b) => b.change_pct - a.change_pct),
       negative_net: negatives, cap_reached: capped, item_beneficiary_changes: itemChanges,
       issues: issuesByCode, unverified_grades: unverifiedGrade, general_withheld: withheldGeneral,
+      entitlement_states: statesUsed, unverified_states: statesUsed.filter(x => x.unverified), deferred_deductions: deferred,
       new_employees: newEmployees, leavers, user_role_changes: userChanges, unverified_items: unverifiedItems,
     },
     blocking: unverifiedItems.length ? ['بنود فعّالة بقيم «يُتحقق»'] : [],
@@ -95,7 +99,8 @@ export async function reviewReport(db: any, periodId: number, threshold = 10) {
 }
 
 // ---------------- الكشوف ----------------
-export const STATEMENTS = { full: 'الكشف الكامل', variances: 'كشف المتغيرات', item: 'كشف البند', exceptions: 'تقرير الاستثناءات' } as const;
+export const STATEMENTS = { full: 'الكشف الكامل', variances: 'كشف المتغيرات', item: 'كشف البند', exceptions: 'تقرير الاستثناءات',
+  retirement: 'كشف التوقيفات التقاعدية', deductions: 'كشوف الاستقطاعات للجهات' } as const;
 export type StatementKind = keyof typeof STATEMENTS;
 
 const catName = (period: any, run: any) => run.totals?.category_name ?? period.category_name;
@@ -192,6 +197,41 @@ export async function statementData(db: any, periodId: number, kind: StatementKi
       for (const i of r.issues || []) if (i.code !== 'NOT_IN_PERIOD') body.push([...idCols(r), `تنبيه ${i.code}`, i.itemCode ?? '', '', i.message]);
     }
     sheets.push({ name: 'الاستثناءات', rows: [...header(period, run, STATEMENTS.exceptions), [...idHead, 'النوع', 'البند', 'المبلغ', 'التفصيل'], ...body] });
+  } else if (kind === 'retirement') {
+    // الوعاء وحصة الموظف من سطر التقاعد المجمّد؛ حصة الشركة بنسبة employer_rate بنسخة البند (ق-15 — فارغة حتى الكتاب)
+    const ret = lines.filter(l => l.item_code === 'RETIRE');
+    const vids = [...new Set(rows(await db.execute(sql`SELECT DISTINCT item_version_id FROM payroll_lines WHERE run_id = ${run.id} AND item_code = 'RETIRE'`)).map(r => r.item_version_id).filter(Boolean))];
+    const vprops = vids.length ? rows(await db.execute(sql`SELECT id, props FROM pay_item_versions WHERE id = ANY(${sql.raw(`ARRAY[${vids.map(Number).join(',')}]::int[]`)})`)) : [];
+    const employerRate = vprops.map(v => v.props?.employer_rate).find(x => x !== undefined && x !== null);
+    const body: any[][] = [];
+    let tb = 0n, te = 0n, tc = 0n;
+    for (const r of results.filter(x => x.computed)) {
+      const l = ret.find(x => Number(x.employee_id) === Number(r.employee_id));
+      if (!l) continue;
+      const base = money(l.explain?.base ?? '0'), emp = money(l.amount);
+      const er = employerRate !== undefined ? roundDinar(applyRate(base, rate(employerRate))) : null;
+      tb += base; te += emp; if (er !== null) tc += er;
+      body.push([...idCols(r), Number(toDecimal(base)), Number(toDecimal(emp)), er === null ? '' : Number(toDecimal(er)), l.explain?.withheld ? 'محجوب جزئياً/كلياً' : '']);
+    }
+    sheets.push({ name: 'التوقيفات التقاعدية', rows: [...header(period, run, STATEMENTS.retirement), ...(employerRate === undefined ? [['حصة الشركة فارغة: نسبتها بانتظار الكتاب (ق-15)']] : []),
+      [...idHead, 'الوعاء', 'حصة الموظف', 'حصة الشركة', 'ملاحظة'], ...body, ['المجموع', '', '', '', '', Number(toDecimal(tb)), Number(toDecimal(te)), employerRate === undefined ? '' : Number(toDecimal(tc)), '']] });
+  } else if (kind === 'deductions') {
+    // لكل بند استقطاع له جهة مستفيدة: ورقة بالمستقطع لكل موظف (الاسم المجمّد بالسطر، والجهة من البند)
+    const ben = new Map(rows(await db.execute(sql`SELECT code, beneficiary FROM pay_items WHERE beneficiary IS NOT NULL AND beneficiary <> ''`)).map(r => [r.code, r.beneficiary]));
+    const byCode = new Map<string, Map<number, bigint>>();
+    for (const l of lines) {
+      if (l.direction !== '-' || l.item_code === 'RETIRE' || !ben.has(l.item_code)) continue;
+      const m = byCode.get(l.item_code) || byCode.set(l.item_code, new Map()).get(l.item_code)!;
+      m.set(Number(l.employee_id), (m.get(Number(l.employee_id)) ?? 0n) + money(l.amount));
+    }
+    const resById = new Map(results.map(r => [Number(r.employee_id), r]));
+    for (const [code, m] of byCode) {
+      const name = lines.find(l => l.item_code === code)?.item_name ?? code;
+      let total = 0n;
+      const body = [...m.entries()].filter(([, a]) => a !== 0n).map(([eid, a]) => { total += a; return [...idCols(resById.get(eid)), Number(toDecimal(a))]; });
+      sheets.push({ name: name.slice(0, 31), rows: [...header(period, run, STATEMENTS.deductions, `${name} — ${ben.get(code)}`), [...idHead, 'المستقطع'], ...body, ['المجموع', '', '', '', '', Number(toDecimal(total))]] });
+    }
+    if (!sheets.length) sheets.push({ name: 'لا يوجد', rows: [...header(period, run, STATEMENTS.deductions), ['ما في استقطاعات لجهات مستفيدة بهذا الاحتساب']] });
   } else {
     throw new PayrollError('نوع كشف غير معروف');
   }

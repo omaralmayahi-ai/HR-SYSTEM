@@ -18,7 +18,7 @@ const ym = (p) => `${p.year}/${String(p.month).padStart(2, '0')}`;
 const ISSUE_LABELS = {
   NO_GRADE: 'بلا درجة', NO_SCALE: 'بلا خانة بالسلّم', NO_LEVEL: 'بلا مستوى', EVAL_FAILED: 'تعذّر تقييم شرط',
   FAMILY_MODE_MISSING: 'نمط العائلية غير محدد', DAUGHTER_FACTS_MISSING: 'حقائق البنت ناقصة', OVERRIDE_IGNORED: 'إسناد فردي لا يسري',
-  NO_CAP_PRIORITY: 'بلا أولوية تخفيض', NOT_IN_PERIOD: 'غير مشمول بالفترة',
+  NO_CAP_PRIORITY: 'بلا أولوية تخفيض', NOT_IN_PERIOD: 'غير مشمول بالفترة', INSTALLMENT_INVALID: 'قسط بلا أصل', HELD_RELEASE_CAPPED: 'صرف محجوز أكبر من الرصيد',
 };
 
 export default function Payroll() {
@@ -220,6 +220,7 @@ function EmployeeLinesDialog({ periodId, employeeId, onClose }) {
             <div className="grid grid-cols-4 gap-2 text-center text-xs">
               {[['الاسمي', d.result.nominal], ['المخصصات', d.result.allowances], ['الاستقطاعات', d.result.deductions], ['الصافي', d.result.net]].map(([l, v]) => <div key={l} className="bg-slate-50 rounded-lg p-2"><div className="text-slate-500">{l}</div><div className="font-bold">{fmt(v)}</div></div>)}
             </div>
+            <div className="flex justify-end"><a className="text-xs text-[#1B3A6B] underline" href={`/payroll/payslip/${periodId}/${employeeId}`} target="_blank" rel="noreferrer">قسيمة للطباعة</a></div>
             <LinesTable lines={d.lines} />
             {d.result.issues?.length > 0 && <div className="text-xs bg-amber-50 rounded-lg p-2 space-y-1">{d.result.issues.map((i, k) => <div key={k}>⚠ {i.message}</div>)}</div>}
             {d.variances?.length > 0 && (
@@ -255,6 +256,9 @@ function ReviewTab({ period }) {
     ['موظفون جدد عن الشهر السابق', S.new_employees, x => `${who(x)}: ${fmt(x.net)}`],
     ['تغييرات المستخدمين والأدوار منذ الفترة السابقة', S.user_role_changes, x => `${String(x.at).slice(0, 16).replace('T', ' ')} ${x.action}: ${x.before_user ?? ''}${x.before_role ? `(${x.before_role})` : ''} ← ${x.after_user ?? ''}${x.after_role ? `(${x.after_role})` : ''} بواسطة ${x.actor ?? '—'}`],
     ['بنود فعّالة بقيم «يُتحقق» (تمنع الاعتماد)', S.unverified_items, x => `${x.code} ${x.name}`],
+    ['حالات استحقاق بقيم «يُتحقق» مستعملة', S.unverified_states, x => `${who(x)}: ${x.states.join('، ')}`],
+    ['حالات الاستحقاق (إجازات، سحب يد، عقوبات)', S.entitlement_states, x => `${who(x)}: ${x.states.join('، ')}`],
+    ['استقطاعات مؤجلة لحماية الصافي', S.deferred_deductions, x => `${who(x)}: ${x.deferred.map(d => `${d.item} ${fmt(d.amount)}`).join('، ')}`],
   ];
   return (
     <div className="bg-white rounded-2xl border border-slate-100 p-4 space-y-3">
@@ -291,6 +295,8 @@ function StatementsTab({ period }) {
         <Button size="sm" variant="outline" onClick={() => dl('full')}><FileSpreadsheet className="w-4 h-4 ml-1" />الكشف الكامل</Button>
         <Button size="sm" variant="outline" onClick={() => dl('variances')}><FileSpreadsheet className="w-4 h-4 ml-1" />كشف المتغيرات</Button>
         <Button size="sm" variant="outline" onClick={() => dl('exceptions')}><FileSpreadsheet className="w-4 h-4 ml-1" />تقرير الاستثناءات</Button>
+        <Button size="sm" variant="outline" onClick={() => dl('retirement')}><FileSpreadsheet className="w-4 h-4 ml-1" />كشف التوقيفات التقاعدية</Button>
+        <Button size="sm" variant="outline" onClick={() => dl('deductions')}><FileSpreadsheet className="w-4 h-4 ml-1" />كشوف الاستقطاعات للجهات</Button>
       </div>
       <div className="flex gap-2 items-center">
         <select value={item} onChange={e => setItem(e.target.value)} className="h-9 rounded-lg border border-slate-200 px-2 text-sm">{items.map(i => <option key={i.id} value={i.code}>{i.code} — {i.name}</option>)}</select>

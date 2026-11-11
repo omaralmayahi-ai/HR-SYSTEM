@@ -5,7 +5,7 @@ import { applyMovement, isIsoDate, todayBaghdad } from '../careerMovements.ts';
 import { unapproveInTx } from './periods.ts';
 import { PayrollError, validateProps, activationProblems, ensureOrder, supersedeAndInsert } from './catalog.ts';
 
-export const OP_TYPES = ['item_version', 'assignment', 'assignment_end', 'family_member', 'family_fact', 'family_mode', 'family_extension', 'period_unapprove'] as const;
+export const OP_TYPES = ['item_version', 'assignment', 'assignment_end', 'family_member', 'family_fact', 'family_mode', 'family_extension', 'period_unapprove', 'entitlement_state', 'state_mapping'] as const;
 export type OpType = typeof OP_TYPES[number];
 
 const MULTI_METHODS = new Set(['installments', 'manual']);
@@ -44,6 +44,17 @@ async function baseToken(db: any, schema: any, op: OpType, p: any): Promise<stri
     if (p.multi_allowed) return null; // الأقساط والأوامر اليدوية تتعدد؛ ما تتعارض ببعضها
     const r = rows(await db.execute(sql`SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') t FROM employee_pay_assignments
       WHERE employee_id = ${Number(p.employee_id)} AND item_id = ${Number(p.item_id)} AND superseded_at IS NULL AND NOT multi_allowed`));
+    return r[0]?.t ?? '';
+  }
+  if (op === 'entitlement_state') {
+    if (!p.id) return 'new';
+    const r = rows(await db.execute(sql`SELECT updated_at::text t FROM entitlement_states WHERE id = ${Number(p.id)}`));
+    return r[0]?.t ?? '';
+  }
+  if (op === 'state_mapping') {
+    const r = rows(await db.execute(p.table === 'leave_types'
+      ? sql`SELECT coalesce(entitlement_state_id::text, '') t FROM leave_types WHERE id = ${Number(p.id)}`
+      : sql`SELECT coalesce(entitlement_state_id::text, '') t FROM employee_statuses WHERE id = ${Number(p.id)}`));
     return r[0]?.t ?? '';
   }
   if (op === 'period_unapprove') {
@@ -179,6 +190,63 @@ export async function prepare(db: any, schema: any, op: OpType, raw: any): Promi
       p.employee_id = m.employeeId;
       return { payload: p, summary: `تمديد ${m.name || m.relation} من ${p.valid_from} إلى ${p.valid_to}`, employeeId: m.employeeId, itemId: null, warnings };
     }
+    case 'entitlement_state': {
+      // حالات الاستحقاق تمس الرواتب: كل إضافة أو تعديل بمُعتمِد ثانٍ (مب9)
+      const f = p.fields || {};
+      const out: any = {};
+      const pct = (k: string) => { const n = Number(f[k]); if (!Number.isFinite(n) || n < 0 || n > 100) throw new PayrollError(`${k}: نسبة بين 0 و100`); return n; };
+      if (f.name !== undefined) { out.name = String(f.name).trim(); if (!out.name) throw new PayrollError('اسم الحالة مطلوب'); }
+      if (f.nominal_pct !== undefined) out.nominal_pct = pct('nominal_pct');
+      if (f.held_pct !== undefined) out.held_pct = pct('held_pct');
+      if (f.default_behavior !== undefined) { if (!['يتبع', 'كامل', 'يتوقف', 'الثابتة فقط'].includes(f.default_behavior)) throw new PayrollError('السلوك: يتبع / كامل / يتوقف / الثابتة فقط'); out.default_behavior = f.default_behavior; }
+      if (f.item_behaviors !== undefined) {
+        if (!f.item_behaviors || typeof f.item_behaviors !== 'object' || Array.isArray(f.item_behaviors)) throw new PayrollError('سلوك البنود: رمز البند ← السلوك');
+        for (const v of Object.values(f.item_behaviors)) if (!['يتبع', 'كامل', 'يتوقف', 'الثابتة فقط'].includes(String(v))) throw new PayrollError(`سلوك غير معروف: ${v}`);
+        const codes = new Set(rows(await db.execute(sql`SELECT code FROM pay_items`)).map((r: any) => r.code));
+        const unknown = Object.keys(f.item_behaviors).filter(k => !codes.has(k));
+        if (unknown.length) throw new PayrollError(`رموز بنود غير موجودة: ${unknown.join('، ')}`);
+        out.item_behaviors = f.item_behaviors;
+      }
+      if (f.retirement !== undefined) { if (!['على المستحق', 'لا تُستوفى'].includes(f.retirement)) throw new PayrollError('التقاعد: على المستحق / لا تُستوفى'); out.retirement = f.retirement; }
+      if (f.precedence !== undefined) { out.precedence = Number(f.precedence); if (!Number.isInteger(out.precedence) || out.precedence < 0) throw new PayrollError('الأسبقية رقم صحيح موجب'); }
+      if (f.verification !== undefined) { if (!['مؤكد', 'يُتحقق'].includes(f.verification)) throw new PayrollError('التحقق: مؤكد / يُتحقق'); out.verification = f.verification; }
+      if (f.legal_basis !== undefined) out.legal_basis = String(f.legal_basis ?? '').trim() || null;
+      if (f.is_active !== undefined) out.is_active = !!f.is_active;
+      // «مؤكد» يحتاج سنداً بعد التعديل (سواء غُيّر التحقق أو مُسح السند)
+      const curRow = p.id ? (await db.select().from(schema.entitlementStates).where(eq(schema.entitlementStates.id, Number(p.id))))[0] : null;
+      const finalVerification = out.verification ?? curRow?.verification ?? 'يُتحقق';
+      const finalBasis = 'legal_basis' in out ? out.legal_basis : curRow?.legalBasis;
+      if (finalVerification === 'مؤكد' && !finalBasis) throw new PayrollError('«مؤكد» يحتاج سنداً قانونياً');
+      if (p.id && out.is_active === false && curRow?.isActive) {
+        const [m] = rows(await db.execute(sql`SELECT (SELECT count(*) FROM leave_types WHERE entitlement_state_id = ${Number(p.id)}) + (SELECT count(*) FROM employee_statuses WHERE entitlement_state_id = ${Number(p.id)}) n`));
+        if (Number(m?.n) > 0) warnings.push(`إيقاف الحالة يجعل ${m.n} نوع إجازة/حالة موظف مربوطة بها تُصرف كدوام كامل`);
+      }
+      let label = out.name;
+      if (p.id) {
+        const [cur] = await db.select().from(schema.entitlementStates).where(eq(schema.entitlementStates.id, Number(p.id)));
+        if (!cur) throw new PayrollError('الحالة غير موجودة', 404);
+        label = cur.name;
+        const np = out.nominal_pct ?? Number(cur.nominalPct), hp = out.held_pct ?? Number(cur.heldPct);
+        if (np + hp > 100) throw new PayrollError('نسبة الاسمي + المحجوز أكثر من 100');
+      } else {
+        out.code = String(f.code ?? '').trim().toUpperCase();
+        if (!/^[A-Z][A-Z0-9_]{1,30}$/.test(out.code)) throw new PayrollError('رمز الحالة بحروف لاتينية كبيرة');
+        if (out.name === undefined || out.nominal_pct === undefined) throw new PayrollError('الاسم ونسبة الاسمي مطلوبة');
+        if (out.nominal_pct + (out.held_pct ?? 0) > 100) throw new PayrollError('نسبة الاسمي + المحجوز أكثر من 100');
+      }
+      return { payload: { id: p.id ? Number(p.id) : null, fields: out }, summary: `${p.id ? 'تعديل' : 'إضافة'} حالة استحقاق «${label}»: ${JSON.stringify(out)}`, employeeId: null, itemId: null, warnings };
+    }
+    case 'state_mapping': {
+      if (!['leave_types', 'employee_statuses'].includes(p.table)) throw new PayrollError('الربط لأنواع الإجازات أو حالات الموظف');
+      const id = Number(p.id), sid = p.state_id === null || p.state_id === '' || p.state_id === undefined ? null : Number(p.state_id);
+      const t = p.table === 'leave_types' ? schema.leaveTypes : schema.employeeStatuses;
+      const [row] = await db.select().from(t).where(eq(t.id, id));
+      if (!row) throw new PayrollError('السجل غير موجود', 404);
+      let sname = 'بلا حالة (دوام)';
+      if (sid !== null) { const [st] = await db.select().from(schema.entitlementStates).where(eq(schema.entitlementStates.id, sid)); if (!st) throw new PayrollError('حالة الاستحقاق غير موجودة', 404); sname = st.name; }
+      if (p.table === 'employee_statuses' && sid !== null && !row.payrollEligible) warnings.push(`حالة «${row.name}» غير مشمولة بالصرف؛ الربط ما يأثر حتى تُشمل`);
+      return { payload: { table: p.table, id, state_id: sid }, summary: `ربط ${p.table === 'leave_types' ? 'نوع الإجازة' : 'حالة الموظف'} «${row.name}» بـ «${sname}»`, employeeId: null, itemId: null, warnings };
+    }
     case 'period_unapprove': {
       const [per] = await db.select().from(schema.payrollPeriods).where(eq(schema.payrollPeriods.id, Number(p.period_id)));
       if (!per) throw new PayrollError('الفترة غير موجودة', 404);
@@ -296,6 +364,26 @@ async function applyOp(tx: any, schema: any, op: OpType, p: any, enteredBy: stri
       const order = await ensureOrder(tx, schema, p.order, approver);
       const [x] = await tx.insert(schema.familyExtensions).values({ memberId: Number(p.member_id), validFrom: p.valid_from, validTo: p.valid_to, orderId: order?.id ?? null, reason: p.reason ?? null, recordedBy: enteredBy }).returning();
       return { extension_id: x.id };
+    }
+    case 'entitlement_state': {
+      const f = p.fields;
+      const set: any = {};
+      const map: Record<string, string> = { name: 'name', nominal_pct: 'nominalPct', held_pct: 'heldPct', default_behavior: 'defaultBehavior', item_behaviors: 'itemBehaviors',
+        retirement: 'retirement', precedence: 'precedence', verification: 'verification', legal_basis: 'legalBasis', is_active: 'isActive', code: 'code' };
+      for (const [k, v] of Object.entries(f)) set[map[k]] = typeof v === 'number' && ['nominal_pct', 'held_pct'].includes(k) ? String(v) : v;
+      await tx.execute(sql`SELECT set_config('hr.user', ${approver}, true)`);
+      if (p.id) {
+        const [r] = await tx.update(schema.entitlementStates).set({ ...set, updatedAt: new Date() }).where(eq(schema.entitlementStates.id, p.id)).returning();
+        return { state_id: r.id };
+      }
+      const [r] = await tx.insert(schema.entitlementStates).values(set).returning();
+      return { state_id: r.id };
+    }
+    case 'state_mapping': {
+      const t = p.table === 'leave_types' ? schema.leaveTypes : schema.employeeStatuses;
+      await tx.update(t).set({ entitlementStateId: p.state_id }).where(eq(t.id, p.id));
+      await tx.insert(schema.payrollAudit).values({ actor: approver, action: 'ربط حالة استحقاق', entity: p.table, entityId: String(p.id), after: { entitlement_state_id: p.state_id, entered_by: enteredBy } });
+      return { mapped: true };
     }
     case 'period_unapprove':
       return unapproveInTx(tx, schema, Number(p.period_id), p.reason, enteredBy, approver);

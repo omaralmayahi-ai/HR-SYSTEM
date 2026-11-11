@@ -25,7 +25,7 @@ export function canon(v: any): any {
   return v;
 }
 /** يتغير مع أي تعديل على منطق المحرك أو المحمّل يغيّر النتائج: اعتماد بعد نشر نسخة أخرى يُرفض. */
-export const ENGINE_VERSION = 'b8a3.1';
+export const ENGINE_VERSION = 'b8b.1';
 /** بصمة المدخلات = SHA-256 لمدخلات المحرك نفسها + نسخة المحرك (س11.1، 3.8). */
 export function fingerprintOf(ctx: any, employees: any[]): string {
   const h = createHash('sha256');
@@ -88,7 +88,7 @@ export async function openPeriod(db: any, schema: any, o: { categoryId: number; 
 async function loadForPeriod(tx: any, period: any, eligibleStatuses: string[]) {
   // لحظة المعرفة = بداية المعاملة بساعة القاعدة (نفس ساعة recorded_at)
   const knownAt = new Date(rows(await tx.execute(sql`SELECT now() AS now`))[0].now);
-  const input = await loadPeriodInputs(tx, { year: period.year, month: period.month, categoryId: period.categoryId, eligibleStatuses, knownAt, sequential: true });
+  const input = await loadPeriodInputs(tx, { year: period.year, month: period.month, categoryId: period.categoryId, eligibleStatuses, knownAt, sequential: true, periodId: period.id });
   return { ...input, fingerprint: fingerprintOf(input.ctx, input.employees) };
 }
 

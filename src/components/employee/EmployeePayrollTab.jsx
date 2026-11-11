@@ -166,6 +166,8 @@ function SalaryPreview({ employeeId }) {
   const [hist, setHist] = useState([]);
   const [error, setError] = useState('');
   useEffect(() => { apiClient.payroll.employeeHistory(employeeId).then(setHist).catch(() => {}); }, [employeeId]);
+  const [bal, setBal] = useState(null);
+  useEffect(() => { apiClient.payroll.employeeBalances(employeeId).then(setBal).catch(() => {}); }, [employeeId]);
   useEffect(() => { setError(''); apiClient.payroll.preview(employeeId, ym.year, ym.month).then(setP).catch(e => { setP(null); setError(e.message); }); }, [employeeId, ym.year, ym.month]);
   const n = (v) => (v === null || v === undefined ? '—' : Number(v).toLocaleString('ar-IQ', { maximumFractionDigits: 3 }));
   return (
@@ -193,11 +195,19 @@ function SalaryPreview({ employeeId }) {
           )}
         </>
       )}
+      {bal && (bal.installments.length > 0 || Number(bal.held) > 0 || Number(bal.debit) > 0) && (
+        <div className="text-xs bg-slate-50 rounded-lg p-2 space-y-1">
+          <div className="font-bold">الأرصدة (من الفترات المعتمدة)</div>
+          {Number(bal.held) > 0 && <div>المحجوز: {n(bal.held)}</div>}
+          {Number(bal.debit) > 0 && <div>رصيد مدين مرحّل: {n(bal.debit)}</div>}
+          {bal.installments.map(x => <div key={x.assignment_id}>{x.name}: الأصل {n(x.principal)} · المسدد {n(x.paid)} · الباقي {n(x.remaining)}</div>)}
+        </div>
+      )}
       {hist.length > 0 && (
         <div>
           <div className="text-xs font-bold mb-1">الرواتب المعتمدة</div>
           <table className="w-full text-xs"><thead><tr className="text-slate-500 border-b">{['الفترة', 'الفئة', 'الحالة', 'الاسمي', 'المخصصات', 'الاستقطاعات', 'الصافي'].map(h => <th key={h} className="p-1.5 text-right font-medium">{h}</th>)}</tr></thead>
-            <tbody>{hist.map(h => <tr key={h.period_id} className="border-b"><td className="p-1.5">{h.year}/{h.month}</td><td className="p-1.5">{h.category}</td><td className="p-1.5">{h.status}</td><td className="p-1.5">{n(h.nominal)}</td><td className="p-1.5">{n(h.allowances)}</td><td className="p-1.5">{n(h.deductions)}</td><td className="p-1.5 font-bold">{n(h.net)}</td></tr>)}</tbody></table>
+            <tbody>{hist.map(h => <tr key={h.period_id} className="border-b"><td className="p-1.5"><a className="underline" href={`/payroll/payslip/${h.period_id}/${employeeId}`} target="_blank" rel="noreferrer">{h.year}/{h.month}</a></td><td className="p-1.5">{h.category}</td><td className="p-1.5">{h.status}</td><td className="p-1.5">{n(h.nominal)}</td><td className="p-1.5">{n(h.allowances)}</td><td className="p-1.5">{n(h.deductions)}</td><td className="p-1.5 font-bold">{n(h.net)}</td></tr>)}</tbody></table>
         </div>
       )}
     </div>

@@ -32,6 +32,7 @@ const OrgChart = lazy(() => import('@/pages/OrgChart'));
 const SystemSettings = lazy(() => import('@/pages/SystemSettings'));
 const PayrollItems = lazy(() => import('@/pages/PayrollItems'));
 const Payroll = lazy(() => import('@/pages/Payroll'));
+const Payslip = lazy(() => import('@/pages/Payslip'));
 const ServiceManagement = lazy(() => import('@/pages/ServiceManagement'));
 const PromotionsDue = lazy(() => import('@/pages/PromotionsDue'));
 const AdministrativeOrders = lazy(() => import('@/pages/AdministrativeOrders'));
@@ -90,6 +91,7 @@ const AuthenticatedApp = () => {
           <Route path="/promotions-due" element={<PromotionsDue />} />
           <Route path="/administrative-orders" element={<AdministrativeOrders />} />
           <Route path="/payroll" element={<Payroll />} />
+          <Route path="/payroll/payslip/:periodId/:employeeId" element={<Payslip />} />
           <Route path="/payroll/items" element={<PayrollItems />} />
           <Route path="/salaries" element={<Salaries />} />
           <Route path="/leaves" element={<Leaves />} />

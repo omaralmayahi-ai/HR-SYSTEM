@@ -6,7 +6,8 @@ import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Coins, Clock3, ShieldCheck, Plus, Trash2, CheckCircle2, XCircle } from 'lucide-react';
+import { Coins, Clock3, ShieldCheck, Plus, Trash2, CheckCircle2, XCircle, CalendarClock } from 'lucide-react';
+import EntitlementStates from '@/components/payroll/EntitlementStates';
 
 const statusStyle = { 'مسودة': 'bg-amber-100 text-amber-800', 'فعّال': 'bg-emerald-100 text-emerald-800', 'موقوف': 'bg-slate-200 text-slate-600', 'منتهٍ': 'bg-slate-200 text-slate-500' };
 const fmtDate = (d) => (d ? String(d).slice(0, 10) : '—');
@@ -51,7 +52,7 @@ export default function PayrollItems() {
         <h1 className="text-lg font-bold text-[#1B3A6B] flex items-center gap-2"><Coins className="w-5 h-5" /> بنود الرواتب</h1>
         <p className="text-xs text-slate-500 mt-1">كل بند بنسخ مؤرخة بسندها وحالة تحققها. تعديل مسودة بند ما فُعّل يُحفظ مباشرة؛ التفعيل وأي تغيير على بند فعّال، والإسنادات والعائلة، تنتظر اعتماد مدير غير اللي أدخلها.</p>
         <div className="flex gap-2 mt-4">
-          {[['items', 'البنود', Coins], ['pending', `بانتظار الاعتماد (${pending.length})`, Clock3], ['quality', 'جودة البيانات', ShieldCheck]].map(([k, l, I]) => (
+          {[['items', 'البنود', Coins], ['pending', `بانتظار الاعتماد (${pending.length})`, Clock3], ['states', 'حالات الاستحقاق', CalendarClock], ['quality', 'جودة البيانات', ShieldCheck]].map(([k, l, I]) => (
             <button key={k} onClick={() => setTab(k)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold ${tab === k ? 'bg-[#1B3A6B] text-white' : 'bg-slate-100 text-slate-600'}`}><I className="w-3.5 h-3.5" />{l}</button>
           ))}
         </div>
@@ -117,6 +118,8 @@ export default function PayrollItems() {
           <p className="text-[11px] text-slate-500 px-4 py-2 border-t border-slate-100">يعتمدها مدير غير اللي أدخلها. العملية تُطبّق عند الاعتماد فقط، وقبلها ما إلها أثر بالاحتساب.</p>
         </div>
       )}
+
+      {tab === 'states' && <EntitlementStates onSubmitted={load} />}
 
       {tab === 'quality' && (
         <div className="bg-white rounded-2xl border border-slate-100 p-4 space-y-2">

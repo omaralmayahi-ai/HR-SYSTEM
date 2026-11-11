@@ -345,6 +345,12 @@ export const apiClient = {
     periodResults: (id, params = {}) => request(`/api/payroll/periods/${id}/results?${new URLSearchParams(params)}`),
     periodEmployee: (id, employeeId) => request(`/api/payroll/periods/${id}/employees/${employeeId}`),
     employeeHistory: (employeeId) => request(`/api/payroll/employees/${employeeId}/history`),
+    // B8b: حالات الاستحقاق وربطها والأرصدة
+    states: () => request('/api/payroll/states'),
+    createState: (fields) => request('/api/payroll/states', { method: 'POST', body: JSON.stringify(fields) }),
+    updateState: (id, fields) => request(`/api/payroll/states/${id}`, { method: 'PUT', body: JSON.stringify(fields) }),
+    mapState: (data) => request('/api/payroll/state-mappings', { method: 'POST', body: JSON.stringify(data) }),
+    employeeBalances: (employeeId, asOfPeriod) => request(`/api/payroll/employees/${employeeId}/balances${asOfPeriod ? `?as_of_period=${asOfPeriod}` : ''}`),
     preview: (employeeId, year, month) => request(`/api/payroll/preview/${employeeId}?year=${year}&month=${month}`, { timeoutMs: 60000 }),
     downloadStatement: async (id, kind, item) => {
       const token = localStorage.getItem('hr_session_token');

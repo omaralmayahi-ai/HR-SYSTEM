@@ -845,6 +845,7 @@ export const leaveTypes = pgTable('leave_types', {
   affectsIncrement: boolean('affects_increment').default(false), // إيقاف / تأخير العلاوة السنوية
   affectsPromotion: boolean('affects_promotion').default(false), // إيقاف الترفيع واحتساب القدم
   affectsCommendations: boolean('affects_commendations').default(false), // توقف منح كتب الشكر والتقدير
+  entitlementStateId: integer('entitlement_state_id'), // B8b: حالة الاستحقاق لأيام هذه الإجازة (ق-17)
   salaryPaymentType: text('salary_payment_type').default('full'), // 'منح_الراتب_كامل', 'منح_الراتب_والمخصصات_الثابتة_فقط', 'بدون_راتب', 'استقطاع_جزئي'
   effectsOptions: text('effects_options'), // خيارات التأشير بصيغة JSON أو نصية
   description: text('description'), // وصف الإجازة أو الشروط
@@ -952,6 +953,7 @@ export const serviceTypes = pgTable('service_types', {
 export const employeeStatuses = pgTable('employee_statuses', {
   id: serial('id').primaryKey(),
   name: text('name').notNull().unique('employee_statuses_name_key'), // اسم حالة الموظف، يجب أن يكون فريداً
+  entitlementStateId: integer('entitlement_state_id'), // B8b: حالة استحقاق لأيام هذه الحالة (مثل سحب اليد)
   createdAt: timestamp('created_at').defaultNow(),
   // B4a (ق-14): المدير يحدد معنى كل حالة بدل القوائم الثابتة بالكود
   isActive: boolean('is_active').notNull().default(false), // يُحسب ضمن الموظفين الفعّالين
@@ -1645,3 +1647,22 @@ export const payrollVariances = pgTable('payroll_variances', {
   foreignKey({ name: 'payroll_variances_run_fkey', columns: [t.runId], foreignColumns: [payrollRuns.id] }).onDelete('restrict'),
   index('payroll_variances_run').on(t.runId, t.employeeId),
 ]);
+
+// B8b: حالات الاستحقاق (القسم 9) — نسبة الاسمي والمحجوز وسلوك البنود والتقاعد والأسبقية
+export const entitlementStates = pgTable('entitlement_states', {
+  id: serial('id').primaryKey(),
+  code: text('code').notNull().unique('entitlement_states_code_key'),
+  name: text('name').notNull(),
+  nominalPct: numeric('nominal_pct', { precision: 7, scale: 4 }).notNull(),
+  heldPct: numeric('held_pct', { precision: 7, scale: 4 }).notNull().default('0'),
+  defaultBehavior: text('default_behavior').notNull().default('يتبع'),
+  itemBehaviors: jsonb('item_behaviors').notNull().default({}),
+  retirement: text('retirement').notNull().default('على المستحق'),
+  precedence: integer('precedence').notNull().default(10),
+  verification: text('verification').notNull().default('يُتحقق'),
+  legalBasis: text('legal_basis'),
+  isActive: boolean('is_active').notNull().default(true),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
