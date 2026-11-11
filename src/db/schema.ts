@@ -10,6 +10,7 @@ export const users = pgTable('users', {
   email: text('email'),
   name: text('name'),
   role: text('role').default('user'),
+  employeeId: integer('employee_id'), // B8c: الموظف المرتبط بالمستخدم (ما يُدخل ولا يعتمد على سجله المالي — س15.3)
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -154,6 +155,7 @@ export const leaveRequests = pgTable('leave_requests', {
   orderNumber: text('order_number'), // رقم أمر الموافقة
   medicalAttachment: text('medical_attachment'), // المرفق الطبي
   createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(), // B8c: لكشف الأثر الرجعي
 }, (t) => [
   foreignKey({ name: 'leave_requests_leave_type_id_fkey', columns: [t.leaveTypeId], foreignColumns: [leaveTypes.id] }).onDelete('set null'),
 ]);
@@ -187,6 +189,7 @@ export const penalties = pgTable('penalties', {
   appealStatus: text('appeal_status').default('لا يوجد'), // حالة الاعتراض: لا يوجد / قيد الطعن / مرفوض الطعن / مقبول الطعن
   daysCount: integer('days_count'), // عدد أيام القطع (لعقوبة قطع الراتب: م8/ثالثاً)
   createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(), // B8c: لكشف الأثر الرجعي
   // B7: لقطة أشهر التأخير وقت فرض العقوبة (تعديل أنواع العقوبات لاحقاً ما يغيّر الماضي)
   delayMonths: integer('delay_months'),
   // B7 (ق-10): الإلغاء بأمر إداري
@@ -1388,6 +1391,7 @@ export const payrollCategories = pgTable('payroll_categories', {
   payBasis: text('pay_basis').notNull().default('شهري'), // شهري | يومي
   isActive: boolean('is_active').notNull().default(false),
   notes: text('notes'),
+  payrollSeq: integer('payroll_seq').notNull().default(0), // B8c: يُلمس بكل احتساب/اعتماد/إلغاء حتى تتسلسل عمليات الفئة (تعارض التسلسل يعيدها)
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -1415,6 +1419,7 @@ export const payItems = pgTable('pay_items', {
   categoryId: integer('category_id').notNull(),
   payrollCode: text('payroll_code'), // رمز كشف الرواتب للمطابقة
   beneficiary: text('beneficiary'),
+  accountCode: text('account_code'), // B8c: رقم الحساب بالدليل المحاسبي (الملخص المحاسبي)
   createdBy: text('created_by'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
@@ -1563,6 +1568,7 @@ export const payrollPeriods = pgTable('payroll_periods', {
   issuedBy: text('issued_by'),
   issuedAt: timestamp('issued_at', { withTimezone: true }),
   dispatchLetter: text('dispatch_letter'),
+  employeeIds: integer('employee_ids').array(), // B8c: موظفو الدورة الاستثنائية
   notes: text('notes'),
 }, (t) => [
   foreignKey({ name: 'payroll_periods_category_fkey', columns: [t.categoryId], foreignColumns: [payrollCategories.id] }).onDelete('restrict'),
@@ -1666,3 +1672,29 @@ export const entitlementStates = pgTable('entitlement_states', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+// B8c: الحساب المصرفي المؤرخ (إضافته أو تغييره بمُعتمِد ثانٍ — حالة 12)
+export const employeeBankAccounts = pgTable('employee_bank_accounts', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id').notNull(),
+  bankName: text('bank_name').notNull(),
+  accountNumber: text('account_number').notNull(),
+  validFrom: date('valid_from').notNull(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
+  supersededAt: timestamp('superseded_at', { withTimezone: true }),
+  enteredBy: text('entered_by').notNull(),
+  approvedBy: text('approved_by').notNull(),
+  note: text('note'),
+}, (t) => [index('employee_bank_accounts_emp').on(t.employeeId, t.validFrom)]);
+
+// B8c: رفض المصرف لصافي موظف بعد الإصدار — يرجع «مستحقاً غير مصروف» بالفترة التالية
+export const payrollBankRejections = pgTable('payroll_bank_rejections', {
+  id: serial('id').primaryKey(),
+  runId: integer('run_id').notNull(),
+  employeeId: integer('employee_id').notNull(),
+  amount: numeric('amount', { precision: 18, scale: 6 }).notNull(),
+  reason: text('reason').notNull(),
+  enteredBy: text('entered_by').notNull(),
+  approvedBy: text('approved_by').notNull(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex('payroll_bank_rejections_run_emp').on(t.runId, t.employeeId)]);

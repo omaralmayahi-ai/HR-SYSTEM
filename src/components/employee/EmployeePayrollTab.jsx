@@ -55,6 +55,7 @@ export default function EmployeePayrollTab({ employeeId }) {
   return (
     <div className="space-y-4" dir="rtl">
       <SalaryPreview employeeId={employeeId} />
+      <BankAccounts employeeId={employeeId} />
       {(family?.pending?.length > 0) && (
         <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs text-sky-800 flex items-center gap-2"><Clock3 className="w-4 h-4" /> {family.pending.length} عملية عائلة بانتظار الاعتماد: {family.pending.map(p => p.summary).join(' · ')}</div>
       )}
@@ -210,6 +211,39 @@ function SalaryPreview({ employeeId }) {
             <tbody>{hist.map(h => <tr key={h.period_id} className="border-b"><td className="p-1.5"><a className="underline" href={`/payroll/payslip/${h.period_id}/${employeeId}`} target="_blank" rel="noreferrer">{h.year}/{h.month}</a></td><td className="p-1.5">{h.category}</td><td className="p-1.5">{h.status}</td><td className="p-1.5">{n(h.nominal)}</td><td className="p-1.5">{n(h.allowances)}</td><td className="p-1.5">{n(h.deductions)}</td><td className="p-1.5 font-bold">{n(h.net)}</td></tr>)}</tbody></table>
         </div>
       )}
+    </div>
+  );
+}
+
+// B8c: الحساب المصرفي المؤرخ — الإضافة أو التغيير بمُعتمِد ثانٍ (حالة 12)
+function BankAccounts({ employeeId }) {
+  const [list, setList] = useState([]);
+  const [form, setForm] = useState(null);
+  const [msg, setMsg] = useState('');
+  const load = () => apiClient.payroll.bankAccounts(employeeId).then(setList).catch(() => {});
+  useEffect(() => { load(); }, [employeeId]);
+  const live = list.filter(a => !a.superseded_at);
+  const save = async () => {
+    try { const r = await apiClient.payroll.addBankAccount(employeeId, form); setMsg(r.applied ? 'طُبّق' : 'أُرسل لمدير ثانٍ للاعتماد'); setForm(null); load(); }
+    catch (e) { setMsg(e.message); }
+  };
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 p-4 space-y-2 text-xs">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold text-sm">الحساب المصرفي</h3>
+        {!form && <Button size="sm" variant="outline" onClick={() => setForm({ bank_name: '', account_number: '', valid_from: new Date().toISOString().slice(0, 10) })}>إضافة أو تغيير</Button>}
+      </div>
+      {live.length === 0 && <p className="text-slate-400">ما في حساب مصرفي نافذ؛ الموظف يظهر بورقة «بلا حساب» بكشف المصرف.</p>}
+      {live.map(a => <div key={a.id}>{a.bank_name} — <span className="font-mono">{a.account_number}</span> من {a.valid_from} <span className="text-slate-400">(أدخله {a.entered_by}، اعتمده {a.approved_by})</span></div>)}
+      {form && (
+        <div className="flex flex-wrap gap-2 items-end">
+          <Input className="w-40 h-8" placeholder="المصرف" value={form.bank_name} onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))} />
+          <Input className="w-48 h-8 font-mono" placeholder="رقم الحساب أو البطاقة" value={form.account_number} onChange={e => setForm(f => ({ ...f, account_number: e.target.value }))} />
+          <Input type="date" className="w-40 h-8" value={form.valid_from} onChange={e => setForm(f => ({ ...f, valid_from: e.target.value }))} />
+          <Button size="sm" onClick={save}>إرسال للاعتماد</Button><Button size="sm" variant="outline" onClick={() => setForm(null)}>إلغاء</Button>
+        </div>
+      )}
+      {msg && <p className="text-slate-600">{msg}</p>}
     </div>
   );
 }

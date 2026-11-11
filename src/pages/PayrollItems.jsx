@@ -15,6 +15,7 @@ const fmtDate = (d) => (d ? String(d).slice(0, 10) : '—');
 export default function PayrollItems() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const isAdmin = user?.role === 'admin';
   const [tab, setTab] = useState('items');
   const [items, setItems] = useState([]);
   const [meta, setMeta] = useState(null);
@@ -64,10 +65,10 @@ export default function PayrollItems() {
           <table className="w-full text-xs text-right">
             <thead className="bg-slate-50 text-slate-500"><tr>
               <th className="px-4 py-2">الرمز</th><th className="px-4 py-2">البند</th><th className="px-4 py-2">التصنيف</th><th className="px-4 py-2">الإسناد</th>
-              <th className="px-4 py-2">الحالة الحالية</th><th className="px-4 py-2">التحقق</th><th className="px-4 py-2">النفاذ</th><th className="px-4 py-2">السند</th><th className="px-4 py-2"></th>
+              <th className="px-4 py-2">الحالة الحالية</th><th className="px-4 py-2">التحقق</th><th className="px-4 py-2">النفاذ</th><th className="px-4 py-2">السند</th><th className="px-4 py-2">رقم الحساب</th><th className="px-4 py-2"></th>
             </tr></thead>
             <tbody className="divide-y divide-slate-50">
-              {loading && <tr><td colSpan={9} className="px-4 py-4 text-center text-slate-400">جاري التحميل…</td></tr>}
+              {loading && <tr><td colSpan={10} className="px-4 py-4 text-center text-slate-400">جاري التحميل…</td></tr>}
               {list.map(i => {
                 const p = i.current?.props || {};
                 return (
@@ -80,6 +81,12 @@ export default function PayrollItems() {
                     <td className="px-4 py-2">{p.verification === 'مؤكد' ? <span className="text-emerald-700">مؤكد</span> : <span className="text-amber-700">يُتحقق</span>}</td>
                     <td className="px-4 py-2 font-mono">{fmtDate(i.current?.validFrom)}{i.current?.validTo ? ` → ${fmtDate(i.current.validTo)}` : ''}</td>
                     <td className="px-4 py-2 text-slate-500 max-w-[220px] truncate" title={p.legal_basis}>{p.legal_basis || '—'}</td>
+                    <td className="px-4 py-2 font-mono">
+                      {isAdmin ? <button className="underline decoration-dotted" title="رقم الحساب بالدليل المحاسبي (الملخص المحاسبي)" onClick={async () => {
+                        const v = window.prompt(`رقم الحساب بالدليل المحاسبي لـ ${i.name}`, i.account_code ?? i.accountCode ?? ''); if (v === null) return;
+                        try { await apiClient.payroll.setAccountCode(i.id, v); load(); } catch (e) { toast({ title: 'تعذّر', description: e.message, variant: 'destructive' }); }
+                      }}>{i.account_code ?? i.accountCode ?? '—'}</button> : (i.account_code ?? i.accountCode ?? '—')}
+                    </td>
                     <td className="px-4 py-2 text-left whitespace-nowrap">
                       {i.pending_count > 0 && <span className="text-[10px] text-sky-700 ml-2">{i.pending_count} معلّقة</span>}
                       <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setEditing(i)}>نسخة جديدة</Button>

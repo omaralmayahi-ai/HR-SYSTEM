@@ -53,7 +53,8 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
   app.post('/api/payroll/periods', requireAuth, requireWriter, async (req, res) => {
     try {
       const c = await category(req.body?.category);
-      const p = await openPeriod(db, schema, { categoryId: c.id, year: int(req.body?.year), month: int(req.body?.month), user: who(req), paySource: req.body?.pay_source });
+      const p = await openPeriod(db, schema, { categoryId: c.id, year: int(req.body?.year), month: int(req.body?.month), user: who(req), paySource: req.body?.pay_source,
+        kind: req.body?.kind === 'استثنائية' ? 'استثنائية' : 'عادية', employeeIds: Array.isArray(req.body?.employee_ids) ? req.body.employee_ids : undefined, notes: req.body?.notes });
       const w = await logActivity(req, 'فتح فترة رواتب', `${c.name} ${p.year}/${p.month}`);
       res.status(201).json({ ...p, ...(w ? { log_warning: w } : {}) });
     } catch (err: any) { fail(res, err, 'فتح فترة'); }
@@ -170,5 +171,49 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
       res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(out.fname)}`);
       res.send(out.buf);
     } catch (err: any) { fail(res, err, 'تصدير الكشف'); }
+  });
+
+  // B8c: رفض المصرف لصافي موظف بفترة مُصدَرة — بانتظار مُعتمِد ثانٍ (يرفع صافي الفترة التالية)
+  app.post('/api/payroll/periods/:id/bank-rejections', requireAuth, requireWriter, async (req, res) => {
+    try {
+      const pid = idOf(req.params.id);
+      const [p] = await db.select().from(schema.payrollPeriods).where(eq(schema.payrollPeriods.id, pid));
+      if (!p) return res.status(404).json({ error: 'الفترة غير موجودة' });
+      if (p.status !== 'مُصدَرة') throw new PayrollError('رفض المصرف بعد الإصدار فقط', 409);
+      res.status(202).json(await submit(db, schema, 'bank_rejection', { run_id: p.currentRunId, employee_id: idOf(req.body?.employee_id, 'رقم الموظف'), reason: req.body?.reason }, who(req)));
+    } catch (err: any) { fail(res, err, 'تسجيل رفض المصرف'); }
+  });
+
+  // B8c: الحسابات المصرفية للموظف (المؤرخة) وإضافة/تغيير بمُعتمِد ثانٍ (حالة 12)
+  app.get('/api/payroll/employees/:employeeId/bank-accounts', requireAuth, requireWriter, async (req, res) => {
+    try {
+      const eid = idOf(req.params.employeeId, 'رقم الموظف');
+      // رقم الحساب كامل للمدير فقط؛ غيره يشوف آخر 4 (مراجعة L4)
+      const full = (req as any).user?.role === 'admin';
+      res.json(rows(await db.execute(sql`SELECT id, bank_name, account_number, valid_from::text valid_from, recorded_at, superseded_at, entered_by, approved_by, note
+        FROM employee_bank_accounts WHERE employee_id = ${eid} ORDER BY valid_from DESC, id DESC`)).map((a: any) => full ? a : { ...a, account_number: `••••${String(a.account_number).slice(-4)}` }));
+    } catch (err: any) { fail(res, err, 'الحسابات المصرفية'); }
+  });
+  app.post('/api/payroll/employees/:employeeId/bank-accounts', requireAuth, requireWriter, async (req, res) => {
+    try {
+      const eid = idOf(req.params.employeeId, 'رقم الموظف');
+      res.status(202).json(await submit(db, schema, 'bank_account', { employee_id: eid, bank_name: req.body?.bank_name, account_number: req.body?.account_number, valid_from: req.body?.valid_from, note: req.body?.note }, who(req)));
+    } catch (err: any) { fail(res, err, 'إضافة حساب مصرفي'); }
+  });
+
+  // B8c: رقم الحساب بالدليل المحاسبي للبند (بيان تصنيف لا يغيّر الرواتب؛ للمدير ومسجّل)
+  app.put('/api/payroll/items/:id/account-code', requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const id = idOf(req.params.id);
+      const code = String(req.body?.account_code ?? '').trim() || null;
+      if (code && !/^[0-9A-Za-z./-]{1,30}$/.test(code)) throw new PayrollError('رقم الحساب: أرقام وحروف ورموز . / - (30 حداً أقصى)');
+      const [before] = await db.select().from(schema.payItems).where(eq(schema.payItems.id, id));
+      if (!before) return res.status(404).json({ error: 'البند غير موجود' });
+      await db.transaction(async (tx: any) => {
+        await tx.update(schema.payItems).set({ accountCode: code }).where(eq(schema.payItems.id, id));
+        await tx.insert(schema.payrollAudit).values({ actor: who(req), action: 'رقم حساب البند', entity: 'pay_items', entityId: String(id), before: { account_code: before.accountCode }, after: { account_code: code } });
+      });
+      res.json({ id, account_code: code });
+    } catch (err: any) { fail(res, err, 'رقم حساب البند'); }
   });
 }

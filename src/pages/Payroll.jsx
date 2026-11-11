@@ -78,6 +78,13 @@ export default function Payroll() {
             <Input type="number" className="w-20 h-9" value={openForm.month} onChange={e => setOpenForm(f => ({ ...f, month: e.target.value }))} placeholder="الشهر" />
             <Input type="number" className="w-24 h-9" value={openForm.year} onChange={e => setOpenForm(f => ({ ...f, year: e.target.value }))} placeholder="السنة" />
             <Button size="sm" disabled={!!busy} onClick={() => act('open', () => apiClient.payroll.openPeriod({ category, year: Number(openForm.year), month: Number(openForm.month) }), 'فُتحت الفترة').then(p => p && setSelected(p.id))}>فتح فترة</Button>
+            <Button size="sm" variant="outline" disabled={!!busy} onClick={() => {
+              const ym = window.prompt('الشهر للدورة الاستثنائية (YYYY-MM) — لشهر فترته العادية معتمدة أو مُصدَرة'); if (!ym) return;
+              const ids = window.prompt('أرقام الموظفين (المعرّفات) مفصولة بفواصل'); if (!ids) return;
+              const notes = window.prompt('السبب (تسوية انفكاك، تصحيح عاجل...)'); if (!notes) return;
+              const [y, m] = ym.split('-').map(Number);
+              act('open', () => apiClient.payroll.openPeriod({ category, year: y, month: m, kind: 'استثنائية', employee_ids: ids.split(/[,،\s]+/).map(Number).filter(Boolean), notes }), 'فُتحت الدورة الاستثنائية').then(p => p && setSelected(p.id));
+            }}>دورة استثنائية</Button>
           </div>
         </div>
       </div>
@@ -88,7 +95,7 @@ export default function Payroll() {
           {periods.map(p => (
             <button key={p.id} onClick={() => setSelected(p.id)} className={`w-full text-right rounded-xl border p-3 ${selected === p.id ? 'border-[#1B3A6B] bg-slate-50' : 'border-slate-100'}`}>
               <div className="flex items-center justify-between">
-                <span className="font-bold text-sm">{ym(p)}</span>
+                <span className="font-bold text-sm">{ym(p)}{p.kind === 'استثنائية' ? ' — استثنائية' : ''}</span>
                 <span className={`text-[11px] px-2 py-0.5 rounded-full ${statusStyle[p.status] || ''}`}>{p.status}</span>
               </div>
               <div className="text-[11px] text-slate-500 mt-1">{p.pay_source}{p.totals ? ` · ${p.totals.computed} موظفاً · صافٍ ${fmt(p.totals.net)}` : ''}</div>
@@ -103,7 +110,7 @@ export default function Payroll() {
               <div className="bg-white rounded-2xl border border-slate-100 p-5 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-lg font-bold">{period.category_name} — {ym(period)}</span>
+                    <span className="text-lg font-bold">{period.category_name} — {ym(period)}{period.kind === 'استثنائية' ? ' (دورة استثنائية)' : ''}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${statusStyle[period.status]}`}>{period.status}</span>
                     <span className="text-xs text-slate-500">({period.pay_source})</span>
                   </div>
@@ -201,12 +208,12 @@ function ResultsTab({ period }) {
         <Button size="sm" variant="outline" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>السابق</Button>
         <Button size="sm" variant="outline" disabled={!data || offset + limit >= data.total} onClick={() => setOffset(offset + limit)}>التالي</Button>
       </div>
-      {emp && <EmployeeLinesDialog periodId={period.id} employeeId={emp} onClose={() => setEmp(null)} />}
+      {emp && <EmployeeLinesDialog periodId={period.id} employeeId={emp} status={period.status} onClose={() => setEmp(null)} />}
     </div>
   );
 }
 
-function EmployeeLinesDialog({ periodId, employeeId, onClose }) {
+function EmployeeLinesDialog({ periodId, employeeId, status, onClose }) {
   const [d, setD] = useState(null);
   const [error, setError] = useState('');
   useEffect(() => { apiClient.payroll.periodEmployee(periodId, employeeId).then(setD).catch(e => setError(e.message)); }, [periodId, employeeId]);
@@ -220,7 +227,13 @@ function EmployeeLinesDialog({ periodId, employeeId, onClose }) {
             <div className="grid grid-cols-4 gap-2 text-center text-xs">
               {[['الاسمي', d.result.nominal], ['المخصصات', d.result.allowances], ['الاستقطاعات', d.result.deductions], ['الصافي', d.result.net]].map(([l, v]) => <div key={l} className="bg-slate-50 rounded-lg p-2"><div className="text-slate-500">{l}</div><div className="font-bold">{fmt(v)}</div></div>)}
             </div>
-            <div className="flex justify-end"><a className="text-xs text-[#1B3A6B] underline" href={`/payroll/payslip/${periodId}/${employeeId}`} target="_blank" rel="noreferrer">قسيمة للطباعة</a></div>
+            <div className="flex justify-end gap-3">
+              {status === 'مُصدَرة' && Number(d.result.net) > 0 && <button className="text-xs text-rose-700 underline" onClick={async () => {
+                const reason = window.prompt('سبب رفض المصرف (يرجع الصافي مستحقاً بالفترة التالية بعد اعتماد مدير ثانٍ)'); if (!reason) return;
+                try { await apiClient.payroll.bankRejection(periodId, employeeId, reason); window.alert('أُرسل لمدير ثانٍ للاعتماد'); } catch (e) { window.alert(e.message); }
+              }}>تسجيل رفض المصرف</button>}
+              <a className="text-xs text-[#1B3A6B] underline" href={`/payroll/payslip/${periodId}/${employeeId}`} target="_blank" rel="noreferrer">قسيمة للطباعة</a>
+            </div>
             <LinesTable lines={d.lines} />
             {d.result.issues?.length > 0 && <div className="text-xs bg-amber-50 rounded-lg p-2 space-y-1">{d.result.issues.map((i, k) => <div key={k}>⚠ {i.message}</div>)}</div>}
             {d.variances?.length > 0 && (
@@ -256,6 +269,9 @@ function ReviewTab({ period }) {
     ['موظفون جدد عن الشهر السابق', S.new_employees, x => `${who(x)}: ${fmt(x.net)}`],
     ['تغييرات المستخدمين والأدوار منذ الفترة السابقة', S.user_role_changes, x => `${String(x.at).slice(0, 16).replace('T', ' ')} ${x.action}: ${x.before_user ?? ''}${x.before_role ? `(${x.before_role})` : ''} ← ${x.after_user ?? ''}${x.after_role ? `(${x.after_role})` : ''} بواسطة ${x.actor ?? '—'}`],
     ['بنود فعّالة بقيم «يُتحقق» (تمنع الاعتماد)', S.unverified_items, x => `${x.code} ${x.name}`],
+    ['الفروق الرجعية (القسم 12)', S.retro_diffs, x => `${who(x)}: ${fmt(x.total)} عن ${(x.months || []).join('، ')}${x.shadow ? ' (فترة ظلّية)' : ''}`],
+    ['فروق رجعية سالبة (تحتاج أمر استرداد إذا كبيرة)', S.retro_negative, x => `${who(x)}: ${fmt(x.total)}`],
+    ['فروق ما احتُسبت أو ما صُرفت', S.retro_issues, x => `${who(x)}: ${x.message}`],
     ['حالات استحقاق بقيم «يُتحقق» مستعملة', S.unverified_states, x => `${who(x)}: ${x.states.join('، ')}`],
     ['حالات الاستحقاق (إجازات، سحب يد، عقوبات)', S.entitlement_states, x => `${who(x)}: ${x.states.join('، ')}`],
     ['استقطاعات مؤجلة لحماية الصافي', S.deferred_deductions, x => `${who(x)}: ${x.deferred.map(d => `${d.item} ${fmt(d.amount)}`).join('، ')}`],
@@ -297,6 +313,8 @@ function StatementsTab({ period }) {
         <Button size="sm" variant="outline" onClick={() => dl('exceptions')}><FileSpreadsheet className="w-4 h-4 ml-1" />تقرير الاستثناءات</Button>
         <Button size="sm" variant="outline" onClick={() => dl('retirement')}><FileSpreadsheet className="w-4 h-4 ml-1" />كشف التوقيفات التقاعدية</Button>
         <Button size="sm" variant="outline" onClick={() => dl('deductions')}><FileSpreadsheet className="w-4 h-4 ml-1" />كشوف الاستقطاعات للجهات</Button>
+        <Button size="sm" variant="outline" onClick={() => dl('bank')}><FileSpreadsheet className="w-4 h-4 ml-1" />كشف المصرف</Button>
+        <Button size="sm" variant="outline" onClick={() => dl('accounting')}><FileSpreadsheet className="w-4 h-4 ml-1" />الملخص المحاسبي</Button>
       </div>
       <div className="flex gap-2 items-center">
         <select value={item} onChange={e => setItem(e.target.value)} className="h-9 rounded-lg border border-slate-200 px-2 text-sm">{items.map(i => <option key={i.id} value={i.code}>{i.code} — {i.name}</option>)}</select>

@@ -351,6 +351,11 @@ export const apiClient = {
     updateState: (id, fields) => request(`/api/payroll/states/${id}`, { method: 'PUT', body: JSON.stringify(fields) }),
     mapState: (data) => request('/api/payroll/state-mappings', { method: 'POST', body: JSON.stringify(data) }),
     employeeBalances: (employeeId, asOfPeriod) => request(`/api/payroll/employees/${employeeId}/balances${asOfPeriod ? `?as_of_period=${asOfPeriod}` : ''}`),
+    // B8c: المصرف والملخص المحاسبي
+    bankRejection: (periodId, employee_id, reason) => request(`/api/payroll/periods/${periodId}/bank-rejections`, { method: 'POST', body: JSON.stringify({ employee_id, reason }) }),
+    bankAccounts: (employeeId) => request(`/api/payroll/employees/${employeeId}/bank-accounts`),
+    addBankAccount: (employeeId, data) => request(`/api/payroll/employees/${employeeId}/bank-accounts`, { method: 'POST', body: JSON.stringify(data) }),
+    setAccountCode: (itemId, account_code) => request(`/api/payroll/items/${itemId}/account-code`, { method: 'PUT', body: JSON.stringify({ account_code }) }),
     preview: (employeeId, year, month) => request(`/api/payroll/preview/${employeeId}?year=${year}&month=${month}`, { timeoutMs: 60000 }),
     downloadStatement: async (id, kind, item) => {
       const token = localStorage.getItem('hr_session_token');

@@ -23,7 +23,10 @@ export interface EmployeeIn {
   // B8b: حالات الاستحقاق اليومية (مدى أيام ← حالة) والأرصدة ببداية الفترة (مشتقة من الاحتسابات المعتمدة السابقة)
   states?: { from: string; to: string; stateId: number; source: string }[];
   balances?: { installmentsPaid: Map<number, Micro>; held: Micro; debit: Micro };
-  inputIssues?: Issue[]; // مشاكل بالمدخلات اكتشفها المحمّل (تواريخ غير صالحة...) — تُبلَّغ ولا تُهمل بصمت
+  inputIssues?: Issue[];
+  // B8c: فروق رجعية محسوبة مسبقاً (س12.5) تُدرج سطوراً بالفترة المفتوحة، والمستحق غير المصروف (رفض المصرف)
+  retro?: { originPeriodId: number; originYm: string; key: string; itemId: number | null; itemCode: string; itemName: string; direction: '+' | '-'; amount: Micro; shadow?: boolean }[];
+  unpaid?: Micro; // مشاكل بالمدخلات اكتشفها المحمّل (تواريخ غير صالحة...) — تُبلَّغ ولا تُهمل بصمت
 }
 /** حالة استحقاق (القسم 9): نسبة الاسمي والمحجوز وسلوك البنود والتقاعد والأسبقية. */
 export interface StateDef {
@@ -39,14 +42,15 @@ export interface EngineCtx {
   orgParents: Map<number, number | null>;
   eligibleStatuses: Set<string>;
   states?: Map<number, StateDef>;
-  statusStates?: Map<string, number>; // حالة الموظف ← حالة استحقاق (مثل «مسحوب اليد» ← سحب اليد)
+  statusStates?: Map<string, number>;
+  noNetProtection?: boolean; // إعادة احتساب فترة أصلية للفروق: بلا حماية صافٍ (س12.4) // حالة الموظف ← حالة استحقاق (مثل «مسحوب اليد» ← سحب اليد)
   categoryRules: { serviceType: string; contractType: string | null; categoryId: number }[];
 }
 
 // ---------- أنواع المخرجات ----------
 export interface Line {
   itemId: number | null; itemCode: string; itemName: string; direction: '+' | '-' | '=';
-  kind: 'nominal' | 'item' | 'cap' | 'deduction' | 'held' | 'held_release' | 'debit_carry';
+  kind: 'nominal' | 'item' | 'cap' | 'deduction' | 'held' | 'held_release' | 'debit_carry' | 'retro' | 'unpaid_carry';
   segmentFrom: string; segmentTo: string; share: string; // share = أيام/أيام الشهر نصاً
   amount: Micro; base: Micro | null; rate: string | null;
   itemVersionId: number | null; scaleVersionId: number | null; assignmentId: number | null;
@@ -416,7 +420,7 @@ export function computeEmployee(emp: EmployeeIn, ctx: EngineCtx): EmployeeResult
     const v = liveVersion(it, end) || liveVersion(it, firstSeg);
     if (!v || v.props?.status !== 'فعّال') continue;
     const isRelease = it.code === 'HELD_RELEASE' || !!v.props.held_release;
-    if (!(it.method === 'installments' || v.props.monthly || isRelease)) continue;
+    if (!(it.method === 'installments' || it.method === 'hours' || v.props.monthly || isRelease)) continue;
     // الأقساط تستمر ما دام الرصيد قائماً حتى بعد نهاية الإسناد (القسط المؤجل يمدد الإسناد — 8.2)
     const assigns = emp.assignments.filter(a => a.itemId === it.id && (inMonth(a) || (it.method === 'installments' && a.kind !== 'حجب' && a.validFrom <= end)));
     const kindOf = (): Line['kind'] => (it.direction === '-' ? 'deduction' : 'item');
@@ -449,7 +453,23 @@ export function computeEmployee(emp: EmployeeIn, ctx: EngineCtx): EmployeeResult
       if (amt > 0n) lines.push({ ...base, direction: '+', kind: 'held_release', amount: amt, assignmentId: assigns[0]?.id ?? null, explain: { held_balance: toDecimal(bal.held), ordered: toDecimal(total), legal_basis: v.props.legal_basis } });
     } else {
       const values = assigns.filter(a => a.value !== null && a.value !== undefined);
-      const total = values.length ? sum(values.map(a => money(a.value))) : (it.assignmentMode === 'تلقائي' && v.props.value != null ? money(v.props.value) : 0n);
+      let total: Micro;
+      let hoursNote: any = null;
+      if (it.method === 'hours') {
+        // العمل الإضافي (ت10): الوعاء × الساعات × المعامل ÷ ساعات الشهر، بحد 3 ساعات يومياً، خارج السقف
+        const hoursM = sum(values.map(a => money(a.value)));
+        const maxH = money(Number(v.props.max_hours_per_day ?? 3) * days);
+        const used = minM(hoursM, maxH);
+        if (hoursM > maxH) issues.push({ code: 'OVERTIME_CAPPED', message: `${it.name}: ${toDecimal(hoursM)} ساعة أكثر من الحد (${toDecimal(maxH)})؛ احتُسب الحد`, itemCode: it.code });
+        const lastNominal = [...lines].reverse().find(l => l.kind === 'nominal');
+        const baseFull = lastNominal ? money(lastNominal.explain.full) : 0n;
+        const divisor = money(v.props.hours_divisor ?? 7 * days);
+        const factor = rate(String(v.props.factor ?? 1));
+        total = divisor > 0n ? applyRate(mulDiv(baseFull, used, divisor), factor * 100n) : 0n;
+        hoursNote = { hours: toDecimal(used), base: toDecimal(baseFull), divisor: toDecimal(divisor), factor: String(v.props.factor ?? 1) };
+      } else {
+        total = values.length ? sum(values.map(a => money(a.value))) : (it.assignmentMode === 'تلقائي' && v.props.value != null ? money(v.props.value) : 0n);
+      }
       if (total === 0n) continue;
       // حالة الاستحقاق على البند الشهري: متوسط نسبة سلوكه موزوناً بأيام المقاطع المحتسبة (مراجعة M3)
       let weighted = total, stNote: any = null;
@@ -466,13 +486,26 @@ export function computeEmployee(emp: EmployeeIn, ctx: EngineCtx): EmployeeResult
         stNote = { states: [...new Set(segs.map(sg => segState.get(sg.from)?.name).filter(Boolean))], full: toDecimal(total) };
       }
       if (weighted === 0n) continue;
-      lines.push({ ...base, kind: kindOf(), amount: weighted, assignmentId: values[0]?.id ?? null, explain: { method: it.method, monthly: true, assignments: values.map(a => a.id), legal_basis: v.props.legal_basis, ...(stNote ? stNote : {}) } });
+      lines.push({ ...base, kind: kindOf(), amount: weighted, assignmentId: values[0]?.id ?? null, explain: { method: it.method, monthly: true, assignments: values.map(a => a.id), legal_basis: v.props.legal_basis, ...(stNote ? stNote : {}), ...(hoursNote ? { overtime: hoursNote } : {}) } });
     }
   }
   // الرصيد المدين المرحَّل من الشهر السابق (10.2 خطوة 5)
   if (bal.debit > 0n) {
     lines.push({ itemId: null, itemCode: 'DEBIT_CARRY', itemName: 'رصيد مدين مرحّل', direction: '-', kind: 'debit_carry', segmentFrom: start, segmentTo: end, share: 'شهري',
       amount: bal.debit, base: null, rate: null, itemVersionId: null, scaleVersionId: null, assignmentId: null, explain: { carried: toDecimal(bal.debit) } });
+  }
+
+  // B8c: الفروق الرجعية المعتمدة الحساب (س12.5) — ما تدخل وعاء تقاعد الشهر الجاري (ق-8)
+  for (const r of emp.retro || []) {
+    if (r.amount === 0n) continue;
+    lines.push({ itemId: r.itemId, itemCode: r.itemCode, itemName: `فرق رجعي عن ${r.originYm}: ${r.itemName}`, direction: r.direction, kind: 'retro', segmentFrom: start, segmentTo: end, share: 'رجعي',
+      amount: r.amount, base: null, rate: null, itemVersionId: null, scaleVersionId: null, assignmentId: null,
+      explain: { origin_period_id: r.originPeriodId, origin_ym: r.originYm, origin_key: r.key, ...(r.shadow ? { shadow: true } : {}) } });
+  }
+  // المستحق غير المصروف (رفض المصرف بعد الإصدار — 11.2)
+  if ((emp.unpaid ?? 0n) > 0n) {
+    lines.push({ itemId: null, itemCode: 'UNPAID_CARRY', itemName: 'مستحق غير مصروف (رفض المصرف)', direction: '+', kind: 'unpaid_carry', segmentFrom: start, segmentTo: end, share: 'شهري',
+      amount: emp.unpaid!, base: null, rate: null, itemVersionId: null, scaleVersionId: null, assignmentId: null, explain: { carried: toDecimal(emp.unpaid!) } });
   }
 
   // تقريب استقطاعات الجهات لكل سطر (مجمّعة لكل بند بالشهر)
@@ -494,7 +527,7 @@ export function computeEmployee(emp: EmployeeIn, ctx: EngineCtx): EmployeeResult
     return nom + plus - minus;
   };
   let netNow = totals();
-  if (netNow < 0n) {
+  if (netNow < 0n && !ctx.noNetProtection) {
     const propsOf = (l: Line) => { const it = ctx.items.find(i => i.id === l.itemId); return it ? (liveVersion(it, end) || liveVersion(it, firstSeg))?.props || {} : {}; };
     // يُؤجَّل ما له رصيد يحمله فقط: الأقساط (8.2). غيرها يبقى كاملاً ويُرحَّل الفرق رصيداً مديناً (مراجعة H3)
     const deferrable = lines.filter(l => l.direction === '-' && l.amount > 0n && l.explain?.method === 'installments' && !propsOf(l).mandatory && propsOf(l).deferrable !== false)
