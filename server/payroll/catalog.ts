@@ -151,7 +151,9 @@ export async function supersedeAndInsert(tx: any, table: any, keyWhere: any, row
   const newFrom: string = row.validFrom, newTo: string | null = row.validTo ?? null;
   if (newTo !== null && newTo < newFrom) throw new PayrollError('تاريخ النهاية قبل البداية');
   const victims = live.filter((v: any) => overlaps(v.validFrom, v.validTo, newFrom, newTo));
-  const now = new Date();
+  // نفس ساعة recorded_at (now() للمعاملة) حتى ما تظهر النسختان معاً لأي لحظة knownAt
+  const nowRes = await tx.execute(sql`SELECT now() AS now`);
+  const now = new Date(((nowRes as any).rows ?? nowRes)[0].now);
   const remainders: any[] = [];
   for (const v of victims) {
     const { id, recordedAt, supersededAt, supersededBy, ...rest } = v;
