@@ -5,7 +5,7 @@ import { applyMovement, isIsoDate, todayBaghdad } from '../careerMovements.ts';
 import { unapproveInTx } from './periods.ts';
 import { PayrollError, validateProps, activationProblems, ensureOrder, supersedeAndInsert } from './catalog.ts';
 
-export const OP_TYPES = ['item_version', 'assignment', 'assignment_end', 'family_member', 'family_fact', 'family_mode', 'family_extension', 'period_unapprove', 'entitlement_state', 'state_mapping'] as const;
+export const OP_TYPES = ['item_version', 'assignment', 'assignment_end', 'family_member', 'family_fact', 'family_mode', 'family_extension', 'period_unapprove', 'entitlement_state', 'state_mapping', 'bank_account', 'bank_rejection'] as const;
 export type OpType = typeof OP_TYPES[number];
 
 const MULTI_METHODS = new Set(['installments', 'manual']);
@@ -55,6 +55,14 @@ async function baseToken(db: any, schema: any, op: OpType, p: any): Promise<stri
     const r = rows(await db.execute(p.table === 'leave_types'
       ? sql`SELECT coalesce(entitlement_state_id::text, '') t FROM leave_types WHERE id = ${Number(p.id)}`
       : sql`SELECT coalesce(entitlement_state_id::text, '') t FROM employee_statuses WHERE id = ${Number(p.id)}`));
+    return r[0]?.t ?? '';
+  }
+  if (op === 'bank_account') {
+    const r = rows(await db.execute(sql`SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') t FROM employee_bank_accounts WHERE employee_id = ${Number(p.employee_id)} AND superseded_at IS NULL`));
+    return r[0]?.t ?? '';
+  }
+  if (op === 'bank_rejection') {
+    const r = rows(await db.execute(sql`SELECT count(*)::text t FROM payroll_bank_rejections WHERE run_id = ${Number(p.run_id)} AND employee_id = ${Number(p.employee_id)}`));
     return r[0]?.t ?? '';
   }
   if (op === 'period_unapprove') {
@@ -247,6 +255,28 @@ export async function prepare(db: any, schema: any, op: OpType, raw: any): Promi
       if (p.table === 'employee_statuses' && sid !== null && !row.payrollEligible) warnings.push(`حالة «${row.name}» غير مشمولة بالصرف؛ الربط ما يأثر حتى تُشمل`);
       return { payload: { table: p.table, id, state_id: sid }, summary: `ربط ${p.table === 'leave_types' ? 'نوع الإجازة' : 'حالة الموظف'} «${row.name}» بـ «${sname}»`, employeeId: null, itemId: null, warnings };
     }
+    case 'bank_account': {
+      const eid = Number(p.employee_id);
+      const [emp] = await db.select().from(schema.employees).where(eq(schema.employees.id, eid));
+      if (!emp) throw new PayrollError('الموظف غير موجود', 404);
+      const bank = String(p.bank_name ?? '').trim(), acct = String(p.account_number ?? '').replace(/\s+/g, '');
+      if (!bank) throw new PayrollError('اسم المصرف مطلوب');
+      if (!/^[A-Za-z0-9-]{4,40}$/.test(acct)) throw new PayrollError('رقم الحساب أو البطاقة: أرقام وحروف لاتينية (4–40)');
+      const vf = String(p.valid_from ?? '');
+      if (!isIsoDate(vf)) throw new PayrollError('تاريخ النفاذ بصيغة YYYY-MM-DD');
+      return { payload: { employee_id: eid, bank_name: bank, account_number: acct, valid_from: vf, note: p.note ?? null },
+        summary: `حساب مصرفي لـ ${emp.fullName}: ${bank} — ${acct.slice(0, 2)}…${acct.slice(-4)} من ${vf}`, employeeId: eid, itemId: null, warnings };
+    }
+    case 'bank_rejection': {
+      const runId = Number(p.run_id), eid = Number(p.employee_id);
+      const [r] = rows(await db.execute(sql`SELECT r.state, res.net::text net, res.snapshot FROM payroll_runs r JOIN payroll_results res ON res.run_id = r.id AND res.employee_id = ${eid} WHERE r.id = ${runId}`));
+      if (!r) throw new PayrollError('الموظف غير موجود بهذا الاحتساب', 404);
+      if (r.state !== 'مُصدَر') throw new PayrollError('رفض المصرف لاحتساب مُصدَر فقط', 409);
+      if (!(Number(r.net) > 0)) throw new PayrollError('صافي الموظف صفر؛ ما في شي يُرفض');
+      if (!String(p.reason ?? '').trim()) throw new PayrollError('سبب الرفض من المصرف مطلوب');
+      return { payload: { run_id: runId, employee_id: eid, amount: r.net, reason: String(p.reason).trim() },
+        summary: `رفض المصرف لصافي ${r.snapshot?.full_name ?? eid} (${r.net}) بالاحتساب ${runId}: ${String(p.reason).trim()} — يرجع مستحقاً بالفترة التالية`, employeeId: eid, itemId: null, warnings };
+    }
     case 'period_unapprove': {
       const [per] = await db.select().from(schema.payrollPeriods).where(eq(schema.payrollPeriods.id, Number(p.period_id)));
       if (!per) throw new PayrollError('الفترة غير موجودة', 404);
@@ -266,8 +296,18 @@ async function isDirectDraftEdit(db: any, op: OpType, p: any) {
   return r.length === 0;
 }
 
+/** س15.3: المستخدم المرتبط بموظف ما يُدخل ولا يعتمد أي عملية على سجله المالي هو. */
+async function assertNotOwnRecord(db: any, user: string, employeeId: number | null) {
+  if (!employeeId || !user) return;
+  const r = rows(await db.execute(sql`SELECT employee_id FROM users WHERE username = ${user} LIMIT 1`));
+  if (r[0]?.employee_id && Number(r[0].employee_id) === Number(employeeId)) {
+    throw new PayrollError('ما تكدر تُدخل أو تعتمد عملية على سجلك المالي أنت (س15.3)', 403);
+  }
+}
+
 export async function submit(db: any, schema: any, op: OpType, raw: any, user: string) {
   const prep = await prepare(db, schema, op, raw);
+  await assertNotOwnRecord(db, user, prep.employeeId);
   if (await isDirectDraftEdit(db, op, prep.payload)) {
     const result = await db.transaction(async (tx: any) => {
       const r = await applyOp(tx, schema, op, prep.payload, user, user);
@@ -385,6 +425,17 @@ async function applyOp(tx: any, schema: any, op: OpType, p: any, enteredBy: stri
       await tx.insert(schema.payrollAudit).values({ actor: approver, action: 'ربط حالة استحقاق', entity: p.table, entityId: String(p.id), after: { entitlement_state_id: p.state_id, entered_by: enteredBy } });
       return { mapped: true };
     }
+    case 'bank_account': {
+      // يستبدل السجل الحي بنفس تاريخ النفاذ فقط؛ حساب بتاريخ أقدم ما يمس الأحدث (مراجعة M7)
+      await tx.execute(sql`UPDATE employee_bank_accounts SET superseded_at = now() WHERE employee_id = ${p.employee_id} AND superseded_at IS NULL AND valid_from = ${p.valid_from}::date`);
+      const [r] = await tx.insert(schema.employeeBankAccounts).values({ employeeId: p.employee_id, bankName: p.bank_name, accountNumber: p.account_number, validFrom: p.valid_from,
+        enteredBy, approvedBy: approver, note: p.note }).returning();
+      return { bank_account_id: r.id };
+    }
+    case 'bank_rejection': {
+      const [r] = await tx.insert(schema.payrollBankRejections).values({ runId: p.run_id, employeeId: p.employee_id, amount: p.amount, reason: p.reason, enteredBy, approvedBy: approver }).returning();
+      return { rejection_id: r.id };
+    }
     case 'period_unapprove':
       return unapproveInTx(tx, schema, Number(p.period_id), p.reason, enteredBy, approver);
   }
@@ -403,6 +454,7 @@ export async function decide(db: any, schema: any, id: number, decision: 'approv
     }
     if (!user) throw new PayrollError('تعذّر التعرّف على المستخدم', 403);
     if (op.enteredBy === user) throw new PayrollError('ما تكدر تعتمد أو ترفض عملية أدخلتها أنت؛ يقررها مستخدم آخر (مب9)', 403);
+    await assertNotOwnRecord(tx, user, op.employeeId);
     if (decision === 'reject') {
       if (!String(reason ?? '').trim()) throw new PayrollError('سبب الرفض مطلوب');
       await tx.update(P).set({ state: 'مرفوض', decidedBy: user, decidedAt: new Date(), decisionReason: reason }).where(eq(P.id, id));

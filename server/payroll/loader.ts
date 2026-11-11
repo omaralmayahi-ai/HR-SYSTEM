@@ -12,7 +12,7 @@ export const ENGINE_FIELDS = ['grade', 'step', 'status', 'service_type', 'contra
 const rows = (r: any) => ((r as any).rows ?? r) as any[];
 const isoOrNull = (v: any) => { const s = String(v ?? '').trim().slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null; };
 
-export interface LoadOpts { year: number; month: number; categoryId: number; eligibleStatuses: string[]; knownAt?: Date | string; employeeIds?: number[]; sequential?: boolean; periodId?: number }
+export interface LoadOpts { year: number; month: number; categoryId: number; eligibleStatuses: string[]; knownAt?: Date | string; employeeIds?: number[]; sequential?: boolean; periodId?: number; balancesKnownAt?: Date | string }
 
 const trimPct = (v: string) => String(Number(v));
 const APPROVED_LEAVE = [...leaveStatusVariants('معتمد'), 'تم اعتماد الإجازة'].map(x => x.trim().toLowerCase());
@@ -76,10 +76,12 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
   const ids = empRows.map(e => Number(e.id));
   const idArr = sql.raw(`ARRAY[${ids.join(',') || 0}]::int[]`);
   const iso = `'^[0-9]{4}-[0-9]{2}-[0-9]{2}$'`;
+  // الأرصدة لإعادة احتساب فترة أصلية = كما سُجّلت يوم اعتمادها (س12.4)
+  const balKnownAt = o.balancesKnownAt ? new Date(o.balancesKnownAt).toISOString() : knownAt;
   // احتسابات معتمدة/مُصدَرة لفترات قبل هذا الشهر (معروفة بلحظة knownAt) — مصدر الأرصدة
   const priorRuns = sql`r.state IN ('معتمد', 'مُصدَر') AND p.category_id = ${o.categoryId} AND (p.year * 12 + p.month) < ${o.year * 12 + o.month}
-    AND coalesce(p.approved_at, r.finished_at) <= ${knownAt}::timestamptz ${o.periodId ? sql`AND p.id <> ${o.periodId}` : sql``}`;
-  const [hist, assigns, members, facts, exts, leaves, cuts, paidRows, heldRows, debitRows] = await runAll([
+    AND coalesce(p.approved_at, r.finished_at) <= ${balKnownAt}::timestamptz ${o.periodId ? sql`AND p.id <> ${o.periodId}` : sql``}`;
+  const [hist, assigns, members, facts, exts, leaves, cuts, paidRows, heldRows, debitRows, unpaidRows] = await runAll([
     () => db.execute(sql`
       WITH known AS (
         SELECT h.id, h.employee_id, h.field, h.value, h.valid_from, h.recorded_at, h.order_id, h.supersedes_id, h.source FROM employee_field_history h
@@ -132,6 +134,13 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
         UNION ALL
         SELECT l.employee_id, -l.amount FROM payroll_lines l JOIN payroll_runs r ON r.id = l.run_id JOIN payroll_periods p ON p.id = r.period_id
           WHERE l.employee_id = ANY(${idArr}) AND l.kind = 'debit_carry' AND ${priorRuns}) x GROUP BY x.employee_id ORDER BY x.employee_id`),
+    // B8c: المستحق غير المصروف = رفض المصرف لاحتسابات مُصدَرة سابقة − ما صُرف منه
+    () => db.execute(sql`SELECT x.employee_id, sum(x.amt)::text unpaid FROM (
+        SELECT b.employee_id, b.amount amt FROM payroll_bank_rejections b JOIN payroll_runs r ON r.id = b.run_id JOIN payroll_periods p ON p.id = r.period_id
+          WHERE b.employee_id = ANY(${idArr}) AND p.category_id = ${o.categoryId} AND b.recorded_at <= ${balKnownAt}::timestamptz ${o.periodId ? sql`AND p.id <> ${o.periodId}` : sql``}
+        UNION ALL
+        SELECT l.employee_id, -l.amount FROM payroll_lines l JOIN payroll_runs r ON r.id = l.run_id JOIN payroll_periods p ON p.id = r.period_id
+          WHERE l.employee_id = ANY(${idArr}) AND l.kind = 'unpaid_carry' AND ${priorRuns}) x GROUP BY x.employee_id ORDER BY x.employee_id`),
   ]);
 
   const tl = new Map<number, Record<string, { from: string | null; value: any }[]>>();
@@ -178,6 +187,7 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
   for (const r of rows(paidRows)) { const e = Number(r.employee_id); (paid.get(e) || paid.set(e, new Map()).get(e)!).set(Number(r.assignment_id), money(r.paid)); }
   const held = new Map<number, Micro>(rows(heldRows).map(r => [Number(r.employee_id), money(r.held)]));
   const debit = new Map<number, Micro>(rows(debitRows).map(r => [Number(r.employee_id), money(r.debit)]));
+  const unpaid = new Map<number, Micro>(rows(unpaidRows).map(r => [Number(r.employee_id), money(r.unpaid)]));
 
   const employees: (EmployeeIn & { snapshot: any })[] = empRows.map(e => {
     const id = Number(e.id);
@@ -190,6 +200,7 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
       family: { members: mem.get(id) || [], facts: fct.get(id) || [], extensions: ext.get(id) || [] },
       states: st.get(id) || [],
       inputIssues: inputIssues.get(id) || [],
+      unpaid: maxM(unpaid.get(id) ?? 0n, 0n),
       balances: { installmentsPaid: paid.get(id) || new Map(), held: maxM(held.get(id) ?? 0n, 0n), debit: maxM(debit.get(id) ?? 0n, 0n) },
       snapshot: { full_name: e.full_name, company_number: e.company_number, department: e.department, section: e.section, job_title: e.job_title, grade: e.grade, step: e.step },
     };

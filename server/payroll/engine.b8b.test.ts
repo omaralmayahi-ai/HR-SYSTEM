@@ -135,3 +135,21 @@ describe('B8b مراجعة', () => {
     expect(line(r, 'MON')).toBe(0n);
   });
 });
+
+describe('B8c المحرك', () => {
+  it('العمل الإضافي: الوعاء × الساعات × المعامل ÷ ساعات الشهر، بحد 3 ساعات يومياً', () => {
+    const OT = item(13, 'OVERTIME', '+', 'hours', { factor: 1.5, hours_divisor: 210 }, { assignmentMode: 'بأمر', classification: 'تقديري' });
+    const a = (h: string) => ({ id: 90, itemId: 13, kind: 'منح', valueKind: 'مبلغ', value: h, validFrom: '2026-04-01', validTo: '2026-04-30' });
+    const r = computeEmployee(emp({ assignments: [a('20')] }), ctxOf([OT]));
+    expect(D(line(r, 'OVERTIME'))).toBe(D(applyRate(mulDiv(money(296000), money(20), money(210)), rate('150'))));
+    const capped = computeEmployee(emp({ assignments: [a('200')] }), ctxOf([OT]));
+    expect(capped.issues.some(i => i.code === 'OVERTIME_CAPPED')).toBe(true);
+    expect(line(capped, 'OVERTIME')).toBe(applyRate(mulDiv(money(296000), money(90), money(210)), rate('150')));
+  });
+  it('الفروق الرجعية تُدرج سطوراً وما تدخل وعاء تقاعد الشهر الجاري (ق-8)', () => {
+    const r = computeEmployee(emp({ retro: [{ originPeriodId: 7, originYm: '2026/01', key: 'NOMINAL', itemId: null, itemCode: 'NOMINAL', itemName: 'الراتب الاسمي', direction: '+', amount: money(66000) }] }), ctxOf([RETIRE]));
+    expect(D(line(r, 'NOMINAL', 'retro'))).toBe('66000.000000');
+    expect(D(line(r, 'RETIRE'))).toBe('29600.000000');
+    expect(r.net).toBe(money(296000 - 29600 + 66000));
+  });
+});
