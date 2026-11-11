@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { useAuth } from '@/lib/AuthContext';
+import { can } from '@/lib/permissions';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +13,7 @@ const BEHAVIORS = ['يتبع', 'كامل', 'يتوقف', 'الثابتة فقط'
 export default function EntitlementStates({ onSubmitted }) {
   const { user } = useAuth();
   const { toast } = useToast();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = can(user, 'payroll.settings');
   const [data, setData] = useState(null);
   const [edit, setEdit] = useState(null);
   const load = () => apiClient.payroll.states().then(setData).catch(e => toast({ title: 'تعذّر', description: e.message, variant: 'destructive' }));

@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { useAuth } from '@/lib/AuthContext';
+import { can } from '@/lib/permissions';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,7 +16,7 @@ const fmtDate = (d) => (d ? String(d).slice(0, 10) : '—');
 export default function PayrollItems() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = can(user, 'payroll.approve');
   const [tab, setTab] = useState('items');
   const [items, setItems] = useState([]);
   const [meta, setMeta] = useState(null);
@@ -82,7 +83,7 @@ export default function PayrollItems() {
                     <td className="px-4 py-2 font-mono">{fmtDate(i.current?.validFrom)}{i.current?.validTo ? ` → ${fmtDate(i.current.validTo)}` : ''}</td>
                     <td className="px-4 py-2 text-slate-500 max-w-[220px] truncate" title={p.legal_basis}>{p.legal_basis || '—'}</td>
                     <td className="px-4 py-2 font-mono">
-                      {isAdmin ? <button className="underline decoration-dotted" title="رقم الحساب بالدليل المحاسبي (الملخص المحاسبي)" onClick={async () => {
+                      {can(user, 'payroll.settings') ? <button className="underline decoration-dotted" title="رقم الحساب بالدليل المحاسبي (الملخص المحاسبي)" onClick={async () => {
                         const v = window.prompt(`رقم الحساب بالدليل المحاسبي لـ ${i.name}`, i.account_code ?? i.accountCode ?? ''); if (v === null) return;
                         try { await apiClient.payroll.setAccountCode(i.id, v); load(); } catch (e) { toast({ title: 'تعذّر', description: e.message, variant: 'destructive' }); }
                       }}>{i.account_code ?? i.accountCode ?? '—'}</button> : (i.account_code ?? i.accountCode ?? '—')}
@@ -112,7 +113,7 @@ export default function PayrollItems() {
                   <td className="px-4 py-2">{op.enteredBy}</td>
                   <td className="px-4 py-2 font-mono">{String(op.enteredAt).slice(0, 16).replace('T', ' ')}</td>
                   <td className="px-4 py-2 text-left whitespace-nowrap space-x-1 space-x-reverse">
-                    {user?.role === 'admin' && op.enteredBy !== user?.username && <>
+                    {can(user, 'payroll.approve') && op.enteredBy !== user?.username && <>
                       <Button size="sm" className="h-7 text-[11px] bg-emerald-600 gap-1" onClick={() => decide(op, 'approve')}><CheckCircle2 className="w-3.5 h-3.5" />اعتماد</Button>
                       <Button size="sm" variant="outline" className="h-7 text-[11px] text-red-600 gap-1" onClick={() => decide(op, 'reject')}><XCircle className="w-3.5 h-3.5" />رفض</Button>
                     </>}

@@ -1,6 +1,7 @@
 // server/routes/careerHistory.ts — B4b: الأوامر الإدارية والسجل الوظيفي المؤرخ.
 import type { Express } from 'express';
 import type { RouteContext } from '../context.ts';
+import { forbidOwnRecord } from '../ownRecord.ts';
 import { desc, eq, sql } from 'drizzle-orm';
 import { attachOrgUnit } from '../orgUnitsService.ts';
 import {
@@ -106,7 +107,7 @@ export function registerCareerHistoryRoutes(app: Express, ctx: RouteContext) {
   });
 
   // حركة على موظف: { effective_date, changes: {grade: 7, ...}, order_id?, reason?, event? }
-  app.post('/api/employees/:id/movements', requireAuth, requireWriter, async (req, res) => {
+  app.post('/api/employees/:id/movements', requireAuth, requireWriter, forbidOwnRecord(db), async (req, res) => {
     const id = parseInt(String(req.params.id));
     if (isNaN(id)) return res.status(400).json({ error: 'معرّف غير صالح' });
     const b = req.body || {};

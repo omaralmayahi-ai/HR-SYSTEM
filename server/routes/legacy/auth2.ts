@@ -3,6 +3,8 @@
 import type { Express } from 'express';
 import type { AuthRequest } from '../../../src/middleware/auth.ts';
 import { sql as sqlTag } from 'drizzle-orm';
+import { roleRegistry, requirePermission } from '../../../src/middleware/auth.ts';
+import { loadRoles } from '../../routes/roles.ts';
 
 export function registerAuth2Routes(app: Express, deps: any) {
   const {
@@ -10,7 +12,7 @@ export function registerAuth2Routes(app: Express, deps: any) {
     requireAdmin, requireAuth, respondIfDbWriteError, schema, sendRouteError,
   } = deps;
 
-  app.get('/api/auth/users', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  app.get('/api/auth/users', requireAuth, requireAdmin, requirePermission('users.manage'), async (req: AuthRequest, res) => {
     try {
       const allUsers = await db.select({
         id: schema.users.id,
@@ -18,6 +20,7 @@ export function registerAuth2Routes(app: Express, deps: any) {
         name: schema.users.name,
         email: schema.users.email,
         role: schema.users.role,
+        employeeId: schema.users.employeeId,
         createdAt: schema.users.createdAt
       }).from(schema.users).orderBy(asc(schema.users.id));
       { // B2f: نتيجة القاعدة تُعاد كما هي ولو فارغة (لا قيم افتراضية من الذاكرة)
@@ -29,7 +32,7 @@ export function registerAuth2Routes(app: Express, deps: any) {
     res.json(mem.inMemoryUsers.map(({ password, ...safeUser }) => safeUser));
   });
 
-  app.post('/api/auth/users', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  app.post('/api/auth/users', requireAuth, requireAdmin, requirePermission('users.manage'), async (req: AuthRequest, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'غير مصرح لك بإجراء هذه العملية' });
@@ -38,6 +41,10 @@ export function registerAuth2Routes(app: Express, deps: any) {
       if (!username || !password || !name) {
         return res.status(400).json({ error: 'الاسم واسم المستخدم وكلمة المرور مطلوبة' });
       }
+      // B9: الدور لازم يكون معرّفاً بجدول الأدوار
+      if (role && !roleRegistry.get(String(role))) return res.status(400).json({ error: `الدور «${role}» غير معرّف؛ أضفه من إدارة الأدوار` });
+      // ما يُسند دوراً فيه صلاحيات ما يملكها المُسنِد (مراجعة B9 H2)
+      if (role) { const mine = new Set((req as any).user?.permissions || []); const extra = (roleRegistry.get(String(role))?.permissions || []).filter((p: string) => !mine.has(p)); if (extra.length) return res.status(403).json({ error: `ما تكدر تُسند دوراً فيه صلاحيات ما تملكها: ${extra.join('، ')}` }); }
 
       try {
         const [existing] = await db.select().from(schema.users).where(eq(schema.users.username, username)).limit(1);
@@ -62,6 +69,7 @@ export function registerAuth2Routes(app: Express, deps: any) {
         });
 
         if (newUser) {
+          await loadRoles(db, schema).catch((e: any) => console.error('[users] تعذّر تحديث سجل المستخدمين:', e?.message)); // B9: يسري فوراً
           return res.status(201).json({
             id: newUser.id,
             username: newUser.username,
@@ -97,7 +105,7 @@ export function registerAuth2Routes(app: Express, deps: any) {
     }
   });
 
-  app.put('/api/auth/users/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  app.put('/api/auth/users/:id', requireAuth, requireAdmin, requirePermission('users.manage'), async (req: AuthRequest, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'غير مصرح لك بإجراء هذه العملية' });
@@ -108,7 +116,10 @@ export function registerAuth2Routes(app: Express, deps: any) {
       }
 
       const { username, password, name, email, role } = req.body;
-      
+      if (role && !roleRegistry.get(String(role))) return res.status(400).json({ error: `الدور «${role}» غير معرّف؛ أضفه من إدارة الأدوار` });
+      // ما يُسند دوراً فيه صلاحيات ما يملكها المُسنِد (مراجعة B9 H2)
+      if (role) { const mine = new Set((req as any).user?.permissions || []); const extra = (roleRegistry.get(String(role))?.permissions || []).filter((p: string) => !mine.has(p)); if (extra.length) return res.status(403).json({ error: `ما تكدر تُسند دوراً فيه صلاحيات ما تملكها: ${extra.join('، ')}` }); }
+
       try {
         if (username) {
           const [existing] = await db.select().from(schema.users).where(eq(schema.users.username, username)).limit(1);
@@ -120,6 +131,10 @@ export function registerAuth2Routes(app: Express, deps: any) {
         const [currentUserToEdit] = await db.select().from(schema.users).where(eq(schema.users.id, id)).limit(1);
         if (currentUserToEdit && currentUserToEdit.username === 'admin' && username && username !== 'admin') {
           return res.status(400).json({ error: 'لا يمكن تغيير اسم مستخدم مدير النظام الرئيسي (admin)' });
+        }
+        // ما يغيّر المستخدم دوره هو (حتى ما يرفع صلاحياته أو يُقفل نفسه)
+        if (currentUserToEdit && role && role !== currentUserToEdit.role && currentUserToEdit.username === (req as any).user?.username) {
+          return res.status(400).json({ error: 'ما تكدر تغيّر دورك أنت؛ يغيّره مدير آخر' });
         }
         if (currentUserToEdit && currentUserToEdit.username === 'admin' && role && role !== 'admin') {
           return res.status(400).json({ error: 'لا يمكن سحب صلاحية مدير النظام من الحساب الرئيسي' });
@@ -148,6 +163,7 @@ export function registerAuth2Routes(app: Express, deps: any) {
         });
 
         if (updatedUser) {
+          await loadRoles(db, schema).catch((e: any) => console.error('[users] تعذّر تحديث سجل المستخدمين:', e?.message)); // B9: يسري فوراً
           return res.json({
             id: updatedUser.id,
             username: updatedUser.username,
@@ -181,7 +197,7 @@ export function registerAuth2Routes(app: Express, deps: any) {
     }
   });
 
-  app.delete('/api/auth/users/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  app.delete('/api/auth/users/:id', requireAuth, requireAdmin, requirePermission('users.manage'), async (req: AuthRequest, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'غير مصرح لك بإجراء هذه العملية' });
@@ -206,6 +222,7 @@ export function registerAuth2Routes(app: Express, deps: any) {
       }
 
       mem.inMemoryUsers = mem.inMemoryUsers.filter(u => u.id !== id);
+      await loadRoles(db, schema).catch((e: any) => console.error('[users] تعذّر تحديث سجل المستخدمين:', e?.message)); // B9: يسري فوراً
       res.json({ success: true });
     } catch (error: any) {
       console.error('Error deleting user:', error);

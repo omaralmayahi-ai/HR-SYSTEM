@@ -21,6 +21,8 @@ import { registerOfficialHolidaysRoutes } from './server/routes/officialHolidays
 import { registerPayrollRoutes } from './server/routes/payroll.ts';
 import { registerPayrollPeriodRoutes } from './server/routes/payrollPeriods.ts';
 import { registerPayrollStateRoutes } from './server/routes/payrollStates.ts';
+import { registerRoleRoutes, loadRoles } from './server/routes/roles.ts';
+import { createRequestAudit } from './server/requestAudit.ts';
 import { startDueMovementsJob } from './server/careerMovements.ts';
 import { registerAnnualPlanRoutes } from './server/routes/annualPlans.ts';
 import { registerSalaryRoutes } from './server/routes/salaries.ts';
@@ -125,6 +127,8 @@ async function startServer() {
     res.status(up ? 200 : 503).json({ status: up ? 'ok' : 'db_unavailable', db: up ? 'up' : 'down', migrations: getMigrationStatus().status });
   });
   app.use('/api', dbGate.middleware);
+  // B9: سجل تدقيق لكل عملية كتابة (بعد انتهاء الرد، بالمستخدم الذي حدده requireAuth)
+  app.use('/api', createRequestAudit(row => db.insert(schema.requestAudit).values(row)));
   // أداء: قائمة المستحقين تُحسب مرة وتُحفظ دقيقتين؛ أي كتابة ناجحة تبطلها
   const dueListCache = createSingleFlightCache<any>({ ttlMs: 120_000 });
   // تسخين: أول احتساب بعد الإقلاع بالخلفية، فأول فتح للوحة التحكم ما ينتظر
@@ -2315,6 +2319,9 @@ async function startServer() {
   registerPayrollRoutes(app, routeCtx); // B8a1
   registerPayrollPeriodRoutes(app, routeCtx); // B8a3
   registerPayrollStateRoutes(app, routeCtx); // B8b
+  registerRoleRoutes(app, routeCtx); // B9
+  loadRoles(db, schema).catch(e => console.error('[roles] تعذّر تحميل الأدوار؛ تُستخدم الافتراضية:', e?.message));
+  setInterval(() => { loadRoles(db, schema).catch(() => {}); }, 60_000).unref?.();
   const settingsLists = registerSettingsListRoutes(app, {
     SALARY_TABLE, asc, bothCases, camelToSnake, checkReferentialUsage, db, desc, eq, inMemoryEmployees: mem.inMemoryEmployees, jobTitlesCache,
     logRecalcError, mapKeys, registerLookupRoutes, registerWorkLocationRoutes, requireAdmin, requireAuth, requireWriter,

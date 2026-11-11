@@ -2,6 +2,7 @@
 // كل إضافة أو تعديل أو ربط عملية بانتظار مدير ثانٍ (مب9) لأنها تغيّر الرواتب.
 import type { Express } from 'express';
 import type { RouteContext } from '../context.ts';
+import { requirePermission } from '../../src/middleware/auth.ts';
 import { sql } from 'drizzle-orm';
 import { PayrollError } from '../payroll/catalog.ts';
 import { submit } from '../payroll/pending.ts';
@@ -16,7 +17,7 @@ export function registerPayrollStateRoutes(app: Express, ctx: RouteContext) {
     sendRouteError(res, err, op);
   };
 
-  app.get('/api/payroll/states', requireAuth, requireWriter, async (_req, res) => {
+  app.get('/api/payroll/states', requireAuth, requirePermission('payroll.view'), async (_req, res) => {
     try {
       const states = rows(await db.execute(sql`SELECT id, code, name, nominal_pct::text nominal_pct, held_pct::text held_pct, default_behavior, item_behaviors, retirement, precedence,
         verification, legal_basis, is_active, updated_at FROM entitlement_states ORDER BY precedence, id`));
@@ -26,11 +27,11 @@ export function registerPayrollStateRoutes(app: Express, ctx: RouteContext) {
     } catch (err: any) { fail(res, err, 'قراءة حالات الاستحقاق'); }
   });
 
-  app.post('/api/payroll/states', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/payroll/states', requireAuth, requirePermission('payroll.settings'), async (req, res) => {
     try { res.status(202).json(await submit(db, schema, 'entitlement_state', { id: null, fields: req.body || {} }, who(req))); }
     catch (err: any) { fail(res, err, 'إضافة حالة استحقاق'); }
   });
-  app.put('/api/payroll/states/:id', requireAuth, requireAdmin, async (req, res) => {
+  app.put('/api/payroll/states/:id', requireAuth, requirePermission('payroll.settings'), async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) throw new PayrollError('معرّف غير صالح');
@@ -38,13 +39,13 @@ export function registerPayrollStateRoutes(app: Express, ctx: RouteContext) {
       res.status(202).json(await submit(db, schema, 'entitlement_state', { id, fields }, who(req)));
     } catch (err: any) { fail(res, err, 'تعديل حالة استحقاق'); }
   });
-  app.post('/api/payroll/state-mappings', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/payroll/state-mappings', requireAuth, requirePermission('payroll.settings'), async (req, res) => {
     try { res.status(202).json(await submit(db, schema, 'state_mapping', { table: req.body?.table, id: req.body?.id, state_id: req.body?.state_id }, who(req))); }
     catch (err: any) { fail(res, err, 'ربط حالة استحقاق'); }
   });
 
   // أرصدة الموظف الآن (من الاحتسابات المعتمدة والمُصدَرة): الأقساط، المحجوز، الرصيد المدين
-  app.get('/api/payroll/employees/:employeeId/balances', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/employees/:employeeId/balances', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const eid = Number(req.params.employeeId);
       if (!Number.isInteger(eid) || eid <= 0) throw new PayrollError('رقم الموظف غير صالح');

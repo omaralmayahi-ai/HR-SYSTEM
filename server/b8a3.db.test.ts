@@ -25,6 +25,9 @@ describe.skipIf(!enabled)('B8a3 الفترات على قاعدة حقيقية', 
     const [c] = await db.insert(schema.payrollCategories).values({ code: tag, name: 'فئة اختبار ' + tag, kind: 'دائم', isActive: true }).returning();
     catId = c.id;
     await db.insert(schema.payrollCategoryRules).values({ serviceType: service, contractType: null, categoryId: catId });
+    // قاعدة جديدة (CI) بلا شهادات: نزرع اثنتين للاختبار
+    await db.execute(sql`INSERT INTO education_degrees (name, allowance_rate) SELECT x, 0 FROM (VALUES ('دبلوم اختبار'), ('بكالوريوس اختبار')) v(x)
+      WHERE (SELECT count(*) FROM education_degrees) < 2`);
     const degs = rows(await db.execute(sql`SELECT id, name FROM education_degrees ORDER BY id LIMIT 2`));
     [deg1, deg2] = degs;
     const item = async (code: string, method: string, props: any, extra: any = {}) => {

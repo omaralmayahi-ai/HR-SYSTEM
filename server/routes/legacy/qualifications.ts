@@ -1,6 +1,7 @@
 // server/routes/legacy/qualifications.ts — نُقل حرفياً من server.ts (B3، الدفعات 3–7).
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
+import { forbidOwnRecordBody } from '../../ownRecord.ts';
 
 export function registerQualificationsRoutes(app: Express, deps: any) {
   const {
@@ -77,7 +78,7 @@ export function registerQualificationsRoutes(app: Express, deps: any) {
     }));
   });
 
-  app.post('/api/qualifications', requireAuth, requireWriter, async (req, res) => {
+  app.post('/api/qualifications', requireAuth, requireWriter, forbidOwnRecordBody(db), async (req, res) => {
     const data = req.body;
     const employeeId = data.employee_id !== undefined ? parseInt(data.employee_id) : (data.employeeId !== undefined ? parseInt(data.employeeId) : undefined);
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });

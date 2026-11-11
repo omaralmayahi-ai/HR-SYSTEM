@@ -1,6 +1,7 @@
 // server/routes/legacy/leaves2.ts — نُقل حرفياً من server.ts (B3، الدفعات 3–7).
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
+import { forbidOwnRecordBody, forbidOwnRecordRow } from '../../ownRecord.ts';
 import type { AuthRequest } from '../../../src/middleware/auth.ts';
 
 import { sql, asc } from 'drizzle-orm';
@@ -67,9 +68,9 @@ export function registerLeaves2Routes(app: Express, deps: any) {
     }
   });
 
-  app.put('/api/leaves/:id', requireAuth, requireWriter, async (req, res) => {
+  app.put('/api/leaves/:id', requireAuth, requireWriter, forbidOwnRecordRow(db, 'leave_requests'), async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       if (isNaN(id)) {
         return res.status(400).json({ error: 'معرّف طلب الإجازة غير صالح' });
       }
@@ -196,7 +197,7 @@ export function registerLeaves2Routes(app: Express, deps: any) {
     delete m.appealStatus; // قبول الطعن يُسقط الأثر — يكون بأمر (سند «قرار قضائي») لا بالتعديل
   };
 
-  app.post('/api/penalties', requireAuth, requireWriter, async (req, res) => {
+  app.post('/api/penalties', requireAuth, requireWriter, forbidOwnRecordBody(db), async (req, res) => {
     try {
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
@@ -285,9 +286,9 @@ export function registerLeaves2Routes(app: Express, deps: any) {
     }
   });
 
-  app.put('/api/penalties/:id', requireAuth, requireWriter, async (req, res) => {
+  app.put('/api/penalties/:id', requireAuth, requireWriter, forbidOwnRecordRow(db, 'penalties'), async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
       const data = req.body;
       const mappedData = mapKeys(data, snakeToCamel);
