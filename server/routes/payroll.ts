@@ -6,7 +6,9 @@ import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { PayrollError, CONDITION_FIELDS, OPERATORS, LEVEL_SOURCES } from '../payroll/catalog.ts';
 import { submit, decide, OP_TYPES, type OpType } from '../payroll/pending.ts';
 import { dataQuality } from '../payroll/quality.ts';
-import { todayBaghdad } from '../careerMovements.ts';
+import { todayBaghdad, isIsoDate } from '../careerMovements.ts';
+import { computePeriod, serializeResult, previewItemVersion } from '../payroll/loader.ts';
+import { validateProps } from '../payroll/catalog.ts';
 
 export function registerPayrollRoutes(app: Express, ctx: RouteContext) {
   const { db, schema, requireAuth, requireWriter, requireAdmin, sendRouteError, statusRegistry } = ctx;
@@ -131,6 +133,57 @@ export function registerPayrollRoutes(app: Express, ctx: RouteContext) {
 
   app.get('/api/payroll/data-quality', requireAuth, async (_req, res) => {
     try { res.json(await dataQuality(db, await statusRegistry.namesWhere('payrollEligible'))); } catch (err: any) { fail(res, err, 'فحص جودة بيانات الرواتب'); }
+  });
+
+  // B8a2: معاينة شهر لموظف (مسار الاحتساب نفسه — مب5). ما تُحفظ.
+  const ym = (req: any) => {
+    const t = todayBaghdad();
+    const year = int(req.query.year ?? req.body?.year) || Number(t.slice(0, 4));
+    const month = int(req.query.month ?? req.body?.month) || Number(t.slice(5, 7));
+    if (month < 1 || month > 12 || year < 2000 || year > 2100) throw new PayrollError('الشهر أو السنة غير صالح');
+    return { year, month };
+  };
+  const permCategory = async (req: any) => {
+    const code = String(req.query.category || req.body?.category || 'PERM');
+    const [c] = await db.select().from(schema.payrollCategories).where(eq(schema.payrollCategories.code, code));
+    if (!c) throw new PayrollError('فئة الرواتب غير موجودة', 404);
+    return c.id;
+  };
+  // رواتب الآخرين: مستخدمو الإدخال والمدير فقط (دور «employee» اطلاع ما يشوف رواتب) — إلى أن تجي أذونات B9
+  app.get('/api/payroll/preview/:employeeId', requireAuth, requireWriter, async (req, res) => {
+    try {
+      const { year, month } = ym(req);
+      const r = await computePeriod(db, { year, month, categoryId: await permCategory(req), eligibleStatuses: await statusRegistry.namesWhere('payrollEligible'), employeeIds: [int(req.params.employeeId)] });
+      if (!r.results[0]) return res.status(404).json({ error: 'الموظف غير موجود' });
+      res.json({ year, month, ...serializeResult(r.results[0]), note: 'معاينة بالبنود الفعّالة فقط؛ البنود المسودة ما تدخل الاحتساب (مب8)' });
+    } catch (err: any) { fail(res, err, 'معاينة الراتب'); }
+  });
+  // معاينة الأثر تحسب الشركة كلها مرتين: نتيجة مخزنة دقيقتين لنفس الطلب، واحتساب واحد بنفس الوقت
+  const previewCache = new Map<string, { at: number; value: any }>();
+  let previewBusy = false;
+  app.post('/api/payroll/items/:id/preview', requireAuth, requireWriter, async (req, res) => {
+    try {
+      const itemId = int(req.params.id);
+      const vf = String(req.body?.valid_from || todayBaghdad()), vt = req.body?.valid_to ? String(req.body.valid_to) : null;
+      if (!isIsoDate(vf) || (vt !== null && !isIsoDate(vt))) throw new PayrollError('التواريخ بصيغة YYYY-MM-DD');
+      if (vt !== null && vt < vf) throw new PayrollError('تاريخ النهاية قبل البداية');
+      const key = JSON.stringify([itemId, vf, vt, req.body?.props ?? null]);
+      const hit = previewCache.get(key);
+      if (hit && Date.now() - hit.at < 120_000) return res.json({ ...hit.value, cached: true });
+      if (previewBusy) return res.status(429).json({ error: 'معاينة أخرى قيد الاحتساب؛ أعد المحاولة بعد لحظات' });
+      const [item] = await db.select().from(schema.payItems).where(eq(schema.payItems.id, itemId));
+      if (!item) return res.status(404).json({ error: 'البند غير موجود' });
+      const validFrom = vf;
+      const props = validateProps(item, req.body?.props);
+      const year = Number(validFrom.slice(0, 4)), month = Number(validFrom.slice(5, 7));
+      previewBusy = true;
+      try {
+        const value = await previewItemVersion(db, { year, month, categoryId: item.categoryId, eligibleStatuses: await statusRegistry.namesWhere('payrollEligible'), itemId, props, validFrom, validTo: vt });
+        if (previewCache.size > 50) previewCache.clear();
+        previewCache.set(key, { at: Date.now(), value });
+        res.json(value);
+      } finally { previewBusy = false; }
+    } catch (err: any) { fail(res, err, 'معاينة أثر البند'); }
   });
 
   app.get('/api/payroll/audit', requireAuth, requireAdmin, async (req, res) => {
