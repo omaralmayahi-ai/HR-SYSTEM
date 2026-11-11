@@ -1,6 +1,8 @@
 // server/payroll/loader.ts — B8a2: يحمّل مدخلات فترة كاملة بقراءات جماعية «كما كانت معروفة» بلحظة knownAt،
 // ثم يبني لكل موظف مدخلات المحرك. لا احتساب هنا.
 import { sql } from 'drizzle-orm';
+import { leaveStatusVariants } from '../leaveStatus.ts';
+import { isSalaryCutPenalty, isPenaltyInEffect } from '../../src/lib/promotionEngine.ts';
 import { money, toDecimal, sum, minM, maxM, type Micro } from './money.ts';
 import { monthBounds, normAr, addDays, computeEmployee, type EngineCtx, type EmployeeIn, type ItemIn } from './engine.ts';
 
@@ -10,7 +12,10 @@ export const ENGINE_FIELDS = ['grade', 'step', 'status', 'service_type', 'contra
 const rows = (r: any) => ((r as any).rows ?? r) as any[];
 const isoOrNull = (v: any) => { const s = String(v ?? '').trim().slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null; };
 
-export interface LoadOpts { year: number; month: number; categoryId: number; eligibleStatuses: string[]; knownAt?: Date | string; employeeIds?: number[]; sequential?: boolean }
+export interface LoadOpts { year: number; month: number; categoryId: number; eligibleStatuses: string[]; knownAt?: Date | string; employeeIds?: number[]; sequential?: boolean; periodId?: number }
+
+const trimPct = (v: string) => String(Number(v));
+const APPROVED_LEAVE = [...leaveStatusVariants('معتمد'), 'تم اعتماد الإجازة'].map(x => x.trim().toLowerCase());
 
 export async function loadPeriodInputs(db: any, o: LoadOpts) {
   const { start, end } = monthBounds(o.year, o.month);
@@ -23,7 +28,7 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
   const idFilter = o.employeeIds && o.employeeIds.length ? sql.raw(`AND e.id = ANY(ARRAY[${o.employeeIds.map(Number).filter(Number.isInteger).join(',')}]::int[])`) : sql.raw('');
   const fieldsArr = sql.raw(`ARRAY[${ENGINE_FIELDS.map(f => `'${f}'`).join(',')}]::text[]`);
 
-  const [rules, versions, scaleRows, items, itemVersions, deg, resp, locs, units, emps] = await runAll([
+  const [rules, versions, scaleRows, items, itemVersions, deg, resp, locs, units, emps, stateRows, statusStates] = await runAll([
     () => db.execute(sql`SELECT service_type, contract_type, category_id FROM payroll_category_rules ORDER BY id`),
     () => db.execute(sql`SELECT id, effective_from::text ef FROM salary_scale_versions WHERE status = 'معتمد' AND coalesce(approved_at, '-infinity') <= ${knownAt}::timestamptz AND effective_from <= ${end}::date ORDER BY effective_from`),
     () => db.execute(sql`SELECT s.version_id, s.grade, s.step, s.amount FROM salary_scale s JOIN salary_scale_versions v ON v.id = s.version_id WHERE v.status = 'معتمد' AND coalesce(v.approved_at, '-infinity') <= ${knownAt}::timestamptz AND v.effective_from <= ${end}::date ORDER BY s.version_id, s.grade, s.step`),
@@ -37,6 +42,9 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
     () => db.execute(sql`SELECT id, parent_id FROM org_units ORDER BY id`),
     () => db.execute(sql`SELECT e.id, e.full_name, e.company_number, e.department, e.section, e.job_title, e.current_appointment_date, e.first_appointment_date, e.appointment_date,
         ${sql.raw(ENGINE_FIELDS.map(f => `e.${f}`).join(', '))} FROM employees e WHERE e.created_at <= ${knownAt}::timestamptz ${idFilter} ORDER BY e.id`),
+    // B8b: حالات الاستحقاق وربط حالات الموظف بها
+    () => db.execute(sql`SELECT id, code, name, nominal_pct::text np, held_pct::text hp, default_behavior, item_behaviors, retirement, precedence, verification FROM entitlement_states WHERE is_active ORDER BY id`),
+    () => db.execute(sql`SELECT name, entitlement_state_id FROM employee_statuses WHERE entitlement_state_id IS NOT NULL ORDER BY id`),
   ]);
 
   const amounts = new Map<number, Map<string, Micro>>();
@@ -59,12 +67,19 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
     orgParents: new Map(rows(units).map(u => [Number(u.id), u.parent_id === null ? null : Number(u.parent_id)])),
     eligibleStatuses: new Set(o.eligibleStatuses.map(s => String(s).trim())),
     categoryRules: rows(rules).map(r => ({ serviceType: r.service_type, contractType: r.contract_type, categoryId: Number(r.category_id) })),
+    states: new Map(rows(stateRows).map(r => [Number(r.id), { id: Number(r.id), code: r.code, name: r.name, nominalPct: trimPct(r.np), heldPct: trimPct(r.hp),
+      defaultBehavior: r.default_behavior, itemBehaviors: r.item_behaviors || {}, retirement: r.retirement, precedence: Number(r.precedence), verification: r.verification }])),
+    statusStates: new Map(rows(statusStates).map(r => [String(r.name).trim(), Number(r.entitlement_state_id)])),
   };
 
   const empRows = rows(emps);
   const ids = empRows.map(e => Number(e.id));
   const idArr = sql.raw(`ARRAY[${ids.join(',') || 0}]::int[]`);
-  const [hist, assigns, members, facts, exts] = await runAll([
+  const iso = `'^[0-9]{4}-[0-9]{2}-[0-9]{2}$'`;
+  // احتسابات معتمدة/مُصدَرة لفترات قبل هذا الشهر (معروفة بلحظة knownAt) — مصدر الأرصدة
+  const priorRuns = sql`r.state IN ('معتمد', 'مُصدَر') AND p.category_id = ${o.categoryId} AND (p.year * 12 + p.month) < ${o.year * 12 + o.month}
+    AND coalesce(p.approved_at, r.finished_at) <= ${knownAt}::timestamptz ${o.periodId ? sql`AND p.id <> ${o.periodId}` : sql``}`;
+  const [hist, assigns, members, facts, exts, leaves, cuts, paidRows, heldRows, debitRows] = await runAll([
     () => db.execute(sql`
       WITH known AS (
         SELECT h.id, h.employee_id, h.field, h.value, h.valid_from, h.recorded_at, h.order_id, h.supersedes_id, h.source FROM employee_field_history h
@@ -89,6 +104,34 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
       ORDER BY k.member_id, k.fact, k.valid_from NULLS FIRST, k.recorded_at, k.id`),
     () => db.execute(sql`SELECT x.member_id, x.valid_from::text vf, x.valid_to::text vt FROM family_extensions x JOIN family_members m ON m.id = x.member_id
       WHERE m.employee_id = ANY(${idArr}) AND x.recorded_at <= ${knownAt}::timestamptz ORDER BY x.member_id, x.valid_from, x.id`),
+    // الإجازات المعتمدة ← حالتها (ق-17): نوع الإجازة بالمعرّف، أو بالاسم للسجلات القديمة
+    () => db.execute(sql`SELECT lr.employee_id, lr.start_date sd, lr.end_date ed, lr.leave_type,
+        coalesce(lt.entitlement_state_id, (SELECT es.id FROM entitlement_states es WHERE es.code = CASE lt.salary_payment_type
+          WHEN 'بدون_راتب' THEN 'UNPAID' WHEN 'استقطاع_جزئي' THEN 'HALF_PAY' WHEN 'منح_الراتب_والمخصصات_الثابتة_فقط' THEN 'FIXED_ONLY' END)) sid
+      FROM leave_requests lr LEFT JOIN LATERAL (SELECT t.* FROM leave_types t WHERE t.id = lr.leave_type_id OR (lr.leave_type_id IS NULL AND t.name = lr.leave_type)
+        ORDER BY (t.id = lr.leave_type_id) DESC, t.id LIMIT 1) lt ON true
+      WHERE lr.employee_id = ANY(${idArr}) AND lower(trim(lr.status)) = ANY(${sql.raw(`ARRAY[${APPROVED_LEAVE.map(x => `'${x.replace(/'/g, "''")}'`).join(',')}]::text[]`)})
+        AND ((lr.start_date ~ ${sql.raw(iso)} AND lr.end_date ~ ${sql.raw(iso)} AND lr.start_date <= ${end} AND lr.end_date >= ${start})
+          OR NOT (lr.start_date ~ ${sql.raw(iso)} AND lr.end_date ~ ${sql.raw(iso)}))
+        AND (lr.created_at IS NULL OR lr.created_at <= ${knownAt}::timestamptz) ORDER BY lr.employee_id, lr.start_date, lr.id`),
+    // عقوبة قطع الراتب: أيامها من تاريخ التنفيذ
+    () => db.execute(sql`SELECT p.id, p.employee_id, p.penalty_type, p.status, p.appeal_status, coalesce(nullif(p.implementation_date, ''), p.penalty_date) sd, p.days_count
+      FROM penalties p WHERE p.employee_id = ANY(${idArr}) AND p.penalty_type LIKE '%قطع%' AND coalesce(p.days_count, 0) > 0
+        AND (p.created_at IS NULL OR p.created_at <= ${knownAt}::timestamptz) ORDER BY p.employee_id, p.id`),
+    // الأرصدة ببداية الفترة، مشتقة من الاحتسابات المعتمدة/المُصدَرة لفترات أسبق (القسم 3 من تصميم B8b)
+    () => db.execute(sql`SELECT l.employee_id, l.assignment_id, sum(l.amount)::text paid FROM payroll_lines l
+      JOIN payroll_runs r ON r.id = l.run_id JOIN payroll_periods p ON p.id = r.period_id JOIN pay_items i ON i.id = l.item_id
+      WHERE l.employee_id = ANY(${idArr}) AND i.method = 'installments' AND l.assignment_id IS NOT NULL AND ${priorRuns}
+      GROUP BY l.employee_id, l.assignment_id ORDER BY l.employee_id, l.assignment_id`),
+    () => db.execute(sql`SELECT l.employee_id, sum(CASE WHEN l.kind = 'held' THEN l.amount ELSE -l.amount END)::text held FROM payroll_lines l
+      JOIN payroll_runs r ON r.id = l.run_id JOIN payroll_periods p ON p.id = r.period_id
+      WHERE l.employee_id = ANY(${idArr}) AND l.kind IN ('held', 'held_release') AND ${priorRuns} GROUP BY l.employee_id ORDER BY l.employee_id`),
+    () => db.execute(sql`SELECT x.employee_id, sum(x.amt)::text debit FROM (
+        SELECT res.employee_id, res.negative amt FROM payroll_results res JOIN payroll_runs r ON r.id = res.run_id JOIN payroll_periods p ON p.id = r.period_id
+          WHERE res.employee_id = ANY(${idArr}) AND res.negative > 0 AND ${priorRuns}
+        UNION ALL
+        SELECT l.employee_id, -l.amount FROM payroll_lines l JOIN payroll_runs r ON r.id = l.run_id JOIN payroll_periods p ON p.id = r.period_id
+          WHERE l.employee_id = ANY(${idArr}) AND l.kind = 'debit_carry' AND ${priorRuns}) x GROUP BY x.employee_id ORDER BY x.employee_id`),
   ]);
 
   const tl = new Map<number, Record<string, { from: string | null; value: any }[]>>();
@@ -108,6 +151,34 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
   const fct = new Map<number, any[]>(); for (const f of rows(facts)) { const e = memberEmp.get(Number(f.member_id)); if (e === undefined) continue; (fct.get(e) || fct.set(e, []).get(e)!).push({ memberId: Number(f.member_id), fact: f.fact, value: f.value, validFrom: f.vf }); }
   const ext = new Map<number, any[]>(); for (const x of rows(exts)) { const e = memberEmp.get(Number(x.member_id)); if (e === undefined) continue; (ext.get(e) || ext.set(e, []).get(e)!).push({ memberId: Number(x.member_id), validFrom: x.vf, validTo: x.vt }); }
 
+  // مدى أيام كل حالة، مقصوص على الشهر
+  const clip = (a: string, b: string) => ({ from: a < start ? start : a, to: b > end ? end : b });
+  const st = new Map<number, any[]>();
+  const pushState = (eid: number, r: any) => { (st.get(eid) || st.set(eid, []).get(eid)!).push(r); };
+  const isoRe = /^\d{4}-\d{2}-\d{2}$/;
+  const inputIssues = new Map<number, any[]>();
+  const issue = (eid: number, code: string, message: string) => { (inputIssues.get(eid) || inputIssues.set(eid, []).get(eid)!).push({ code, message }); };
+  for (const l of rows(leaves)) {
+    const eid = Number(l.employee_id);
+    // تاريخ غير صالح ما يُهمل بصمت (AGENTS 2): يُبلَّغ ويُصرف بلا أثر للإجازة حتى يُصحح
+    if (!isoRe.test(String(l.sd ?? '')) || !isoRe.test(String(l.ed ?? '')) || l.ed < l.sd) { issue(eid, 'STATE_DATE_INVALID', `إجازة ${l.leave_type ?? ''} بتواريخ غير صالحة (${l.sd} ← ${l.ed})؛ ما طُبّق أثرها`); continue; }
+    if (l.sid) pushState(eid, { ...clip(l.sd, l.ed), stateId: Number(l.sid), source: `إجازة ${l.leave_type ?? ''}`.trim() });
+  }
+  const cutState = [...ctx.states!.values()].find(x => x.code === 'SALARY_CUT');
+  for (const c of rows(cuts)) {
+    // نفس قواعد العقوبات بالنظام: تسمية قطع الراتب، والنافذة غير المقبول طعنها
+    if (!isSalaryCutPenalty(c.penalty_type) || !isPenaltyInEffect({ status: c.status, appealStatus: c.appeal_status } as any)) continue;
+    const eid = Number(c.employee_id);
+    if (!isoRe.test(String(c.sd ?? ''))) { issue(eid, 'STATE_DATE_INVALID', `عقوبة قطع راتب بتاريخ غير صالح (${c.sd})؛ ما طُبّق أثرها`); continue; }
+    if (c.sd > end || !cutState) continue;
+    const to = addDays(c.sd, Number(c.days_count) - 1);
+    if (to >= start) pushState(eid, { ...clip(c.sd, to), stateId: cutState.id, source: 'عقوبة قطع الراتب' });
+  }
+  const paid = new Map<number, Map<number, Micro>>();
+  for (const r of rows(paidRows)) { const e = Number(r.employee_id); (paid.get(e) || paid.set(e, new Map()).get(e)!).set(Number(r.assignment_id), money(r.paid)); }
+  const held = new Map<number, Micro>(rows(heldRows).map(r => [Number(r.employee_id), money(r.held)]));
+  const debit = new Map<number, Micro>(rows(debitRows).map(r => [Number(r.employee_id), money(r.debit)]));
+
   const employees: (EmployeeIn & { snapshot: any })[] = empRows.map(e => {
     const id = Number(e.id);
     const timeline = { ...(tl.get(id) || {}) };
@@ -117,6 +188,9 @@ export async function loadPeriodInputs(db: any, o: LoadOpts) {
       serviceStart: isoOrNull(e.current_appointment_date) || isoOrNull(e.first_appointment_date) || isoOrNull(e.appointment_date),
       assignments: asg.get(id) || [],
       family: { members: mem.get(id) || [], facts: fct.get(id) || [], extensions: ext.get(id) || [] },
+      states: st.get(id) || [],
+      inputIssues: inputIssues.get(id) || [],
+      balances: { installmentsPaid: paid.get(id) || new Map(), held: maxM(held.get(id) ?? 0n, 0n), debit: maxM(debit.get(id) ?? 0n, 0n) },
       snapshot: { full_name: e.full_name, company_number: e.company_number, department: e.department, section: e.section, job_title: e.job_title, grade: e.grade, step: e.step },
     };
   });
