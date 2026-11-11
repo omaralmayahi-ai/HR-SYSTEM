@@ -16,7 +16,8 @@ import {
   updateAnnualIncrement 
 } from '@/lib/salaryTable';
 
-export default function SalaryScaleSettings() {
+export default function SalaryScaleSettings({ versionId = null, versionName = '', onClose } = {}) {
+  // B8a0: بلا versionId = عرض السلّم النافذ للقراءة؛ التعديل على إصدار مسودة فقط ثم يُعتمد
   const [originalRecords, setOriginalRecords] = useState([]);
   const [records, setRecords] = useState([]);
   const [originalPromotionYears, setOriginalPromotionYears] = useState({});
@@ -103,7 +104,7 @@ export default function SalaryScaleSettings() {
   const fetchRecords = async () => {
     setLoading(true);
     try {
-      const data = await apiClient.entities.SalaryScale.list();
+      const data = versionId ? await apiClient.salaryScaleVersions.rows(versionId) : await apiClient.entities.SalaryScale.list();
       const recordsData = data || [];
       setRecords(recordsData);
       setOriginalRecords(JSON.parse(JSON.stringify(recordsData)));
@@ -112,7 +113,7 @@ export default function SalaryScaleSettings() {
       setPromotionYears(promos);
       setOriginalPromotionYears({ ...promos });
 
-      buildSalaryScaleMap(recordsData); // B4d: العلاوة من السلّم النافذ
+      if (!versionId) buildSalaryScaleMap(recordsData); // B4d: العلاوة من السلّم النافذ (لا من مسودة — B8a0)
       const incs = { ...ANNUAL_INCREMENTS };
       setAnnualIncrements(incs);
       setOriginalAnnualIncrements({ ...incs });
@@ -354,15 +355,22 @@ export default function SalaryScaleSettings() {
         step: r.step,
         amount: r.amount
       }));
-      await apiClient.entities.SalaryScale.bulkCreate(cleanedRecords);
-
-      // 2. Save promotion years and increments to global object and localStorage
-      Object.keys(promotionYears).forEach(g => {
-        updatePromotionYear(parseInt(g), promotionYears[g]);
-      });
-      Object.keys(annualIncrements).forEach(g => {
-        updateAnnualIncrement(parseInt(g), annualIncrements[g]);
-      });
+      const scaleChanged = JSON.stringify(cleanedRecords) !== JSON.stringify(originalRecords.map(r => ({ grade: r.grade, step: r.step, amount: r.amount })));
+      if (versionId) {
+        // B8a0: مبالغ المسودة فقط؛ ما تمس العلاوات والمدد العامة (المسودة غير نافذة بعد)
+        await apiClient.salaryScaleVersions.saveRows(versionId, cleanedRecords);
+      } else {
+        if (scaleChanged) {
+          throw new Error('مبالغ السلّم النافذ للقراءة فقط. أنشئ إصداراً جديداً من «إصدارات سلّم الرواتب» أعلاه، واضغط «تعديل المبالغ» عليه، ثم يعتمده مدير آخر.');
+        }
+        // مدد الترفيع والعلاوات (إعداد عام، مو مبالغ السلّم)
+        Object.keys(promotionYears).forEach(g => {
+          updatePromotionYear(parseInt(g), promotionYears[g]);
+        });
+        Object.keys(annualIncrements).forEach(g => {
+          updateAnnualIncrement(parseInt(g), annualIncrements[g]);
+        });
+      }
 
       // 3. Log the modification action
       await apiClient.logs.create({
@@ -460,6 +468,17 @@ export default function SalaryScaleSettings() {
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+      {/* B8a0: أي إصدار معروض */}
+      {versionId ? (
+        <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 flex items-center justify-between gap-3 text-xs" dir="rtl">
+          <span className="text-sky-800 font-bold">تعديل الإصدار المسودة «{versionName}» — الحفظ عليه فقط، ويصير نافذاً بعد ما يعتمده مدير آخر.</span>
+          {onClose && <button type="button" onClick={onClose} className="px-3 py-1 rounded-lg border border-sky-300 text-sky-700 bg-white">رجوع للنافذ</button>}
+        </div>
+      ) : (
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600" dir="rtl">
+          تعرض السلّم النافذ اليوم <b>للقراءة</b>. أي تغيير بالمبالغ: «إصدار جديد» من الإصدارات أعلاه، ثم «تعديل المبالغ»، ثم الاعتماد.
+        </div>
+      )}
       {/* Unsaved changes banner */}
       {isDirty && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 animate-fadeIn shadow-xs" dir="rtl">

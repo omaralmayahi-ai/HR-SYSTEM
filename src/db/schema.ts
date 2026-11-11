@@ -51,6 +51,9 @@ export const employees = pgTable('employees', {
   department: text('department'),
   section: text('section'),
   serviceType: text('service_type'),
+  contractType: text('contract_type'), // B8a0: نوع العقد (لفئة الرواتب، ق-1)
+  freeTransport: boolean('free_transport'), // B8a0: مشمول بالنقل المجاني (شرط مخصص الموقع، ت5)
+  riskExposure: text('risk_exposure'), // B8a0: التعرّض للخطورة (عمل/موقع بقرار، ت6)
   grade: integer('grade'),
   step: integer('step'),
   gradeDate: text('grade_date'),
@@ -781,12 +784,21 @@ export const salaryScaleVersions = pgTable('salary_scale_versions', {
   name: text('name').notNull().unique('salary_scale_versions_name_key'),
   legalBasis: text('legal_basis'), // السند القانوني
   effectiveFrom: date('effective_from', { mode: 'string' }),
-  isActive: boolean('is_active').notNull().default(false),
+  isActive: boolean('is_active').notNull().default(false), // B8a0: مشتق للعرض (النافذ اليوم)، الاختيار بالتاريخ والحالة
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }),
+  // B8a0: مسودة (تتعدل) / معتمد (مقفل، نافذ من تاريخه) / مؤرشف (لا يُختار)
+  status: text('status').notNull().default('مسودة'),
+  createdBy: text('created_by'),
+  updatedBy: text('updated_by'),
+  approvedBy: text('approved_by'),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  orderId: integer('order_id'),
 }, (t) => [
   uniqueIndex('salary_scale_versions_single_active').on(t.isActive).where(sql`${t.isActive}`),
+  uniqueIndex('salary_scale_versions_approved_from').on(t.effectiveFrom).where(sql`${t.status} = 'معتمد'`),
+  foreignKey({ name: 'salary_scale_versions_order_fkey', columns: [t.orderId], foreignColumns: [administrativeOrders.id] }).onDelete('restrict'),
 ]);
 
 export const salaryScale = pgTable('salary_scale', {
@@ -1344,4 +1356,20 @@ export const officialHolidays = pgTable('official_holidays', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   uniqueIndex('official_holidays_date_name').on(t.holidayDate, t.name),
+]);
+
+// B8a0: سجل تدقيق إلحاقي للرواتب وتغييرات المستخدمين (مشغّل يمنع التعديل والحذف)
+export const payrollAudit = pgTable('payroll_audit', {
+  id: serial('id').primaryKey(),
+  at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
+  actor: text('actor'),
+  action: text('action').notNull(),
+  entity: text('entity').notNull(),
+  entityId: text('entity_id'),
+  before: jsonb('before'),
+  after: jsonb('after'),
+  ip: text('ip'),
+}, (t) => [
+  index('payroll_audit_entity').on(t.entity, t.entityId),
+  index('payroll_audit_at').on(t.at),
 ]);

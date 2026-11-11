@@ -279,7 +279,8 @@ export async function ensureSchema() {
 
     await safeQuery(`ALTER TABLE salary_scale ADD COLUMN IF NOT EXISTS effective_from TEXT;`);
     // Backfill salary_scale: set effective_from to '2026-08-27' as initial tracking baseline date
-    await safeQuery(`UPDATE salary_scale SET effective_from = '2026-08-27' WHERE effective_from IS NULL;`);
+    // B8a0: الخانات المقفلة (إصدار معتمد أو مؤرشف) ما تُمس؛ الحقل قديم وغير مستعمل بالاحتساب
+    await safeQuery(`UPDATE salary_scale SET effective_from = '2026-08-27' WHERE effective_from IS NULL AND (version_id IS NULL OR version_id IN (SELECT id FROM salary_scale_versions WHERE status = 'مسودة'));`);
 
     await safeQuery(`
       CREATE TABLE IF NOT EXISTS allowances_deductions (

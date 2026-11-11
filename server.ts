@@ -662,6 +662,10 @@ async function startServer() {
         clean[k] = v;
       }
     }
+    // B8a0: النص الفارغ بعمود رقمي أو منطقي = فارغ (الاستمارة ترسل '' لحقل رواتب ما مسجل)
+    for (const [k, col] of Object.entries(getTableColumns(schema.employees)) as any[]) {
+      if (clean[k] === '' && ['PgInteger', 'PgReal', 'PgBoolean', 'PgSerial', 'PgNumeric'].includes(col?.columnType)) clean[k] = null;
+    }
     normalizeEmployeeIdentifiers(clean);
     return clean;
   }
@@ -972,7 +976,8 @@ async function startServer() {
   // إصلاح عاجل: أُزيل «موظف تجريبي أول وهمي» (id 1) — كان يُقدَّم على الموظف الحقيقي رقم 1 في المسارات التي تبحث في الذاكرة أولاً
   mem.inMemoryEmployees = [];
 
-  async function updateEmployeeCentralRecord(employeeId: number, partialData: any) {
+  // B8a0: opts.effectiveDate يؤرخ تغيّر الحقول المتتبعة بالسجل (مثل تاريخ كتاب احتساب الشهادة) بدل يوم الإدخال
+  async function updateEmployeeCentralRecord(employeeId: number, partialData: any, opts: { effectiveDate?: string | null; reason?: string | null; user?: string | null } = {}) {
     if (!employeeId || isNaN(employeeId)) return;
     try {
       const dbPayload: any = {};
@@ -986,7 +991,11 @@ async function startServer() {
       if (Object.keys(dbPayload).length > 0) {
         dbPayload.updatedAt = new Date();
         // إصلاح عاجل: فشل الحفظ لا يُبتلع (كان يُكمل كأن السجل حُفظ)
-        await db.update(schema.employees).set(dbPayload).where(eq(schema.employees.id, employeeId));
+        const eff = /^\d{4}-\d{2}-\d{2}/.test(String(opts.effectiveDate || '')) ? String(opts.effectiveDate).slice(0, 10) : '';
+        await db.transaction(async (tx: any) => {
+          await tx.execute(sql`SELECT set_config('hr.effective_date', ${eff}, true), set_config('hr.reason', ${String(opts.reason || '')}, true), set_config('hr.user', ${String(opts.user || '')}, true)`);
+          await tx.update(schema.employees).set(dbPayload).where(eq(schema.employees.id, employeeId));
+        });
       }
     } catch (e) {
       console.error('Error updating central employee in DB:', e);
@@ -1555,7 +1564,8 @@ async function startServer() {
   }
 
   // Helper to sync employee primary education_level with the latest active qualification
-  async function syncEmployeeEducationQualification(employeeId: number) {
+  // B8a0: الشهادة النافذة تتأرخ بتاريخ كتاب الاحتساب (أو التخرج) لا بيوم الإدخال
+  async function syncEmployeeEducationQualification(employeeId: number, opts: { user?: string | null; reason?: string | null } = {}) {
     if (!employeeId || isNaN(employeeId)) return;
     try {
       let latestActive: any = null;
@@ -1597,6 +1607,9 @@ async function startServer() {
           education_order: ord,
           evaluationOrder: ord,
           evaluation_order: ord,
+        }, {
+          effectiveDate: latestActive.equationDate || latestActive.equation_date || latestActive.graduationDate || latestActive.graduation_date || null,
+          reason: opts.reason || 'مزامنة الشهادة النافذة', user: opts.user || null,
         });
       } else {
         await updateEmployeeCentralRecord(employeeId, {
@@ -1606,7 +1619,7 @@ async function startServer() {
           education_order: '',
           evaluationOrder: '',
           evaluation_order: '',
-        });
+        }, { reason: opts.reason || 'لا شهادة فعّالة', user: opts.user || null });
       }
     } catch (err) {
       console.error('Error syncing employee education qualification:', err);

@@ -114,6 +114,7 @@ export default function SystemSettings() {
   const primaryColor = appPublicSettings?.primaryColor || '#1B3A6B';
   const [activeTab, setActiveTab] = useState('salaryScale');
   const [scaleKey, setScaleKey] = useState(0); // B4d: إعادة تحميل السلّم بعد تفعيل إصدار
+  const [scaleDraft, setScaleDraft] = useState(null); // B8a0: الإصدار المسودة قيد التعديل
   const [tabs, setTabs] = useState(DEFAULT_TABS);
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
@@ -241,8 +242,8 @@ export default function SystemSettings() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.18 }}
             >
-              <SalaryScaleVersions onChanged={() => setScaleKey(k => k + 1)} />
-              <SalaryScaleSettings key={scaleKey} />
+              <SalaryScaleVersions onChanged={() => { setScaleDraft(null); setScaleKey(k => k + 1); }} onEditDraft={(v) => { setScaleDraft(v); setScaleKey(k => k + 1); }} editingId={scaleDraft?.id} />
+              <SalaryScaleSettings key={scaleKey} versionId={scaleDraft?.id || null} versionName={scaleDraft?.name || ''} onClose={() => { setScaleDraft(null); setScaleKey(k => k + 1); }} />
             </motion.div>
           )}
 

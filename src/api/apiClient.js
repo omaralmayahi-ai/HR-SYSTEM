@@ -318,7 +318,12 @@ export const apiClient = {
   salaryScaleVersions: {
     list: () => request('/api/salary-scale/versions'),
     create: (data) => request('/api/salary-scale/versions', { method: 'POST', body: JSON.stringify(data) }),
-    activate: (id) => request(`/api/salary-scale/versions/${id}/activate`, { method: 'POST' }),
+    activate: (id) => request(`/api/salary-scale/versions/${id}/approve`, { method: 'POST' }),
+    approve: (id) => request(`/api/salary-scale/versions/${id}/approve`, { method: 'POST' }),
+    update: (id, data) => request(`/api/salary-scale/versions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (id) => request(`/api/salary-scale/versions/${id}`, { method: 'DELETE' }),
+    rows: (id) => request(`/api/salary-scale/versions/${id}/rows`),
+    saveRows: (id, rows) => request(`/api/salary-scale/bulk?version_id=${id}`, { method: 'POST', body: JSON.stringify(rows) }),
     diff: (from, to) => request(`/api/salary-scale/diff?from=${from}&to=${to}`, { timeoutMs: 60000 }),
   },
   // B4: الأوامر الإدارية والسجل الوظيفي المؤرخ

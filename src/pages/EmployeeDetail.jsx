@@ -1462,22 +1462,29 @@ export default function EmployeeDetail() {
         payload.section = modalForm.section || employee?.section || 'غير محدد';
         payload.service_type = modalForm.service_type || employee?.service_type || 'دائم';
 
-        // Update central employee record to reflect changes immediately
-        const empUpdate = {
+        // B8a0: الحقول المتتبعة (ومنها حقول الرواتب) بحركة مؤرخة بتاريخ الأمر؛ الباقي تحديث عادي
+        const changes = {
           primary_responsibility: modalForm.primary_responsibility || 'بلا مسؤولية',
           acting_responsibility: modalForm.acting_responsibility || 'بلا وكالة',
-          deputy_level: modalForm.deputy_level || 'لا يوجد',
-          job_responsibility: modalForm.primary_responsibility || 'بلا مسؤولية',
         };
-        if (modalForm.job_title) empUpdate.job_title = modalForm.job_title;
-        if (modalForm.department) empUpdate.department = modalForm.department;
-        if (modalForm.section) empUpdate.section = modalForm.section;
-        if (modalForm.service_type) empUpdate.service_type = modalForm.service_type;
-
+        if (modalForm.job_title) changes.job_title = modalForm.job_title;
+        if (modalForm.department) changes.department = modalForm.department;
+        if (modalForm.section) changes.section = modalForm.section;
+        if (modalForm.service_type) changes.service_type = modalForm.service_type;
         try {
-          await apiClient.entities.Employee.update(employee.id, empUpdate);
+          await apiClient.careerHistory.recordMovement(employee.id, {
+            effective_date: orderDt,
+            changes,
+            reason: `${actionType}${orderNum ? ` بالأمر ${orderNum}` : ''}`,
+          });
+          await apiClient.entities.Employee.update(employee.id, {
+            deputy_level: modalForm.deputy_level || 'لا يوجد',
+            job_responsibility: modalForm.primary_responsibility || 'بلا مسؤولية',
+          });
         } catch (eErr) {
-          console.warn('Could not update employee central fields:', eErr);
+          toast({ title: 'تعذّر تسجيل الحركة بالسجل الوظيفي', description: eErr.message, variant: 'destructive' });
+          setModalSaving(false);
+          return;
         }
       }
       else if (activeModal === 'promotion') clientName = 'PromotionIncrement';

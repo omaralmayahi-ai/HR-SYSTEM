@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { 
   ArrowRight, Save, User, Briefcase, GraduationCap, 
   ChevronDown, ChevronRight, Search, X, Camera, Trash2, 
@@ -117,6 +118,22 @@ export default function EmployeeForm() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const lastPayloadRef = useRef(null);
+  const [correction, setCorrection] = useState(null); // B8a0: { message, reason }
+  const saveAsCorrection = async () => {
+    if (!correction?.reason?.trim()) { toast({ title: 'اكتب سبب التصحيح', variant: 'destructive' }); return; }
+    setSaving(true);
+    try {
+      await apiClient.entities.Employee.update(id, { ...lastPayloadRef.current, correction: true, change_reason: correction.reason.trim() });
+      setCorrection(null);
+      toast({ title: 'حُفظ التصحيح', description: 'سُجّل بالسجل الوظيفي كتصحيح للقيمة من تاريخها نفسه' });
+      navigate('/employees');
+    } catch (e) {
+      toast({ title: 'تعذّر الحفظ', description: e.message, variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
   const isEdit = !!id;
   const isMountedRef = useRef(true);
 
@@ -235,6 +252,11 @@ export default function EmployeeForm() {
               if (data[key] !== null && data[key] !== undefined) {
                 merged[key] = data[key];
               }
+            });
+            // B8a0: حقول الرواتب الفارغة بالقاعدة تبقى فارغة بالتعديل (القيم الافتراضية للإضافة فقط)،
+            // حتى ما ينحسب حفظ رقم هاتف «تغييراً» بالدرجة أو الشهادة
+            ['grade', 'step', 'education_level', 'marital_status', 'primary_responsibility', 'acting_responsibility', 'service_type'].forEach(key => {
+              if (data[key] === null || data[key] === undefined) merged[key] = '';
             });
             if (!merged.first_name && merged.full_name) {
               const parts = (merged.full_name || '').trim().split(/\s+/);
@@ -600,6 +622,7 @@ export default function EmployeeForm() {
       };
 
       if (isEdit) {
+        lastPayloadRef.current = payload;
         await apiClient.entities.Employee.update(id, payload);
       } else {
         await apiClient.entities.Employee.create(payload);
@@ -607,6 +630,11 @@ export default function EmployeeForm() {
       toast({ title: isEdit ? 'تم تحديث الموظف' : 'تم إضافة الموظف', description: 'تمت العملية بنجاح' });
       navigate('/employees');
     } catch (error) {
+      // B8a0: حقول الرواتب تتغير بأمر من «السجل الوظيفي»، والاستمارة تقبلها كتصحيح خطأ إدخال فقط
+      if (error?.code === 'PAY_FIELDS_NEED_ORDER') {
+        setCorrection({ message: error.message, reason: '' });
+        return;
+      }
       console.error('Error saving employee:', error);
       const msg = String(error?.message || '');
       toast({
@@ -1903,6 +1931,24 @@ export default function EmployeeForm() {
             </div>
           </div>
         </div>
+      )}
+      {correction && (
+        <Dialog open onOpenChange={(o) => { if (!o) setCorrection(null); }}>
+          <DialogContent className="max-w-lg rounded-2xl" dir="rtl">
+            <DialogHeader className="text-right"><DialogTitle className="text-base font-bold text-[#1B3A6B]">تغيير بحقول تأثر بالراتب</DialogTitle></DialogHeader>
+            <p className="text-xs text-slate-600 leading-6">{correction.message}</p>
+            <div className="text-xs bg-slate-50 rounded-xl p-3 space-y-1 text-slate-600">
+              <div><b>تغيير حقيقي</b> (ترفيع، شهادة جديدة، تكليف، نقل…): ألغِ هنا وسجّله من صفحة الموظف ← «السجل الوظيفي» بأمره وتاريخ نفاذه.</div>
+              <div><b>خطأ إدخال</b> (القيمة المسجلة كانت غلط من الأساس): احفظه تصحيحاً، فيستبدل القيمة الخطأ من تاريخها نفسه.</div>
+            </div>
+            <Label className="text-xs">سبب التصحيح *</Label>
+            <Input value={correction.reason} onChange={(e) => setCorrection(c => ({ ...c, reason: e.target.value }))} placeholder="مثال: الشهادة أُدخلت إعدادية والصحيح بكالوريوس حسب الإضبارة" />
+            <DialogFooter className="gap-2">
+              <Button variant="outline" size="sm" onClick={() => setCorrection(null)}>إلغاء</Button>
+              <Button size="sm" disabled={saving} className="bg-[#1B3A6B]" onClick={saveAsCorrection}>حفظ كتصحيح خطأ إدخال</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

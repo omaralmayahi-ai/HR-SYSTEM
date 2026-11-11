@@ -105,6 +105,8 @@ export async function refreshEmployeesOrgText(tx: any, schema: any, unitIds: num
   const emps = await tx.select({ id: schema.employees.id, orgUnitId: schema.employees.orgUnitId, department: schema.employees.department, section: schema.employees.section })
     .from(schema.employees).where(inArray(schema.employees.orgUnitId, unitIds));
   let changed = 0;
+  // B8a0: تحديث نص القسم والشعبة بعد إعادة تسمية وحدة مو حركة للموظف؛ الوحدة تُتتبع بمعرّفها
+  if (emps.length > 0) await tx.execute(sql`SELECT set_config('hr.skip_history', '1', true)`);
   for (const e of emps as any[]) {
     const u = byId.get(Number(e.orgUnitId));
     if (!u) continue;

@@ -574,6 +574,8 @@ export function registerSettingsListRoutes(app: Express, deps: any) {
             .where(eq(schema.jobTitles.id, id))
             .returning();
           if (row && oldName && newName && oldName !== newName) {
+            // B8a0: إعادة تسمية العنوان مو تغيير لعنوان الشاغلين؛ ما تُكتب بالسجل المؤرخ
+            await tx.execute(sql`SELECT set_config('hr.skip_history', '1', true)`);
             await tx.update(schema.employees)
               .set({ jobTitle: newName, updatedAt: new Date() })
               .where(eq(schema.employees.jobTitle, oldName));
