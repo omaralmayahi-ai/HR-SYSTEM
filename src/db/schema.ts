@@ -1698,3 +1698,28 @@ export const payrollBankRejections = pgTable('payroll_bank_rejections', {
   approvedBy: text('approved_by').notNull(),
   recordedAt: timestamp('recorded_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [uniqueIndex('payroll_bank_rejections_run_emp').on(t.runId, t.employeeId)]);
+
+// B9: الأدوار المرنة (ق-3): أساس للمسارات القديمة + صلاحيات دقيقة
+export const roles = pgTable('roles', {
+  name: text('name').primaryKey(),
+  label: text('label').notNull(),
+  base: text('base').notNull(),
+  permissions: text('permissions').array().notNull().default(sql`'{}'::text[]`),
+  isSystem: boolean('is_system').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// B9: سجل تدقيق لكل عملية كتابة على الواجهة البرمجية (إلحاقي)
+export const requestAudit = pgTable('request_audit', {
+  id: serial('id').primaryKey(),
+  at: timestamp('at', { withTimezone: true }).defaultNow().notNull(),
+  username: text('username'),
+  role: text('role'),
+  method: text('method').notNull(),
+  path: text('path').notNull(),
+  status: integer('status').notNull(),
+  durationMs: integer('duration_ms'),
+  ip: text('ip'),
+  body: jsonb('body'),
+}, (t) => [index('request_audit_at').on(t.at), index('request_audit_user').on(t.username, t.at)]);

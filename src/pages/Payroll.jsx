@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { apiClient } from '@/api/apiClient';
 import { useAuth } from '@/lib/AuthContext';
+import { can } from '@/lib/permissions';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,7 +25,7 @@ const ISSUE_LABELS = {
 export default function Payroll() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = can(user, 'payroll.approve');
   const [meta, setMeta] = useState(null);
   const [category, setCategory] = useState('PERM');
   const [periods, setPeriods] = useState([]);

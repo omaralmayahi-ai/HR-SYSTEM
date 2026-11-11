@@ -5,14 +5,35 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import { DEFAULT_ROLES, type RoleDef } from '../../server/permissions.ts';
+
+/**
+ * سجل الأدوار (B9): يُحمَّل من جدول roles عند التشغيل وبعد كل تعديل. الدور المخصص يُترجم إلى «أساسه»
+ * للمسارات القديمة (req.user.role)، واسمه وصلاحياته بـ roleName/permissions للمسارات الجديدة.
+ */
+let roleDefs = new Map<string, RoleDef>(DEFAULT_ROLES.map(r => [r.name, r]));
+/** المستخدمون الحاليون (معرّف ← اسم ودور): المحذوف يُرفض، والدور من القاعدة لا من الرمز (مراجعة B9 M1). */
+let users: Map<number, { username: string; role: string }> | null = null;
+export const userRegistry = {
+  set(rows: { id: number; username: string; role: string | null }[]) { users = new Map(rows.map(u => [Number(u.id), { username: u.username, role: String(u.role ?? 'employee') }])); },
+  get(id: number) { return users?.get(Number(id)); },
+  loaded() { return users !== null; },
+};
+export const roleRegistry = {
+  set(defs: RoleDef[]) { if (defs.length) roleDefs = new Map(defs.map(r => [r.name, r])); },
+  get(name: string): RoleDef | undefined { return roleDefs.get(name); },
+  all(): RoleDef[] { return [...roleDefs.values()]; },
+};
 
 export interface AuthRequest extends Request {
   user?: {
     id: number;
     username: string;
-    role: string;
+    role: string;        // أساس الدور (admin / user / employee) — للمسارات القديمة
     name: string;
     email: string;
+    roleName?: string;   // اسم الدور الفعلي
+    permissions?: string[];
   };
 }
 
@@ -54,12 +75,23 @@ export const requireAuth = (req: AuthRequest, res: Response, next: NextFunction)
   try {
     const decoded = jwt.verify(token, getJwtSecret()) as any;
     if (decoded && decoded.username && decoded.role) {
+      // بعد تحميل المستخدمين: المحذوف أو من تغيّر اسمه ما يدخل، والدور الحالي يسري فوراً
+      let roleName = String(decoded.role);
+      if (userRegistry.loaded()) {
+        const u = userRegistry.get(decoded.id);
+        if (!u || u.username !== decoded.username) return res.status(401).json({ error: 'غير مصرح: الحساب غير موجود أو تغيّر؛ سجّل الدخول مجدداً' });
+        roleName = u.role;
+      }
+      const def = roleRegistry.get(roleName);
+      // دور محذوف أو غير معروف ⇒ أقل صلاحية (اطلاع) بدل رفض الدخول أو منح ما لا يملك
       req.user = {
         id: decoded.id,
         username: decoded.username,
-        role: decoded.role,
+        role: def ? def.base : 'employee',
         name: decoded.name,
         email: decoded.email,
+        roleName,
+        permissions: def ? def.permissions : [],
       };
       return next();
     }
@@ -84,3 +116,10 @@ export const requireAdmin = Object.defineProperty(requireRole(...ADMIN_ROLES), '
 
 /** كل الأدوار عدا 'employee': لعمليات الكتابة على البيانات. */
 export const requireWriter = Object.defineProperty(requireRole(...WRITE_ROLES), 'name', { value: 'requireWriter' });
+
+/** صلاحية دقيقة (B9). تُستخدم بعد requireAuth. */
+export const requirePermission = (perm: string) => Object.defineProperty(
+  (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user?.permissions?.includes(perm)) return res.status(403).json({ error: 'غير مسموح: لا تملك صلاحية تنفيذ هذا الإجراء' });
+    return next();
+  }, 'name', { value: `requirePermission(${perm})` });

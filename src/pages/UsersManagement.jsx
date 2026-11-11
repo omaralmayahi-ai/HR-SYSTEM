@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { RolesPanel, AuditPanel } from '@/components/admin/RolesAndAudit';
 
 export default function UsersManagement() {
   const { toast } = useToast();
@@ -27,6 +28,18 @@ export default function UsersManagement() {
     role: 'user'
   });
   const [formError, setFormError] = useState('');
+  // B9: الأدوار المرنة وربط المستخدم بموظف
+  const [roles, setRoles] = useState([]);
+  const [tab, setTab] = useState('users');
+  const loadRoles = () => apiClient.roles.list().then(r => setRoles(r.roles || [])).catch(() => {});
+  useEffect(() => { loadRoles(); }, []);
+  const roleLabel = (name) => roles.find(r => r.name === name)?.label ?? null;
+  const linkEmployee = async (u) => {
+    const v = window.prompt(`رقم الموظف (المعرّف) المرتبط بـ ${u.username} — فارغ لإلغاء الربط. المرتبط ما يُدخل ولا يعتمد على سجله المالي`, u.employeeId ?? '');
+    if (v === null) return;
+    try { await apiClient.roles.linkEmployee(u.id, v.trim() === '' ? null : Number(v)); toast({ title: 'تم الربط' }); fetchUsers(); }
+    catch (e) { toast({ title: 'تعذّر', description: e.message, variant: 'destructive' }); }
+  };
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -162,6 +175,14 @@ export default function UsersManagement() {
 
   return (
     <div className="space-y-6" dir="rtl">
+      <div className="flex gap-2">
+        {[['users', 'المستخدمون'], ['roles', 'الأدوار والصلاحيات'], ['audit', 'سجل التدقيق']].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)} className={`px-4 py-2 rounded-xl text-xs font-bold ${tab === k ? 'bg-[#1B3A6B] text-white' : 'bg-slate-100 text-slate-600'}`}>{l}</button>
+        ))}
+      </div>
+      {tab === 'roles' && <RolesPanel onChange={loadRoles} />}
+      {tab === 'audit' && <AuditPanel />}
+      {tab === 'users' && <>
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
         <div>
@@ -232,7 +253,12 @@ export default function UsersManagement() {
                     <td className="px-6 py-4 text-slate-600 font-mono text-xs">{user.username}</td>
                     <td className="px-6 py-4 text-slate-500">{user.email || '—'}</td>
                     <td className="px-6 py-4">
-                      {user.role === 'admin' ? (
+                      {roleLabel(user.role) !== null ? (
+                        <span className="inline-flex items-center gap-1 bg-[#1B3A6B]/10 text-[#1B3A6B] px-2.5 py-1 rounded-full text-xs font-bold border border-[#1B3A6B]/20">
+                          {user.role === 'admin' ? <Shield size={12} /> : <User size={12} />}
+                          <span>{roleLabel(user.role)}</span>
+                        </span>
+                      ) : user.role === 'admin' ? (
                         <span className="inline-flex items-center gap-1 bg-[#1B3A6B]/10 text-[#1B3A6B] px-2.5 py-1 rounded-full text-xs font-bold border border-[#1B3A6B]/20">
                           <Shield size={12} />
                           <span>مدير النظام</span>
@@ -249,6 +275,9 @@ export default function UsersManagement() {
                     </td>
                     <td className="px-6 py-4 text-left">
                       <div className="flex items-center justify-end gap-2">
+                        <button onClick={() => linkEmployee(user)} className="px-2 py-1 text-[11px] text-slate-500 hover:text-[#1B3A6B] rounded-lg border border-slate-200" title="ربط بموظف">
+                          {user.employeeId ? `موظف ${user.employeeId}` : 'ربط بموظف'}
+                        </button>
                         <button
                           onClick={() => handleOpenEditModal(user)}
                           className="p-2 text-slate-500 hover:text-[#1B3A6B] hover:bg-[#1B3A6B]/5 rounded-lg transition-all"
@@ -391,48 +420,11 @@ export default function UsersManagement() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-bold text-slate-700 block mb-1">نوع الصلاحية والوصول</Label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <label className={`border rounded-xl p-3 flex items-center justify-between cursor-pointer transition-all ${
-                      formData.role === 'admin' 
-                        ? 'border-[#1B3A6B] bg-[#1B3A6B]/5 text-[#1B3A6B]' 
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}>
-                      <div className="flex items-center gap-2">
-                        <Shield size={16} />
-                        <span className="text-xs font-bold">مدير نظام</span>
-                      </div>
-                      <input 
-                        type="radio" 
-                        name="role" 
-                        value="admin"
-                        checked={formData.role === 'admin'}
-                        onChange={handleFormChange}
-                        disabled={editingUser && editingUser.username === 'admin'}
-                        className="w-4 h-4 accent-[#1B3A6B]"
-                      />
-                    </label>
-
-                    <label className={`border rounded-xl p-3 flex items-center justify-between cursor-pointer transition-all ${
-                      formData.role === 'user' 
-                        ? 'border-[#1B3A6B] bg-[#1B3A6B]/5 text-[#1B3A6B]' 
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}>
-                      <div className="flex items-center gap-2">
-                        <User size={16} />
-                        <span className="text-xs font-bold">مستخدم عادي</span>
-                      </div>
-                      <input 
-                        type="radio" 
-                        name="role" 
-                        value="user"
-                        checked={formData.role === 'user'}
-                        onChange={handleFormChange}
-                        disabled={editingUser && editingUser.username === 'admin'}
-                        className="w-4 h-4 accent-[#1B3A6B]"
-                      />
-                    </label>
-                  </div>
+                  <Label className="text-xs font-bold text-slate-700 block mb-1">الدور (يحدد الصلاحيات)</Label>
+                  <select name="role" value={formData.role} onChange={handleFormChange} disabled={editingUser && editingUser.username === 'admin'}
+                    className="w-full h-10 rounded-xl border border-slate-200 px-3 text-sm">
+                    {(roles.length ? roles : [{ name: 'admin', label: 'مدير النظام' }, { name: 'user', label: 'مستخدم إدخال' }, { name: 'hr', label: 'موارد بشرية' }, { name: 'employee', label: 'اطلاع' }, ...(formData.role && !['admin', 'user', 'hr', 'employee'].includes(formData.role) ? [{ name: formData.role, label: formData.role }] : [])]).map(r => <option key={r.name} value={r.name}>{r.label} ({r.name})</option>)}
+                  </select>
                 </div>
 
                 {/* Modal Actions */}
@@ -458,6 +450,7 @@ export default function UsersManagement() {
           </div>
         )}
       </AnimatePresence>
+      </>}
     </div>
   );
 }

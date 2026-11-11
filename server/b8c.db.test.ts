@@ -32,6 +32,8 @@ describe.skipIf(!enabled)('B8c الفروق والمصرف على قاعدة ح�
     const [c] = await db.insert(schema.payrollCategories).values({ code: tag, name: 'فئة ' + tag, kind: 'دائم', isActive: true }).returning();
     catId = c.id;
     await db.insert(schema.payrollCategoryRules).values({ serviceType: service, contractType: null, categoryId: catId });
+    await db.execute(sql`INSERT INTO education_degrees (name, allowance_rate) SELECT x, 0 FROM (VALUES ('دبلوم اختبار'), ('بكالوريوس اختبار')) v(x)
+      WHERE (SELECT count(*) FROM education_degrees) < 2`);
     [deg1, deg2] = rows(await db.execute(sql`SELECT id, name FROM education_degrees ORDER BY id LIMIT 2`));
     const [it] = rows(await db.execute(sql`INSERT INTO pay_items (code, name, direction, item_group, classification, assignment_mode, method, category_id)
       VALUES (${'CERT' + tag}, 'شهادة', '+', 'أخرى', 'ثابت', 'تلقائي', 'tiered', ${catId}) RETURNING id`));

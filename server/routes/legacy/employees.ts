@@ -1,6 +1,7 @@
 // server/routes/legacy/employees.ts — نُقل حرفياً من server.ts (B3، الدفعات 3–7).
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
+import { forbidOwnRecord } from '../../ownRecord.ts';
 
 import { employeeListColumns } from '../../util/employeeColumns.ts';
 import { attachOrgUnit, loadUnits } from '../../orgUnitsService.ts';
@@ -393,8 +394,8 @@ export function registerEmployeesRoutes(app: Express, deps: any) {
     res.status(404).json({ error: 'الموظف غير موجود' });
   });
 
-  app.put('/api/employees/:id', requireAuth, requireWriter, async (req, res) => {
-    const id = parseInt(req.params.id);
+  app.put('/api/employees/:id', requireAuth, requireWriter, forbidOwnRecord(db), async (req, res) => {
+    const id = parseInt(String(req.params.id));
     if (isNaN(id)) {
       return res.status(400).json({ error: 'Invalid ID format' });
     }

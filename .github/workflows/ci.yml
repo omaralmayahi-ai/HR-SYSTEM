@@ -1,0 +1,57 @@
+# B9: فحص تلقائي لكل دفع وطلب دمج — الأنواع (بخط الأساس)، الاختبارات، البناء، والترحيلات واختبارات القاعدة على PostgreSQL حقيقية.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: hr_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      SQL_HOST: 127.0.0.1
+      SQL_PORT: '5432'
+      SQL_USER: postgres
+      SQL_PASSWORD: ci
+      SQL_DB_NAME: hr_ci
+      # مفتاح للاختبار فقط (ما يُستخدم بالإنتاج)
+      JWT_SECRET: ci-only-secret-0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: فحص الأنواع (ما يزيد عن خط الأساس)
+        run: npm run -s typecheck:server
+      - name: اختبارات الوحدات
+        run: npx vitest run
+      - name: البناء
+        run: npm run -s build
+      - name: الترحيلات على قاعدة جديدة
+        run: npx tsx tools/db/migrate.ts
+      - name: فحص تطابق المخطط
+        run: npx tsx tools/db/check.ts
+      - name: اختبارات القاعدة
+        run: HR_TEST_DB=1 npx vitest run server/*.db.test.ts
+      - name: لا بيانات حقيقية بالمستودع
+        run: |
+          if git ls-files | grep -Ei '\.(accdb|mdb|xlsx|xls)$|^temp/'; then echo "ملفات بيانات حقيقية بالمستودع"; exit 1; fi

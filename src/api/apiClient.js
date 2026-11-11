@@ -315,6 +315,15 @@ export const apiClient = {
     end: (id, data) => request(`/api/org-units/${id}/end`, { method: 'POST', body: JSON.stringify(data || {}) }),
   },
   // B8a1: بنود الرواتب والإسناد والعائلة والاعتماد الثاني
+  // B9: الأدوار والصلاحيات وسجل التدقيق
+  roles: {
+    list: () => request('/api/roles'),
+    create: (data) => request('/api/roles', { method: 'POST', body: JSON.stringify(data) }),
+    update: (name, data) => request(`/api/roles/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    remove: (name) => request(`/api/roles/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    linkEmployee: (userId, employee_id) => request(`/api/auth/users/${userId}/employee-link`, { method: 'PUT', body: JSON.stringify({ employee_id }) }),
+    audit: (params = {}) => request(`/api/admin/audit?${new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v !== '' && v !== undefined)))}`),
+  },
   payroll: {
     meta: () => request('/api/payroll/meta'),
     items: () => request('/api/payroll/items'),

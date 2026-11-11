@@ -2,6 +2,7 @@
 // الأدوار الحالية (قرار عمر): الكاتب يُدخل، والمدير يعتمد؛ والفصل بالمعرّف (المُدخل ≠ المعتمِد).
 import type { Express } from 'express';
 import type { RouteContext } from '../context.ts';
+import { requirePermission } from '../../src/middleware/auth.ts';
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { PayrollError, CONDITION_FIELDS, OPERATORS, LEVEL_SOURCES } from '../payroll/catalog.ts';
 import { submit, decide, OP_TYPES, type OpType } from '../payroll/pending.ts';
@@ -70,10 +71,10 @@ export function registerPayrollRoutes(app: Express, ctx: RouteContext) {
     } catch (err: any) { fail(res, err, 'إدخال العملية'); }
   };
 
-  app.post('/api/payroll/items/:id/versions', requireAuth, requireWriter, submitRoute('item_version', req => ({ ...req.body, item_id: int(req.params.id) })));
+  app.post('/api/payroll/items/:id/versions', requireAuth, requirePermission('payroll.enter'), submitRoute('item_version', req => ({ ...req.body, item_id: int(req.params.id) })));
 
   // الإسناد الفردي والحجب
-  app.get('/api/payroll/assignments', requireAuth, async (req, res) => {
+  app.get('/api/payroll/assignments', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const empId = int(req.query.employee_id);
       const A = schema.employeePayAssignments;
@@ -85,11 +86,11 @@ export function registerPayrollRoutes(app: Express, ctx: RouteContext) {
       res.json(list.map((r: any) => ({ ...r.a, item_name: r.itemName, item_code: r.itemCode, classification: r.classification, order_number: r.orderNumber, order_date: r.orderDate })));
     } catch (err: any) { fail(res, err, 'قراءة الإسنادات'); }
   });
-  app.post('/api/payroll/assignments', requireAuth, requireWriter, submitRoute('assignment', req => req.body));
-  app.post('/api/payroll/assignments/:id/end', requireAuth, requireWriter, submitRoute('assignment_end', req => ({ ...req.body, assignment_id: int(req.params.id) })));
+  app.post('/api/payroll/assignments', requireAuth, requirePermission('payroll.enter'), submitRoute('assignment', req => req.body));
+  app.post('/api/payroll/assignments/:id/end', requireAuth, requirePermission('payroll.enter'), submitRoute('assignment_end', req => ({ ...req.body, assignment_id: int(req.params.id) })));
 
   // العائلة
-  app.get('/api/payroll/family/:employeeId', requireAuth, async (req, res) => {
+  app.get('/api/payroll/family/:employeeId', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     const empId = int(req.params.employeeId);
     if (isNaN(empId)) return res.status(400).json({ error: 'معرّف غير صالح' });
     try {
@@ -108,30 +109,30 @@ export function registerPayrollRoutes(app: Express, ctx: RouteContext) {
       res.json({ employee: emp, members, facts, extensions: ext, pending: pending.filter((p: any) => String(p.opType).startsWith('family')) });
     } catch (err: any) { fail(res, err, 'قراءة العائلة'); }
   });
-  app.post('/api/payroll/family/:employeeId/members', requireAuth, requireWriter, submitRoute('family_member', req => ({ ...req.body, employee_id: int(req.params.employeeId) })));
-  app.post('/api/payroll/family/facts', requireAuth, requireWriter, submitRoute('family_fact', req => req.body));
-  app.post('/api/payroll/family/:employeeId/mode', requireAuth, requireWriter, submitRoute('family_mode', req => ({ ...req.body, employee_id: int(req.params.employeeId) })));
-  app.post('/api/payroll/family/extensions', requireAuth, requireWriter, submitRoute('family_extension', req => req.body));
+  app.post('/api/payroll/family/:employeeId/members', requireAuth, requirePermission('payroll.enter'), submitRoute('family_member', req => ({ ...req.body, employee_id: int(req.params.employeeId) })));
+  app.post('/api/payroll/family/facts', requireAuth, requirePermission('payroll.enter'), submitRoute('family_fact', req => req.body));
+  app.post('/api/payroll/family/:employeeId/mode', requireAuth, requirePermission('payroll.enter'), submitRoute('family_mode', req => ({ ...req.body, employee_id: int(req.params.employeeId) })));
+  app.post('/api/payroll/family/extensions', requireAuth, requirePermission('payroll.enter'), submitRoute('family_extension', req => req.body));
 
   // العمليات بانتظار الاعتماد
-  app.get('/api/payroll/pending', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/pending', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const state = String(req.query.state || 'بانتظار');
       const list = await db.select().from(schema.pendingOperations).where(eq(schema.pendingOperations.state, state)).orderBy(desc(schema.pendingOperations.enteredAt)).limit(500);
       res.json(list);
     } catch (err: any) { fail(res, err, 'قراءة العمليات المعلقة'); }
   });
-  app.post('/api/payroll/pending/:id/approve', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/payroll/pending/:id/approve', requireAuth, requirePermission('payroll.approve'), async (req, res) => {
     try { res.json(await decide(db, schema, int(req.params.id), 'approve', who(req), req.body?.reason)); } catch (err: any) { fail(res, err, 'اعتماد العملية'); }
   });
-  app.post('/api/payroll/pending/:id/reject', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/payroll/pending/:id/reject', requireAuth, requirePermission('payroll.approve'), async (req, res) => {
     try { res.json(await decide(db, schema, int(req.params.id), 'reject', who(req), req.body?.reason)); } catch (err: any) { fail(res, err, 'رفض العملية'); }
   });
-  app.post('/api/payroll/pending/:id/cancel', requireAuth, requireWriter, async (req, res) => {
+  app.post('/api/payroll/pending/:id/cancel', requireAuth, requirePermission('payroll.enter'), async (req, res) => {
     try { res.json(await decide(db, schema, int(req.params.id), 'cancel', who(req), req.body?.reason)); } catch (err: any) { fail(res, err, 'إلغاء العملية'); }
   });
 
-  app.get('/api/payroll/data-quality', requireAuth, async (_req, res) => {
+  app.get('/api/payroll/data-quality', requireAuth, requirePermission('payroll.view'), async (_req, res) => {
     try { res.json(await dataQuality(db, await statusRegistry.namesWhere('payrollEligible'))); } catch (err: any) { fail(res, err, 'فحص جودة بيانات الرواتب'); }
   });
 
@@ -150,7 +151,7 @@ export function registerPayrollRoutes(app: Express, ctx: RouteContext) {
     return c.id;
   };
   // رواتب الآخرين: مستخدمو الإدخال والمدير فقط (دور «employee» اطلاع ما يشوف رواتب) — إلى أن تجي أذونات B9
-  app.get('/api/payroll/preview/:employeeId', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/preview/:employeeId', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const { year, month } = ym(req);
       const r = await computePeriod(db, { year, month, categoryId: await permCategory(req), eligibleStatuses: await statusRegistry.namesWhere('payrollEligible'), employeeIds: [int(req.params.employeeId)] });
@@ -161,7 +162,7 @@ export function registerPayrollRoutes(app: Express, ctx: RouteContext) {
   // معاينة الأثر تحسب الشركة كلها مرتين: نتيجة مخزنة دقيقتين لنفس الطلب، واحتساب واحد بنفس الوقت
   const previewCache = new Map<string, { at: number; value: any }>();
   let previewBusy = false;
-  app.post('/api/payroll/items/:id/preview', requireAuth, requireWriter, async (req, res) => {
+  app.post('/api/payroll/items/:id/preview', requireAuth, requirePermission('payroll.enter'), async (req, res) => {
     try {
       const itemId = int(req.params.id);
       const vf = String(req.body?.valid_from || todayBaghdad()), vt = req.body?.valid_to ? String(req.body.valid_to) : null;
@@ -186,7 +187,7 @@ export function registerPayrollRoutes(app: Express, ctx: RouteContext) {
     } catch (err: any) { fail(res, err, 'معاينة أثر البند'); }
   });
 
-  app.get('/api/payroll/audit', requireAuth, requireAdmin, async (req, res) => {
+  app.get('/api/payroll/audit', requireAuth, requirePermission('audit.view'), async (req, res) => {
     try {
       const entity = String(req.query.entity || '');
       const list = await db.select().from(schema.payrollAudit).where(entity ? eq(schema.payrollAudit.entity, entity) : undefined).orderBy(desc(schema.payrollAudit.id)).limit(500);

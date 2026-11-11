@@ -2,6 +2,8 @@
 // الكاتب يفتح ويحتسب، والمدير (غير المحتسب) يعتمد ويُصدر؛ إلغاء الاعتماد عملية بانتظار مُعتمِد ثانٍ.
 import type { Express } from 'express';
 import type { RouteContext } from '../context.ts';
+import { requirePermission } from '../../src/middleware/auth.ts';
+import { forbidOwnRecordBody } from '../ownRecord.ts';
 import { desc, eq, sql } from 'drizzle-orm';
 import { PayrollError } from '../payroll/catalog.ts';
 import { submit } from '../payroll/pending.ts';
@@ -41,7 +43,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
     catch (e: any) { console.error('[payroll] activity log failed:', e?.message); return 'تعذّر التسجيل بسجل النشاط (العملية تمت ومسجلة بسجل تدقيق الرواتب)'; }
   };
 
-  app.get('/api/payroll/periods', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/periods', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const c = await category(req.query.category);
       const list = rows(await db.execute(sql`SELECT p.*, r.totals, r.computed_by, r.finished_at AS computed_at, r.state AS run_state
@@ -50,7 +52,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
     } catch (err: any) { fail(res, err, 'قراءة فترات الرواتب'); }
   });
 
-  app.post('/api/payroll/periods', requireAuth, requireWriter, async (req, res) => {
+  app.post('/api/payroll/periods', requireAuth, requirePermission('payroll.enter'), async (req, res) => {
     try {
       const c = await category(req.body?.category);
       const p = await openPeriod(db, schema, { categoryId: c.id, year: int(req.body?.year), month: int(req.body?.month), user: who(req), paySource: req.body?.pay_source,
@@ -60,7 +62,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
     } catch (err: any) { fail(res, err, 'فتح فترة'); }
   });
 
-  app.get('/api/payroll/periods/:id', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/periods/:id', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const id = idOf(req.params.id);
       const [p] = rows(await db.execute(sql`SELECT p.*, c.name AS category_name, c.code AS category_code FROM payroll_periods p JOIN payroll_categories c ON c.id = p.category_id WHERE p.id = ${id}`));
@@ -73,7 +75,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
     } catch (err: any) { fail(res, err, 'قراءة الفترة'); }
   });
 
-  app.post('/api/payroll/periods/:id/compute', requireAuth, requireWriter, async (req, res) => {
+  app.post('/api/payroll/periods/:id/compute', requireAuth, requirePermission('payroll.enter'), async (req, res) => {
     try {
       const r = await computeRun(db, schema, idOf(req.params.id), who(req), await eligible());
       const w = await logActivity(req, 'احتساب فترة رواتب', `الفترة ${req.params.id}، الاحتساب ${r.run_id}`);
@@ -81,14 +83,14 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
     } catch (err: any) { fail(res, err, 'احتساب الفترة'); }
   });
 
-  app.get('/api/payroll/periods/:id/review', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/periods/:id/review', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const th = Number(req.query.threshold);
       res.json(await reviewReport(db, idOf(req.params.id), Number.isFinite(th) && th > 0 ? th : 10));
     } catch (err: any) { fail(res, err, 'تقرير المراجعة'); }
   });
 
-  app.post('/api/payroll/periods/:id/approve', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/payroll/periods/:id/approve', requireAuth, requirePermission('payroll.approve'), async (req, res) => {
     try {
       const r = await approvePeriod(db, schema, idOf(req.params.id), who(req), await eligible());
       const w = await logActivity(req, 'اعتماد فترة رواتب', `الفترة ${req.params.id}، الاحتساب ${r.run_id}، متغيرات ${r.variances}`);
@@ -96,7 +98,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
     } catch (err: any) { fail(res, err, 'اعتماد الفترة'); }
   });
 
-  app.post('/api/payroll/periods/:id/issue', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/payroll/periods/:id/issue', requireAuth, requirePermission('payroll.approve'), async (req, res) => {
     try {
       const r = await issuePeriod(db, schema, idOf(req.params.id), who(req), req.body?.dispatch_letter);
       const w = await logActivity(req, 'إصدار فترة رواتب', `الفترة ${req.params.id}، كتاب ${req.body?.dispatch_letter}`);
@@ -105,14 +107,14 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
   });
 
   // إلغاء الاعتماد قبل الإصدار: سبب مكتوب ومُعتمِد ثانٍ (س11.1)
-  app.post('/api/payroll/periods/:id/unapprove', requireAuth, requireAdmin, async (req, res) => {
+  app.post('/api/payroll/periods/:id/unapprove', requireAuth, requirePermission('payroll.approve'), async (req, res) => {
     try {
       const r = await submit(db, schema, 'period_unapprove', { period_id: idOf(req.params.id), reason: req.body?.reason }, who(req));
       res.status(202).json(r);
     } catch (err: any) { fail(res, err, 'طلب إلغاء الاعتماد'); }
   });
 
-  app.get('/api/payroll/periods/:id/results', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/periods/:id/results', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const id = idOf(req.params.id);
       const [p] = await db.select().from(schema.payrollPeriods).where(eq(schema.payrollPeriods.id, id));
@@ -133,7 +135,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
     } catch (err: any) { fail(res, err, 'نتائج الفترة'); }
   });
 
-  app.get('/api/payroll/periods/:id/employees/:employeeId', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/periods/:id/employees/:employeeId', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const id = idOf(req.params.id), eid = idOf(req.params.employeeId, 'رقم الموظف');
       const [p] = await db.select().from(schema.payrollPeriods).where(eq(schema.payrollPeriods.id, id));
@@ -149,7 +151,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
   });
 
   // تاريخ رواتب الموظف المعتمدة والمُصدَرة (تبويب الموظف)
-  app.get('/api/payroll/employees/:employeeId/history', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/employees/:employeeId/history', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const eid = idOf(req.params.employeeId, 'رقم الموظف');
       res.json(rows(await db.execute(sql`SELECT p.id period_id, p.year, p.month, p.status, p.pay_source, c.name category, r.run_id, r.net::text net, r.nominal::text nominal,
@@ -160,7 +162,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
   });
 
   // الكشوف (Excel) — كل تصدير يُسجَّل بسجل النشاط (س16.2)
-  app.get('/api/payroll/periods/:id/statements/:kind', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/periods/:id/statements/:kind', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const kind = String(req.params.kind) as StatementKind;
       if (!(kind in STATEMENTS)) throw new PayrollError('نوع كشف غير معروف');
@@ -174,7 +176,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
   });
 
   // B8c: رفض المصرف لصافي موظف بفترة مُصدَرة — بانتظار مُعتمِد ثانٍ (يرفع صافي الفترة التالية)
-  app.post('/api/payroll/periods/:id/bank-rejections', requireAuth, requireWriter, async (req, res) => {
+  app.post('/api/payroll/periods/:id/bank-rejections', requireAuth, requirePermission('payroll.enter'), forbidOwnRecordBody(db), async (req, res) => {
     try {
       const pid = idOf(req.params.id);
       const [p] = await db.select().from(schema.payrollPeriods).where(eq(schema.payrollPeriods.id, pid));
@@ -185,7 +187,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
   });
 
   // B8c: الحسابات المصرفية للموظف (المؤرخة) وإضافة/تغيير بمُعتمِد ثانٍ (حالة 12)
-  app.get('/api/payroll/employees/:employeeId/bank-accounts', requireAuth, requireWriter, async (req, res) => {
+  app.get('/api/payroll/employees/:employeeId/bank-accounts', requireAuth, requirePermission('payroll.view'), async (req, res) => {
     try {
       const eid = idOf(req.params.employeeId, 'رقم الموظف');
       // رقم الحساب كامل للمدير فقط؛ غيره يشوف آخر 4 (مراجعة L4)
@@ -194,7 +196,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
         FROM employee_bank_accounts WHERE employee_id = ${eid} ORDER BY valid_from DESC, id DESC`)).map((a: any) => full ? a : { ...a, account_number: `••••${String(a.account_number).slice(-4)}` }));
     } catch (err: any) { fail(res, err, 'الحسابات المصرفية'); }
   });
-  app.post('/api/payroll/employees/:employeeId/bank-accounts', requireAuth, requireWriter, async (req, res) => {
+  app.post('/api/payroll/employees/:employeeId/bank-accounts', requireAuth, requirePermission('payroll.enter'), async (req, res) => {
     try {
       const eid = idOf(req.params.employeeId, 'رقم الموظف');
       res.status(202).json(await submit(db, schema, 'bank_account', { employee_id: eid, bank_name: req.body?.bank_name, account_number: req.body?.account_number, valid_from: req.body?.valid_from, note: req.body?.note }, who(req)));
@@ -202,7 +204,7 @@ export function registerPayrollPeriodRoutes(app: Express, ctx: RouteContext) {
   });
 
   // B8c: رقم الحساب بالدليل المحاسبي للبند (بيان تصنيف لا يغيّر الرواتب؛ للمدير ومسجّل)
-  app.put('/api/payroll/items/:id/account-code', requireAuth, requireAdmin, async (req, res) => {
+  app.put('/api/payroll/items/:id/account-code', requireAuth, requirePermission('payroll.settings'), async (req, res) => {
     try {
       const id = idOf(req.params.id);
       const code = String(req.body?.account_code ?? '').trim() || null;

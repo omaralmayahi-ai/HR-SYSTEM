@@ -1,6 +1,7 @@
 // server/routes/legacy/auth.ts — نُقل حرفياً من server.ts (B3، الدفعات 3–7).
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
+import { roleRegistry } from '../../../src/middleware/auth.ts';
 import type { AuthRequest } from '../../../src/middleware/auth.ts';
 
 export function registerAuthRoutes(app: Express, deps: any) {
@@ -75,12 +76,16 @@ export function registerAuthRoutes(app: Express, deps: any) {
         email: user.email
       }, getJwtSecret(), { expiresIn: '7d' });
 
+      // B9: role = أساس الدور (الواجهة القديمة تعتمد عليه)، roleName والصلاحيات للدور الفعلي
+      const def = roleRegistry.get(String(user.role));
       res.json({
         token,
         user: {
           id: user.id,
           username: user.username,
-          role: user.role,
+          role: def ? def.base : 'employee',
+          roleName: user.role,
+          permissions: def ? def.permissions : [],
           name: user.name,
           email: user.email
         }
