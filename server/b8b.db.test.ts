@@ -143,3 +143,20 @@ describe.skipIf(!enabled)('B8b الحالات والأرصدة على قاعدة
     expect(ctx.states.size).toBeGreaterThan(0);
   });
 });
+
+describe.skipIf(process.env.HR_TEST_DB !== '1')('ترحيل 0016 على بيانات أنواع إجازات حقيقية الشكل', () => {
+  it('ربط أنواع الإجازات ما يفشل بـ «أكثر من صف» (فشل التحديث على جهاز المالك)', async () => {
+    const fs = await import('node:fs');
+    const { pool } = await import('../src/db/index.ts');
+    const sqlText = fs.readFileSync(new URL('../drizzle/0016_b8b_entitlement.sql', import.meta.url), 'utf8');
+    const stmt = sqlText.split('--> statement-breakpoint').find(x => x.includes('UPDATE "leave_types"'))!;
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query(`INSERT INTO leave_types (name, salary_payment_type) VALUES ('اعتيادية ف', 'براتب_تام'), ('مرضية ف', NULL), ('أمومة ف', NULL), ('بدون ف', 'بدون_راتب')`);
+      await c.query(stmt);
+      const r = await c.query(`SELECT t.name, s.code FROM leave_types t JOIN entitlement_states s ON s.id = t.entitlement_state_id WHERE t.name LIKE '% ف' ORDER BY t.name`);
+      expect(r.rows.map((x: any) => [x.name, x.code])).toEqual([['أمومة ف', 'MATERNITY'], ['اعتيادية ف', 'FULL_LEAVE'], ['بدون ف', 'UNPAID'], ['مرضية ف', 'SICK_FULL']]);
+    } finally { await c.query('ROLLBACK'); c.release(); }
+  });
+});

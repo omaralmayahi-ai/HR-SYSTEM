@@ -37,12 +37,13 @@ INSERT INTO "entitlement_states" ("code", "name", "nominal_pct", "held_pct", "de
   ('ABSENCE', 'غياب بدون عذر', 0, 0, 'يتوقف', '{}', 'لا تُستوفى', 50, 'يُتحقق', 'ت14 — أثره على المخصصات يُتحقق'),
   ('SALARY_CUT', 'قطع الراتب (عقوبة)', 0, 0, 'يتوقف', '{}', 'لا تُستوفى', 60, 'يُتحقق', 'ت16 — «القسط اليومي من الراتب» يُتحقق');--> statement-breakpoint
 -- ربط أنواع الإجازات بحالاتها مبدئياً من «طريقة صرف الراتب» (ق-17)؛ المدير يعدّل
-UPDATE "leave_types" SET "entitlement_state_id" = (SELECT id FROM entitlement_states WHERE code = CASE
-    WHEN salary_payment_type = 'بدون_راتب' THEN 'UNPAID'
-    WHEN salary_payment_type = 'استقطاع_جزئي' THEN 'HALF_PAY'
-    WHEN salary_payment_type = 'منح_الراتب_والمخصصات_الثابتة_فقط' THEN 'FIXED_ONLY'
-    WHEN name LIKE '%مرضي%' THEN 'SICK_FULL'
-    WHEN name LIKE '%أمومة%' OR name LIKE '%وضع%' OR name LIKE '%حمل%' THEN 'MATERNITY'
+-- الأعمدة مؤهلة باسم الجدول: «name» وحدها كانت تُقرأ من entitlement_states فيرجع الاستعلام الفرعي أكثر من صف (فشل على بيانات حقيقية)
+UPDATE "leave_types" lt SET "entitlement_state_id" = (SELECT es.id FROM entitlement_states es WHERE es.code = CASE
+    WHEN lt.salary_payment_type = 'بدون_راتب' THEN 'UNPAID'
+    WHEN lt.salary_payment_type = 'استقطاع_جزئي' THEN 'HALF_PAY'
+    WHEN lt.salary_payment_type = 'منح_الراتب_والمخصصات_الثابتة_فقط' THEN 'FIXED_ONLY'
+    WHEN lt.name LIKE '%مرضي%' THEN 'SICK_FULL'
+    WHEN lt.name LIKE '%أمومة%' OR lt.name LIKE '%وضع%' OR lt.name LIKE '%حمل%' THEN 'MATERNITY'
     ELSE 'FULL_LEAVE' END);--> statement-breakpoint
 INSERT INTO "employee_statuses" ("name", "is_active", "payroll_eligible", "accrues_leave", "sort_order", "entitlement_state_id")
   SELECT 'مسحوب اليد', true, true, false, 90, (SELECT id FROM entitlement_states WHERE code = 'SUSPENSION')

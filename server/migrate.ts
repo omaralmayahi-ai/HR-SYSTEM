@@ -209,8 +209,12 @@ export async function runMigrations(opts: { log?: (m: string) => void } = {}): P
       log('قاعدة البيانات غير متاحة؛ ستُطبَّق الترحيلات عند التشغيل القادم.');
     } else {
       st.status = 'errors';
-      st.error = { message: String(err?.message || err), code: err?.code ? String(err.code) : null };
-      console.error('[MIGRATE] ✖', st.error.message);
+      // drizzle يلف خطأ PostgreSQL بـ cause: سببه الفعلي (الرسالة والرمز) هو المفيد، لا نص الاستعلام
+      const cause = err?.cause ?? err;
+      const reason = cause?.message && cause !== err ? `${cause.message}${cause.code ? ` (${cause.code})` : ''}` : '';
+      st.error = { message: reason ? `${reason} — ${String(err?.message || err).split('\n').slice(0, 3).join(' ').slice(0, 600)}` : String(err?.message || err),
+        code: cause?.code ? String(cause.code) : err?.code ? String(err.code) : null };
+      console.error('[MIGRATE] ✖', reason ? `السبب: ${reason}` : '', '\n', String(err?.message || err).slice(0, 2000));
     }
   } finally {
     if (client) {
