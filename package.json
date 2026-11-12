@@ -18,11 +18,13 @@
     "db:report": "tsx tools/db/report.ts",
     "db:localdiff": "tsx tools/db/localdiff.ts",
     "db:import-local": "tsx tools/db/import-local.ts",
+    "legacy:allowances": "tsx tools/legacy/allowances-import.ts",
     "db:retire-local": "tsx tools/db/retire-local.ts",
     "test": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@electric-sql/pglite": "0.3.16",
     "@hello-pangea/dnd": "^17.0.0",
     "@hookform/resolvers": "^4.1.2",
     "@radix-ui/react-accordion": "^1.2.3",

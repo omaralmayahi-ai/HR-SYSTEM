@@ -1760,3 +1760,56 @@ export const payrollExternalAmounts = pgTable('payroll_external_amounts', {
   target: text('target').notNull(),
   amount: numeric('amount', { precision: 18, scale: 6 }).notNull(),
 }, (t) => [index('payroll_external_amounts_import').on(t.importId, t.employeeId)]);
+
+// ===== C: ترحيل نظام المخصصات 1.2.0 =====
+// كل تشغيل «تطبيق» للأداة يُسجَّل هنا (ثابت): الملف المصدر وبصمته وملخص ما كُتب
+export const legacyImports = pgTable('legacy_imports', {
+  id: serial('id').primaryKey(),
+  source: text('source').notNull(),          // allowances-system 1.2.0
+  fileName: text('file_name').notNull(),
+  fileSha256: text('file_sha256').notNull(),
+  summary: jsonb('summary').notNull(),
+  appliedBy: text('applied_by').notNull(),
+  appliedAt: timestamp('applied_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// حالات الاستفسار (القسم 14.4): من النظام القديم ومن الترحيل نفسه؛ تُعالج بالحالة والقرار ولا تُحذف
+export const dataIssues = pgTable('data_issues', {
+  id: serial('id').primaryKey(),
+  employeeId: integer('employee_id'),
+  companyNumber: text('company_number').notNull(),
+  topic: text('topic').notNull(),            // العائلية | كشف الرواتب | بيانات الموظف
+  issueCode: text('issue_code').notNull(),
+  title: text('title').notNull(),
+  details: text('details'),
+  externalAmount: numeric('external_amount', { precision: 18, scale: 6 }),
+  computedAmount: numeric('computed_amount', { precision: 18, scale: 6 }),
+  status: text('status').notNull().default('مفتوحة'), // مفتوحة | قيد المراجعة | محلولة | مستبعدة
+  resolution: text('resolution'),
+  resolvedBy: text('resolved_by'),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  source: text('source').notNull(),          // نظام المخصصات 8/2026 | ترحيل C | ...
+  sourceRef: text('source_ref').notNull(),
+  importId: integer('import_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex('data_issues_source_ref').on(t.sourceRef),
+  index('data_issues_status').on(t.status, t.topic),
+  index('data_issues_employee').on(t.employeeId),
+  foreignKey({ name: 'data_issues_employee_fkey', columns: [t.employeeId], foreignColumns: [employees.id] }).onDelete('restrict'),
+  foreignKey({ name: 'data_issues_import_fkey', columns: [t.importId], foreignColumns: [legacyImports.id] }).onDelete('restrict'),
+]);
+
+// أرشيف للاطلاع فقط (القسم 23): كشف 8/2026، الكشوف والمتغيرات، سجل التدقيق، الحالة العائلية الأصلية
+export const legacyArchive = pgTable('legacy_archive', {
+  id: serial('id').primaryKey(),
+  importId: integer('import_id').notNull(),
+  kind: text('kind').notNull(),
+  sourceRef: text('source_ref').notNull(),
+  employeeId: integer('employee_id'),
+  data: jsonb('data').notNull(),
+}, (t) => [
+  uniqueIndex('legacy_archive_ref').on(t.kind, t.sourceRef),
+  index('legacy_archive_employee').on(t.employeeId),
+  foreignKey({ name: 'legacy_archive_import_fkey', columns: [t.importId], foreignColumns: [legacyImports.id] }).onDelete('restrict'),
+]);

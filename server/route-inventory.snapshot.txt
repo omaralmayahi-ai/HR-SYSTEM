@@ -151,6 +151,8 @@ POST /api/payroll/external/inspect [requireAuth,requirePermission(payroll.enter)
 POST /api/payroll/periods/:id/external-import [requireAuth,requirePermission(payroll.enter)]
 POST /api/payroll/periods/:id/external-import/:importId/confirm [requireAuth,requirePermission(payroll.approve)]
 GET /api/payroll/periods/:id/reconciliation [requireAuth,requirePermission(payroll.view)]
+GET /api/data-issues [requireAuth,requirePermission(payroll.view)]
+PATCH /api/data-issues/:id [requireAuth,requirePermission(payroll.enter)]
 GET /api/roles [requireAuth,requirePermission(users.manage)]
 POST /api/roles [requireAuth,requirePermission(users.manage)]
 PUT /api/roles/:name [requireAuth,requirePermission(users.manage)]
