@@ -1723,3 +1723,40 @@ export const requestAudit = pgTable('request_audit', {
   ip: text('ip'),
   body: jsonb('body'),
 }, (t) => [index('request_audit_at').on(t.at), index('request_audit_user').on(t.username, t.at)]);
+
+// B8a4: المطابقة مع كشف الرواتب الخارجي — ملف تعريف الأعمدة (قابل للضبط لأي صيغة)، والمبالغ المستوردة.
+// الملف نفسه ما يُحفظ: بصمته والمبالغ المربوطة بالأعمدة فقط.
+export const payrollImportProfiles = pgTable('payroll_import_profiles', {
+  id: serial('id').primaryKey(),
+  categoryId: integer('category_id').notNull(),
+  name: text('name').notNull(),
+  keyColumn: text('key_column').notNull(), // رأس عمود رقم الشركة بالملف الخارجي
+  columns: jsonb('columns').notNull(),     // [{ header, target }] target = رمز بند | NOMINAL | NET | ALLOWANCES | DEDUCTIONS
+  createdBy: text('created_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex('payroll_import_profiles_name').on(t.categoryId, t.name)]);
+
+export const payrollExternalImports = pgTable('payroll_external_imports', {
+  id: serial('id').primaryKey(),
+  periodId: integer('period_id').notNull(),
+  profileId: integer('profile_id').notNull(),
+  fileName: text('file_name').notNull(),
+  fileSha256: text('file_sha256').notNull(),
+  rows: integer('rows').notNull(),
+  matched: integer('matched').notNull(),
+  unmatched: jsonb('unmatched').notNull(),
+  importedBy: text('imported_by').notNull(),
+  importedAt: timestamp('imported_at', { withTimezone: true }).defaultNow().notNull(),
+  supersededAt: timestamp('superseded_at', { withTimezone: true }),
+  mapping: jsonb('mapping').notNull(),          // لقطة ملف التعريف وقت الاستيراد (عمود المفتاح والأعمدة)
+  confirmedBy: text('confirmed_by'),            // تأكيد مستخدم ثانٍ: شرط اعتماده أساساً للفروق الظلّية (مراجعة H2)
+  confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+}, (t) => [index('payroll_external_imports_period').on(t.periodId)]);
+
+export const payrollExternalAmounts = pgTable('payroll_external_amounts', {
+  id: serial('id').primaryKey(),
+  importId: integer('import_id').notNull(),
+  employeeId: integer('employee_id').notNull(),
+  target: text('target').notNull(),
+  amount: numeric('amount', { precision: 18, scale: 6 }).notNull(),
+}, (t) => [index('payroll_external_amounts_import').on(t.importId, t.employeeId)]);

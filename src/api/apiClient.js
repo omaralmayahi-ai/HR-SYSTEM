@@ -360,6 +360,20 @@ export const apiClient = {
     updateState: (id, fields) => request(`/api/payroll/states/${id}`, { method: 'PUT', body: JSON.stringify(fields) }),
     mapState: (data) => request('/api/payroll/state-mappings', { method: 'POST', body: JSON.stringify(data) }),
     employeeBalances: (employeeId, asOfPeriod) => request(`/api/payroll/employees/${employeeId}/balances${asOfPeriod ? `?as_of_period=${asOfPeriod}` : ''}`),
+    // B8a4: المطابقة مع الكشف الخارجي
+    importProfiles: (category = 'PERM') => request(`/api/payroll/import-profiles?category=${encodeURIComponent(category)}`),
+    saveImportProfile: (id, data) => request(id ? `/api/payroll/import-profiles/${id}` : '/api/payroll/import-profiles', { method: id ? 'PUT' : 'POST', body: JSON.stringify(data) }),
+    inspectExternal: (file_base64, sheet) => request('/api/payroll/external/inspect', { method: 'POST', body: JSON.stringify({ file_base64, sheet }), timeoutMs: 120000 }),
+    confirmExternalImport: (periodId, importId) => request(`/api/payroll/periods/${periodId}/external-import/${importId}/confirm`, { method: 'POST' }),
+    importExternal: (periodId, data) => request(`/api/payroll/periods/${periodId}/external-import`, { method: 'POST', body: JSON.stringify(data), timeoutMs: 300000 }),
+    reconciliation: (periodId) => request(`/api/payroll/periods/${periodId}/reconciliation`, { timeoutMs: 120000 }),
+    downloadReconciliation: async (periodId) => {
+      const token = localStorage.getItem('hr_session_token');
+      const res = await fetch(`/api/payroll/periods/${periodId}/reconciliation?format=xlsx`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!res.ok) { let msg = 'تعذّر التصدير'; try { msg = (await res.json()).error || msg; } catch {} throw new Error(msg); }
+      const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `المطابقة-${periodId}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    },
     // B8c: المصرف والملخص المحاسبي
     bankRejection: (periodId, employee_id, reason) => request(`/api/payroll/periods/${periodId}/bank-rejections`, { method: 'POST', body: JSON.stringify({ employee_id, reason }) }),
     bankAccounts: (employeeId) => request(`/api/payroll/employees/${employeeId}/bank-accounts`),

@@ -22,6 +22,7 @@ import { registerPayrollRoutes } from './server/routes/payroll.ts';
 import { registerPayrollPeriodRoutes } from './server/routes/payrollPeriods.ts';
 import { registerPayrollStateRoutes } from './server/routes/payrollStates.ts';
 import { registerRoleRoutes, loadRoles } from './server/routes/roles.ts';
+import { registerPayrollReconcileRoutes } from './server/routes/payrollReconcile.ts';
 import { createRequestAudit } from './server/requestAudit.ts';
 import { startDueMovementsJob } from './server/careerMovements.ts';
 import { registerAnnualPlanRoutes } from './server/routes/annualPlans.ts';
@@ -2319,6 +2320,7 @@ async function startServer() {
   registerPayrollRoutes(app, routeCtx); // B8a1
   registerPayrollPeriodRoutes(app, routeCtx); // B8a3
   registerPayrollStateRoutes(app, routeCtx); // B8b
+  registerPayrollReconcileRoutes(app, routeCtx); // B8a4
   registerRoleRoutes(app, routeCtx); // B9
   loadRoles(db, schema).catch(e => console.error('[roles] تعذّر تحميل الأدوار؛ تُستخدم الافتراضية:', e?.message));
   setInterval(() => { loadRoles(db, schema).catch(() => {}); }, 60_000).unref?.();

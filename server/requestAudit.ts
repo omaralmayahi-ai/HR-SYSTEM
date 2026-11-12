@@ -5,7 +5,7 @@ import type { Request, Response, NextFunction } from 'express';
 // مفاتيح تُحجب: الأسرار (كلمات المرور، الرموز) والبيانات الحساسة التي تخفيها الواجهة (أرقام الحسابات والهوية) — مراجعة B9 M2/L2
 const SECRET_KEY = (k: string) => {
   const n = k.toLowerCase().replace(/[\s-]/g, '_');
-  if (/password|passwd|secret|token|jwt|authorization|credential|api_?key/.test(n)) return true;
+  if (/password|passwd|secret|token|jwt|authorization|credential|api_?key|base64/.test(n)) return true; // base64: ملفات مرفوعة (كشف رواتب CSV مقروء) — مراجعة B8a4 M4
   return /(^|_)(pass|pwd|otp|pin|account_?number|iban|card_?number|national_?id|national_?number|id_?number|passport)(_|$)/.test(n);
 };
 /** نص يبدو JSON (جسم داخل حقل نصي): يُفك ويُحجب. */

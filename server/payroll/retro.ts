@@ -16,7 +16,7 @@ export type RetroLine = NonNullable<EmployeeIn['retro']>[number];
 const keyOf = (l: { kind: string; item_code: string; explain?: any }) => (l.kind === 'retro' ? String(l.explain?.origin_key ?? l.item_code) : l.item_code);
 
 /** ما صُرف عن فترة أصلية لكل (موظف، مفتاح): اللقطة + الفروق المعتمدة عنها (بأي احتساب لاحق معتمد/مُصدَر). */
-async function paidSoFar(tx: any, origin: { id: number; runId: number }, employeeIds: number[], excludePeriodId: number | null) {
+async function paidSoFar(tx: any, origin: { id: number; runId: number; shadow?: boolean; basisImportId?: number | null }, employeeIds: number[], excludePeriodId: number | null) {
   const ids = sql.raw(`ARRAY[${employeeIds.join(',') || 0}]::int[]`);
   const base = rows(await tx.execute(sql`SELECT employee_id, kind, item_id, item_code, item_name, direction, amount::text amount, explain FROM payroll_lines
     WHERE run_id = ${origin.runId} AND employee_id = ANY(${ids}) AND kind = ANY(${sql.raw(`ARRAY[${BASIS_KINDS.map(k => `'${k}'`).join(',')}]::text[]`)}) ORDER BY employee_id, seq`));
@@ -24,17 +24,38 @@ async function paidSoFar(tx: any, origin: { id: number; runId: number }, employe
     JOIN payroll_runs r ON r.id = l.run_id WHERE r.state IN ('معتمد', 'مُصدَر') AND l.kind = 'retro' AND l.employee_id = ANY(${ids})
       AND (l.explain->>'origin_period_id')::int = ${origin.id} ${excludePeriodId ? sql`AND r.period_id <> ${excludePeriodId}` : sql``} ORDER BY l.employee_id, l.run_id, l.seq`));
   const m = new Map<string, { amount: Micro; itemId: number | null; itemCode: string; itemName: string; direction: '+' | '-' }>();
-  for (const l of [...base, ...later]) {
-    if (l.kind === 'retro' && l.explain?.origin_period_id !== undefined && Number(l.explain.origin_period_id) !== origin.id) continue;
+  const add = (l: any) => {
+    if (l.kind === 'retro' && l.explain?.origin_period_id !== undefined && Number(l.explain.origin_period_id) !== origin.id) return;
     const k = `${l.employee_id}|${keyOf(l)}`;
     const name = l.kind === 'retro' ? String(l.item_name).replace(/^فرق رجعي عن [^:]+: /, '') : l.item_name;
     const cur = m.get(k) || { amount: 0n, itemId: l.item_id, itemCode: keyOf(l), itemName: name, direction: l.kind === 'cap' ? '+' : l.direction };
     cur.amount += money(l.amount);
     if (l.kind !== 'cap' && l.kind !== 'retro') cur.itemName = name;
     m.set(k, cur);
+  };
+  for (const l of base) add(l);
+  // الفترة الظلّية (س12.8): أساس المقارنة = المبالغ المستوردة المؤكدة من الكشف الخارجي للبنود المربوطة (والاسمي)، لا لقطة النظام.
+  // الاتجاه والمعرّف والاسم من تعريف البند (مراجعة H3)؛ البند غير المربوط يبقى على اللقطة.
+  if (origin.shadow) {
+    const ext = rows(await tx.execute(sql`SELECT a.employee_id, a.target, sum(a.amount)::text amt, min(p.id) item_id, min(p.name) item_name, min(p.direction) direction
+      FROM payroll_external_amounts a LEFT JOIN pay_items p ON p.code = a.target
+      WHERE a.import_id = ${origin.basisImportId ?? 0} AND a.employee_id = ANY(${ids}) AND a.target NOT IN ('NET', 'ALLOWANCES', 'DEDUCTIONS')
+      GROUP BY a.employee_id, a.target ORDER BY a.employee_id, a.target`));
+    for (const x of ext) {
+      const k = `${x.employee_id}|${x.target}`;
+      const known = x.target === 'NOMINAL' ? { itemId: null, itemName: 'الراتب الاسمي', direction: '+' as const }
+        : { itemId: x.item_id === null ? null : Number(x.item_id), itemName: x.item_name ?? x.target, direction: (x.direction === '-' ? '-' : '+') as '+' | '-' };
+      if (x.target !== 'NOMINAL' && x.item_id === null) continue; // هدف بلا بند (ما يحدث: الربط يُتحقق منه)
+      const cur = m.get(k);
+      m.set(k, { itemCode: x.target, ...known, ...(cur ? { itemId: cur.itemId ?? known.itemId, itemName: cur.itemName, direction: cur.direction } : {}), amount: money(x.amt), external: true } as any);
+    }
   }
+  for (const l of later) add(l);
   return m;
 }
+
+/** يضيف ملاحظة تخطٍّ للموظف (أشهر متعددة ما تمحو بعضها). */
+const note = (m: Map<number, string>, eid: number, msg: string) => m.set(eid, m.has(eid) ? `${m.get(eid)}؛ ${msg}` : msg);
 
 /** يحسب فروق فترة أصلية لموظفين محددين. */
 async function diffsFor(tx: any, origin: any, employeeIds: number[], o: { categoryId: number; eligibleStatuses: string[]; knownAt: Date; excludePeriodId: number | null },
@@ -43,7 +64,16 @@ async function diffsFor(tx: any, origin: any, employeeIds: number[], o: { catego
   const { ctx, employees } = await loadPeriodInputs(tx, { year: origin.year, month: origin.month, categoryId: o.categoryId, eligibleStatuses: o.eligibleStatuses,
     knownAt: o.knownAt, employeeIds, sequential: true, periodId: origin.id, balancesKnownAt: origin.approved_at });
   ctx.noNetProtection = true; // س12.4
-  const paid = await paidSoFar(tx, { id: origin.id, runId: Number(origin.current_run_id) }, employeeIds, o.excludePeriodId);
+  const shadow = origin.pay_source === 'ظلّي';
+  let basisImportId: number | null = null, shadowMissing = false; const shadowTargets = new Set<string>();
+  if (shadow) {
+    // بلا كشف خارجي مؤكد ما نعرف ما صُرف فعلاً: ما نحتسب فروقاً على لقطة النظام بصمت (س12.8 — مراجعة M6)
+    const [imp] = rows(await tx.execute(sql`SELECT id, mapping FROM payroll_external_imports WHERE period_id = ${origin.id} AND superseded_at IS NULL AND confirmed_by IS NOT NULL`));
+    if (!imp) shadowMissing = true;
+    else basisImportId = Number(imp.id);
+    for (const c of (imp?.mapping?.columns || []) as any[]) if (!['NET', 'ALLOWANCES', 'DEDUCTIONS'].includes(c.target)) shadowTargets.add(String(c.target));
+  }
+  const paid = await paidSoFar(tx, { id: origin.id, runId: Number(origin.current_run_id), shadow, basisImportId }, employeeIds, o.excludePeriodId);
   // تنبيهات البنود بالاحتساب الأصلي: تنبيه جديد بإعادة الاحتساب (بلا مستوى، تعذّر التقييم...) ما يصير استرداداً (AGENTS 2 — مراجعة M2)
   const origIssues = new Map<number, Set<string>>(rows(await tx.execute(sql`SELECT employee_id, issues FROM payroll_results WHERE run_id = ${Number(origin.current_run_id)} AND employee_id = ANY(${sql.raw(`ARRAY[${employeeIds.join(',') || 0}]::int[]`)}) ORDER BY employee_id`))
     .map(r => [Number(r.employee_id), new Set((r.issues || []).map((i: any) => `${i.code}|${i.itemCode ?? ''}`))]));
@@ -57,11 +87,16 @@ async function diffsFor(tx: any, origin: any, employeeIds: number[], o: { catego
       const r = computeEmployee({ ...e, retro: [], unpaid: 0n }, ctx);
       // تعذّر الاحتساب بسبب بيانات ناقصة (بلا درجة...) ما يعني إلغاء الراتب: ما نولّد فروقاً سالبة، نُبلّغ
       const blocking = r.issues.filter(i => i.code !== 'NOT_IN_PERIOD' && !r.computed);
-      if (blocking.length) { skipped.set(eid, `${ym}: ${blocking.map(i => i.message).join('؛ ')}`); continue; }
+      if (blocking.length) { note(skipped, eid, `${ym}: ${blocking.map(i => i.message).join('؛ ')}`); continue; }
       const had = origIssues.get(eid) || new Set<string>();
       const newItemIssues = r.issues.filter(i => i.itemCode && !had.has(`${i.code}|${i.itemCode}`));
       for (const i of newItemIssues) blockedKeys.add(i.itemCode!);
-      if (newItemIssues.length) skipped.set(eid, `${ym}: ما احتُسب فرق ${[...blockedKeys].join('، ')} — ${newItemIssues.map(i => i.message).join('؛ ')}`);
+      // بند مربوط بالكشف لكن خليته فارغة/غير رقمية لهذا الموظف: ما نعرف ما صُرف ⇒ ما نحتسب فرقه على اللقطة (مراجعة M6)
+      const noExt = [...shadowTargets].filter(t => !(paid.get(`${eid}|${t}`) as any)?.external);
+      for (const t of noExt) blockedKeys.add(t);
+      const noExtHit = noExt.filter(t => paid.has(`${eid}|${t}`) || r.lines.some(l => l.itemCode === t && BASIS_KINDS.includes(l.kind)));
+      if (noExtHit.length) note(skipped, eid, `${ym}: خلية الكشف الخارجي ناقصة لـ ${noExtHit.join('، ')} — ما احتُسب فرقها`);
+      if (newItemIssues.length) note(skipped, eid, `${ym}: ما احتُسب فرق ${[...blockedKeys].join('، ')} — ${newItemIssues.map(i => i.message).join('؛ ')}`);
       for (const l of r.lines) {
         if (!BASIS_KINDS.includes(l.kind)) continue;
         if (blockedKeys.has(l.itemCode)) continue;
@@ -72,15 +107,19 @@ async function diffsFor(tx: any, origin: any, employeeIds: number[], o: { catego
         now.set(k, cur);
       }
     }
+    const lines: RetroLine[] = [];
     for (const k of new Set([...[...paid.keys()].filter(x => x.startsWith(`${eid}|`)), ...now.keys()])) {
       if (blockedKeys.has(k.slice(k.indexOf('|') + 1))) continue;
       const a = paid.get(k), b = now.get(k);
       const diff = (b?.amount ?? 0n) - (a?.amount ?? 0n);
       if (diff === 0n) continue;
       const ref = b || a!;
-      (out.get(eid) || out.set(eid, []).get(eid)!).push({ originPeriodId: origin.id, originYm: ym, key: ref.itemCode, itemId: ref.itemId, itemCode: ref.itemCode,
-        itemName: ref.itemName, direction: ref.direction, amount: diff, ...(origin.pay_source === 'ظلّي' ? { shadow: true } : {}) });
+      lines.push({ originPeriodId: origin.id, originYm: ym, key: ref.itemCode, itemId: ref.itemId, itemCode: ref.itemCode,
+        itemName: ref.itemName, direction: ref.direction, amount: diff, ...(shadow ? { shadow: true, basisImportId } : {}) });
     }
+    if (!lines.length) continue;
+    if (shadowMissing) { note(skipped, eid, `${ym}: فترة ظلّية بلا كشف خارجي مستورد ومؤكد — ما احتُسب فرقها (س12.8)`); continue; }
+    out.set(eid, [...(out.get(eid) || []), ...lines]);
   }
 }
 

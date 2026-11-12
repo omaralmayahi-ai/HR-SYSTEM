@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { LinesTable } from '@/components/payroll/PayrollLinesTable';
-import { Wallet, Calculator, CheckCircle2, Send, Undo2, FileSpreadsheet, AlertTriangle, Search, ListChecks, History, Loader2 } from 'lucide-react';
+import ReconcileTab from '@/components/payroll/ReconcileTab';
+import { GitCompare, Wallet, Calculator, CheckCircle2, Send, Undo2, FileSpreadsheet, AlertTriangle, Search, ListChecks, History, Loader2 } from 'lucide-react';
 
 const statusStyle = {
   'مفتوحة': 'bg-sky-100 text-sky-800', 'محتسبة': 'bg-amber-100 text-amber-800',
@@ -150,7 +151,7 @@ export default function Payroll() {
                 )}
                 {currentRun && <div className="text-[11px] text-slate-500">الاحتساب {currentRun.id} بواسطة {currentRun.computedBy} · {String(currentRun.finishedAt || '').slice(0, 16).replace('T', ' ')}{period.approved_by ? ` · اعتمده ${period.approved_by}` : ''}{period.dispatch_letter ? ` · كتاب ${period.dispatch_letter}` : ''}</div>}
                 <div className="flex gap-2 pt-1">
-                  {[['results', 'النتائج', Search], ['review', 'تقرير المراجعة', ListChecks], ['statements', 'الكشوف', FileSpreadsheet], ['runs', `الاحتسابات (${detail.runs.length})`, History]].map(([k, l, I]) => (
+                  {[['results', 'النتائج', Search], ['review', 'تقرير المراجعة', ListChecks], ['statements', 'الكشوف', FileSpreadsheet], ['reconcile', 'المطابقة', GitCompare], ['runs', `الاحتسابات (${detail.runs.length})`, History]].map(([k, l, I]) => (
                     <button key={k} onClick={() => setTab(k)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold ${tab === k ? 'bg-[#1B3A6B] text-white' : 'bg-slate-100 text-slate-600'}`}><I className="w-3.5 h-3.5" />{l}</button>
                   ))}
                 </div>
@@ -158,6 +159,7 @@ export default function Payroll() {
               {tab === 'results' && <ResultsTab period={period} key={`r${period.id}-${period.current_run_id}`} />}
               {tab === 'review' && <ReviewTab period={period} key={`v${period.id}-${period.current_run_id}`} />}
               {tab === 'statements' && <StatementsTab period={period} />}
+              {tab === 'reconcile' && <ReconcileTab period={period} category={category} canEnter={can(user, 'payroll.enter')} canApprove={can(user, 'payroll.approve')} user={user?.username} key={`x${period.id}`} />}
               {tab === 'runs' && <RunsTab runs={detail.runs} currentId={period.current_run_id} />}
             </>
           )}
@@ -270,6 +272,9 @@ function ReviewTab({ period }) {
     ['موظفون جدد عن الشهر السابق', S.new_employees, x => `${who(x)}: ${fmt(x.net)}`],
     ['تغييرات المستخدمين والأدوار منذ الفترة السابقة', S.user_role_changes, x => `${String(x.at).slice(0, 16).replace('T', ' ')} ${x.action}: ${x.before_user ?? ''}${x.before_role ? `(${x.before_role})` : ''} ← ${x.after_user ?? ''}${x.after_role ? `(${x.after_role})` : ''} بواسطة ${x.actor ?? '—'}`],
     ['بنود فعّالة بقيم «يُتحقق» (تمنع الاعتماد)', S.unverified_items, x => `${x.code} ${x.name}`],
+    ['الكشف الخارجي المستورد لهذه الفترة', S.reconcile ? [S.reconcile.import] : [], x => `${x.file_name} — استورده ${x.imported_by}، ${x.confirmed_by ? `أكّده ${x.confirmed_by}` : 'غير مؤكد'}؛ خلايا ناقصة ${S.reconcile.summary.missing_cells}`],
+    ['أساس الفروق الرجعية الظلّية (الكشوف الخارجية المستعملة)', S.retro_basis_imports, x => `${x.year}/${x.month}: ${x.file_name} — استورده ${x.imported_by}، أكّده ${x.confirmed_by}${x.superseded_at ? ' (استُبدل لاحقاً)' : ''}`],
+    ['فروق المطابقة مع الكشف الخارجي (أكبر 50)', S.reconcile?.top, x => `${x.company_number ?? ''} ${x.name ?? ''}: ${x.target} — النظام ${fmt(x.system)} / الخارجي ${fmt(x.external)} (${fmt(x.diff)})`],
     ['الفروق الرجعية (القسم 12)', S.retro_diffs, x => `${who(x)}: ${fmt(x.total)} عن ${(x.months || []).join('، ')}${x.shadow ? ' (فترة ظلّية)' : ''}`],
     ['فروق رجعية سالبة (تحتاج أمر استرداد إذا كبيرة)', S.retro_negative, x => `${who(x)}: ${fmt(x.total)}`],
     ['فروق ما احتُسبت أو ما صُرفت', S.retro_issues, x => `${who(x)}: ${x.message}`],

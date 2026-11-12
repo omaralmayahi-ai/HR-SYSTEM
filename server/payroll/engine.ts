@@ -25,7 +25,7 @@ export interface EmployeeIn {
   balances?: { installmentsPaid: Map<number, Micro>; held: Micro; debit: Micro };
   inputIssues?: Issue[];
   // B8c: فروق رجعية محسوبة مسبقاً (س12.5) تُدرج سطوراً بالفترة المفتوحة، والمستحق غير المصروف (رفض المصرف)
-  retro?: { originPeriodId: number; originYm: string; key: string; itemId: number | null; itemCode: string; itemName: string; direction: '+' | '-'; amount: Micro; shadow?: boolean }[];
+  retro?: { originPeriodId: number; originYm: string; key: string; itemId: number | null; itemCode: string; itemName: string; direction: '+' | '-'; amount: Micro; shadow?: boolean; basisImportId?: number | null }[];
   unpaid?: Micro; // مشاكل بالمدخلات اكتشفها المحمّل (تواريخ غير صالحة...) — تُبلَّغ ولا تُهمل بصمت
 }
 /** حالة استحقاق (القسم 9): نسبة الاسمي والمحجوز وسلوك البنود والتقاعد والأسبقية. */
@@ -162,7 +162,7 @@ function familyAmount(props: any, mode: any, fam: FamilyIn, day: string, issues:
 }
 
 // ---------- الاحتساب ----------
-function categoryOf(ctx: EngineCtx, serviceType: any, contractType: any): number | null {
+export function categoryOf(ctx: EngineCtx, serviceType: any, contractType: any): number | null {
   const st = normAr(serviceType), ct = normAr(contractType);
   const exact = ctx.categoryRules.find(r => normAr(r.serviceType) === st && r.contractType !== null && normAr(r.contractType) === ct);
   if (exact) return exact.categoryId;
@@ -500,7 +500,7 @@ export function computeEmployee(emp: EmployeeIn, ctx: EngineCtx): EmployeeResult
     if (r.amount === 0n) continue;
     lines.push({ itemId: r.itemId, itemCode: r.itemCode, itemName: `فرق رجعي عن ${r.originYm}: ${r.itemName}`, direction: r.direction, kind: 'retro', segmentFrom: start, segmentTo: end, share: 'رجعي',
       amount: r.amount, base: null, rate: null, itemVersionId: null, scaleVersionId: null, assignmentId: null,
-      explain: { origin_period_id: r.originPeriodId, origin_ym: r.originYm, origin_key: r.key, ...(r.shadow ? { shadow: true } : {}) } });
+      explain: { origin_period_id: r.originPeriodId, origin_ym: r.originYm, origin_key: r.key, ...(r.shadow ? { shadow: true, basis_import_id: r.basisImportId ?? null } : {}) } });
   }
   // المستحق غير المصروف (رفض المصرف بعد الإصدار — 11.2)
   if ((emp.unpaid ?? 0n) > 0n) {
@@ -543,4 +543,12 @@ export function computeEmployee(emp: EmployeeIn, ctx: EngineCtx): EmployeeResult
     }
   }
   return result(true, flags);
+}
+
+/** هل يمس الموظف هذه الفئة بأي قيمة لنوع الخدمة/العقد بتاريخه؟ (للبصمة: موظفو الفئات الأخرى ما يغيّرونها) */
+export function touchesCategory(emp: EmployeeIn, ctx: EngineCtx): boolean {
+  const sts = (emp.timeline.service_type || [{ from: null, value: null }]).map(e => e.value);
+  const cts = (emp.timeline.contract_type || [{ from: null, value: null }]).map(e => e.value);
+  for (const st of sts) for (const ct of cts) if (categoryOf(ctx, st, ct) === ctx.categoryId) return true;
+  return false;
 }

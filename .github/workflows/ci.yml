@@ -51,7 +51,7 @@ jobs:
       - name: فحص تطابق المخطط
         run: npx tsx tools/db/check.ts
       - name: اختبارات القاعدة
-        run: HR_TEST_DB=1 npx vitest run server/*.db.test.ts
+        run: HR_TEST_DB=1 npx vitest run --no-file-parallelism server/*.db.test.ts
       - name: لا بيانات حقيقية بالمستودع
         run: |
           if git ls-files | grep -Ei '\.(accdb|mdb|xlsx|xls)$|^temp/'; then echo "ملفات بيانات حقيقية بالمستودع"; exit 1; fi
