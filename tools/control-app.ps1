@@ -1321,6 +1321,32 @@ function Invoke-UnprotectFolders {
 # فحص النظام
 # ---------------------------------------------------------------------
 # حالة ترحيلات قاعدة البيانات (npm run db:status، قراءة فقط)
+# ترحيلات القاعدة: نسخة احتياطية ثم تطبيق المعلّق (معاملة واحدة). يرجع 3 إذا القاعدة غير متاحة.
+function Invoke-DbMigrate {
+    $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
+    [void](New-Backup 'before-migrate')
+    $code = Invoke-Logged $npm 'run -s db:migrate' 'تطبيق ترحيلات قاعدة البيانات...'
+    if ($code -eq 3) { Write-Log '✖ قاعدة البيانات غير متاحة.'; return 3 }
+    if ($code -ne 0) { throw 'فشل تطبيق الترحيلات. لم يتغير شيء في القاعدة (المعاملة أُلغيت). السبب بالسجلّ أعلاه.' }
+    Write-Log '✔ الترحيلات مطبّقة. أعد تشغيل النظام حتى يعمل عليها.'
+    return 0
+}
+
+# C: ترحيل نظام المخصصات 1.2.0 من أحدث نسخة احتياطية له (..\allowances-system\data\backups). تجربة، تأكيد، نسخة، تطبيق على نفس الملف.
+function Invoke-LegacyAllowances {
+    $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
+    $code = Invoke-Logged $npm 'run -s legacy:allowances' 'تجربة ترحيل نظام المخصصات (لا يُكتب شيء)...'
+    if ($code -eq 3) { Write-Log '✖ قاعدة البيانات غير متاحة.'; return 3 }
+    if ($code -eq 2) { throw 'التطبيق موقوف: أكو فترات رواتب معتمدة تتأثر (راجع الرسالة بالسجلّ).' }
+    if ($code -ne 0) { throw 'فشلت التجربة. لم يُكتب شيء. السبب بالسجلّ أعلاه.' }
+    if (-not (Confirm-Action 'راجع الأرقام بالسجلّ وتقرير temp\legacy-allowances-*.xlsx. ستُؤخذ نسخة احتياطية ثم يُطبّق الترحيل بمعاملة واحدة. متابعة؟' 'ترحيل نظام المخصصات')) { Write-Log 'أُلغي. لم يتغير شيء.'; return 0 }
+    [void](New-Backup 'before-legacy-allowances')
+    $code = Invoke-Logged $npm ('run -s legacy:allowances -- --apply --from-last --user "' + $env:USERNAME + '"') 'تطبيق ترحيل نظام المخصصات (نفس الملف اللي جُرّب)...'
+    if ($code -ne 0) { throw 'فشل الترحيل. المعاملة أُلغيت ولم يُكتب شيء.' }
+    Write-Log '✔ اكتمل الترحيل. راجع صفحة «حالات الاستفسار» بالنظام.'
+    return 0
+}
+
 function Show-MigrationStatus {
     $npm = Get-NpmCmd
     if (-not $npm -or -not (Test-Path (Join-Path $script:AppDir 'drizzle'))) { return }
@@ -1695,12 +1721,7 @@ if ($script:Cli) {
             'build'   { $was = Test-AppActive; if ($was) { Stop-App }; Install-Dependencies $false; Invoke-Build; if ($was) { Start-App } }
             'backup'  { [void](New-Backup 'cli') }
             'update'  { Invoke-UpdateFromGitHub }
-            'migrate' {
-                $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
-                [void](New-Backup 'before-migrate')
-                $code = Invoke-Logged $npm 'run -s db:migrate' 'تطبيق ترحيلات قاعدة البيانات...'
-                if ($code -eq 3) { exit 3 } elseif ($code -ne 0) { throw 'فشل تطبيق الترحيلات. لم يتغير شيء في القاعدة (المعاملة أُلغيت).' }
-            }
+            'migrate' { if ((Invoke-DbMigrate) -eq 3) { exit 3 } }
             'dbstatus' { Show-MigrationStatus }
             'localdiff' {
                 $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
@@ -1723,16 +1744,7 @@ if ($script:Cli) {
                     if ($was) { Start-App }
                 }
             }
-            'legacyalw' {
-                # C: ترحيل نظام المخصصات 1.2.0 من أحدث نسخة احتياطية له (..\allowances-system\data\backups). تجربة أولاً، ثم نسخة ثم تطبيق.
-                $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
-                $code = Invoke-Logged $npm 'run -s legacy:allowances' 'تجربة ترحيل نظام المخصصات (لا يُكتب شيء)...'
-                if ($code -eq 3) { exit 3 } elseif ($code -eq 2) { throw 'التطبيق موقوف: أكو فترات رواتب معتمدة تتأثر (راجع الرسالة أعلاه).' } elseif ($code -ne 0) { throw 'فشلت التجربة. لم يُكتب شيء.' }
-                if (-not (Confirm-Action 'راجع الأرقام أعلاه وتقرير temp\legacy-allowances-*.xlsx. ستُؤخذ نسخة احتياطية ثم يُطبّق الترحيل بمعاملة واحدة. متابعة؟' 'ترحيل نظام المخصصات')) { Write-Host 'أُلغي. لم يتغير شيء.'; exit 0 }
-                [void](New-Backup 'before-legacy-allowances')
-                $code = Invoke-Logged $npm ('run -s legacy:allowances -- --apply --from-last --user "' + $env:USERNAME + '"') 'تطبيق ترحيل نظام المخصصات (نفس الملف اللي جُرّب)...'
-                if ($code -ne 0) { throw 'فشل الترحيل. المعاملة أُلغيت ولم يُكتب شيء.' }
-            }
+            'legacyalw' { if ((Invoke-LegacyAllowances) -eq 3) { exit 3 } }
             'retirelocal' {
                 # B2e: تقاعد data\local_storage.json (نقل إلى data\retired، لا حذف)
                 $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
@@ -1941,6 +1953,11 @@ Add-Group 'الصيانة' @(
     @('فحص النظام',          { Invoke-SystemCheck }),
     @('فحص المنفذ',          { Invoke-PortCheck }),
     @('عرض سجلّ الخادم',     { Show-ServerLog })
+)
+Add-Group 'قاعدة البيانات' @(
+    @('حالة الترحيلات',       { Show-MigrationStatus }),
+    @('تطبيق الترحيلات',      { [void](Invoke-DbMigrate) }),
+    @('ترحيل نظام المخصصات',  { [void](Invoke-LegacyAllowances) })
 )
 Add-Group 'النسخ الاحتياطي' @(
     @('نسخة احتياطية',       { [void](New-Backup 'manual') }),

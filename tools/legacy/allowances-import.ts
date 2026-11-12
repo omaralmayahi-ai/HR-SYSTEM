@@ -82,7 +82,12 @@ if (process.argv[1] && /allowances-import\.ts$/.test(process.argv[1])) {
   let code = 0;
   try { code = await main(); } catch (err: any) {
     if (isDbConnectionFailure(err)) { console.error('قاعدة البيانات غير متاحة'); code = 3; }
-    else { console.error('✖ فشل، لم يُكتب شيء: ' + (err?.message || err)); code = 1; }
+    else {
+      const cause = err?.cause?.message ? ` — السبب: ${err.cause.message}` : '';
+      if (err?.cause?.code === '42P01') console.error('✖ جداول الترحيل غير موجودة: ترحيلات القاعدة غير مطبّقة. من لوحة التحكم: «تطبيق الترحيلات» ثم أعد المحاولة.');
+      else console.error('✖ فشل، لم يُكتب شيء: ' + String(err?.message || err).split('\n')[0].slice(0, 300) + cause);
+      code = 1;
+    }
   }
   await pool.end().catch(() => {});
   process.exit(code);
