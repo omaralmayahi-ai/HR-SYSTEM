@@ -6,7 +6,7 @@
 #  -ScheduledBackup : يُستدعى من المهمة المجدولة HRSystemBackup لأخذ نسخة احتياطية بدون واجهة.
 #  -RestartNow      : يُعيد تشغيل الخادم مباشرة بصلاحية المدير بدون فتح الواجهة.
 #  -Action <اسم>    : وضع سطر الأوامر بدون واجهة (يستدعيه control-app.bat عند تمرير أمر):
-#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | dbreport | localdiff | importlocal | retirelocal | logs | help
+#                     status | start | stop | restart | build | backup | update | migrate | dbstatus | dbreport | localdiff | importlocal | retirelocal | legacyalw | logs | help
 #  -Yes             : موافقة تلقائية على أسئلة التأكيد في وضع سطر الأوامر.
 # =====================================================================
 param([switch]$ScheduledBackup, [switch]$RestartNow, [string]$Action = '', [switch]$Yes)
@@ -1723,6 +1723,16 @@ if ($script:Cli) {
                     if ($was) { Start-App }
                 }
             }
+            'legacyalw' {
+                # C: ترحيل نظام المخصصات 1.2.0 من أحدث نسخة احتياطية له (..\allowances-system\data\backups). تجربة أولاً، ثم نسخة ثم تطبيق.
+                $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
+                $code = Invoke-Logged $npm 'run -s legacy:allowances' 'تجربة ترحيل نظام المخصصات (لا يُكتب شيء)...'
+                if ($code -eq 3) { exit 3 } elseif ($code -eq 2) { throw 'التطبيق موقوف: أكو فترات رواتب معتمدة تتأثر (راجع الرسالة أعلاه).' } elseif ($code -ne 0) { throw 'فشلت التجربة. لم يُكتب شيء.' }
+                if (-not (Confirm-Action 'راجع الأرقام أعلاه وتقرير temp\legacy-allowances-*.xlsx. ستُؤخذ نسخة احتياطية ثم يُطبّق الترحيل بمعاملة واحدة. متابعة؟' 'ترحيل نظام المخصصات')) { Write-Host 'أُلغي. لم يتغير شيء.'; exit 0 }
+                [void](New-Backup 'before-legacy-allowances')
+                $code = Invoke-Logged $npm ('run -s legacy:allowances -- --apply --from-last --user "' + $env:USERNAME + '"') 'تطبيق ترحيل نظام المخصصات (نفس الملف اللي جُرّب)...'
+                if ($code -ne 0) { throw 'فشل الترحيل. المعاملة أُلغيت ولم يُكتب شيء.' }
+            }
             'retirelocal' {
                 # B2e: تقاعد data\local_storage.json (نقل إلى data\retired، لا حذف)
                 $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
@@ -1756,6 +1766,7 @@ if ($script:Cli) {
                 Write-Host '  localdiff مقارنة data\local_storage.json بقاعدة البيانات (قراءة فقط)'
                 Write-Host '  importlocal نقل ما وُوفق عليه من local_storage.json إلى القاعدة (تجربة ثم نسخة ثم نقل)'
                 Write-Host '  retirelocal نقل local_storage.json إلى data\retired بعد النقل (لا حذف)'
+                Write-Host '  legacyalw ترحيل نظام المخصصات 1.2.0: العائلة وحالات الاستفسار والأرشيف (تجربة ثم نسخة ثم تطبيق)'
                 Write-Host '  dbreport  تكرار المعرّفات الفريدة والأعمدة غير المعرّفة وبياناتها (قراءة فقط)'
                 Write-Host '  logs      آخر 80 سطراً من سجل الخادم'
                 if ($act -ne 'help') { exit 1 }

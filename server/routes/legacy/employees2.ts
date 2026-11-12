@@ -2,6 +2,7 @@
 // الاعتماديات تصل صراحة عبر deps. التنظيف (حذف فروع الذاكرة وكتابة الأنواع) يتم لاحقاً مجالاً مجالاً.
 import type { Express } from 'express';
 
+import { sql } from 'drizzle-orm';
 import { countRelatedRecords } from '../../employeeDeletion.ts';
 
 export function registerEmployees2Routes(app: Express, deps: any) {
@@ -48,6 +49,13 @@ export function registerEmployees2Routes(app: Express, deps: any) {
       relatedCounts.total += historyRows.length;
       relatedCounts.byTable.employeeFieldHistory = historyRows.length;
     }
+    // C: حالات الاستفسار وأرشيف الترحيل (ثابتان بمفتاح RESTRICT)
+    try {
+      const legacyRows = await db.execute(sql`SELECT (SELECT count(*) FROM data_issues WHERE employee_id = ${id})::int di, (SELECT count(*) FROM legacy_archive WHERE employee_id = ${id})::int la`);
+      const lr: any = ((legacyRows as any).rows ?? legacyRows)[0] || {};
+      if (lr.di > 0) { relatedCounts.total += lr.di; relatedCounts.byTable.dataIssues = lr.di; }
+      if (lr.la > 0) { relatedCounts.total += lr.la; relatedCounts.byTable.legacyArchive = lr.la; }
+    } catch { /* قاعدة قبل الترحيل 0020 */ }
     if (relatedCounts.total > 0) {
       return res.status(409).json({
         error: `لا يمكن حذف الموظف لأن عنده سجلات (${relatedCounts.total}). غيّر حالته إلى حالة غير فعّالة (مثل متقاعد أو مستقيل) بدل الحذف.`,

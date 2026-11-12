@@ -324,6 +324,11 @@ export const apiClient = {
     linkEmployee: (userId, employee_id) => request(`/api/auth/users/${userId}/employee-link`, { method: 'PUT', body: JSON.stringify({ employee_id }) }),
     audit: (params = {}) => request(`/api/admin/audit?${new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v !== '' && v !== undefined)))}`),
   },
+  // C: حالات الاستفسار
+  dataIssues: {
+    list: (f = {}) => request(`/api/data-issues?${new URLSearchParams(Object.entries(f).filter(([, v]) => v !== '' && v != null)).toString()}`),
+    update: (id, data) => request(`/api/data-issues/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  },
   payroll: {
     meta: () => request('/api/payroll/meta'),
     items: () => request('/api/payroll/items'),
