@@ -1347,6 +1347,21 @@ function Invoke-LegacyAllowances {
     return 0
 }
 
+# إصلاح ترحيل سابق: أطفال HR بلا تاريخ ميلاد مكررون مع ما أضافه الترحيل. تجربة، تأكيد، نسخة، تطبيق.
+function Invoke-LegacyRepairChildren {
+    $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
+    $code = Invoke-Logged $npm 'run -s legacy:allowances -- --repair-undated' 'تجربة إصلاح تكرار الأطفال (لا يُكتب شيء)...'
+    if ($code -eq 3) { Write-Log '✖ قاعدة البيانات غير متاحة.'; return 3 }
+    if ($code -eq 2) { throw 'الإصلاح موقوف: أكو فترات رواتب معتمدة (راجع الرسالة بالسجلّ).' }
+    if ($code -ne 0) { throw 'فشلت التجربة. لم يُكتب شيء. السبب بالسجلّ أعلاه.' }
+    if (-not (Confirm-Action 'راجع الأرقام بالسجلّ. ستُؤخذ نسخة احتياطية ثم يُكمَّل تاريخ ميلاد أطفال HR وتُحذف نسخهم المكررة. متابعة؟' 'إصلاح تكرار الأطفال')) { Write-Log 'أُلغي. لم يتغير شيء.'; return 0 }
+    [void](New-Backup 'before-legacy-repair')
+    $code = Invoke-Logged $npm ('run -s legacy:allowances -- --repair-undated --apply --user "' + $env:USERNAME + '"') 'تطبيق إصلاح تكرار الأطفال...'
+    if ($code -ne 0) { throw 'فشل الإصلاح. المعاملة أُلغيت ولم يُكتب شيء.' }
+    Write-Log '✔ اكتمل الإصلاح.'
+    return 0
+}
+
 function Show-MigrationStatus {
     $npm = Get-NpmCmd
     if (-not $npm -or -not (Test-Path (Join-Path $script:AppDir 'drizzle'))) { return }
@@ -1745,6 +1760,7 @@ if ($script:Cli) {
                 }
             }
             'legacyalw' { if ((Invoke-LegacyAllowances) -eq 3) { exit 3 } }
+            'legacyrepair' { if ((Invoke-LegacyRepairChildren) -eq 3) { exit 3 } }
             'retirelocal' {
                 # B2e: تقاعد data\local_storage.json (نقل إلى data\retired، لا حذف)
                 $npm = Get-NpmCmd; if (-not $npm) { throw 'npm غير موجود.' }
@@ -1957,7 +1973,8 @@ Add-Group 'الصيانة' @(
 Add-Group 'قاعدة البيانات' @(
     @('حالة الترحيلات',       { Show-MigrationStatus }),
     @('تطبيق الترحيلات',      { [void](Invoke-DbMigrate) }),
-    @('ترحيل نظام المخصصات',  { [void](Invoke-LegacyAllowances) })
+    @('ترحيل نظام المخصصات',  { [void](Invoke-LegacyAllowances) }),
+    @('إصلاح تكرار الأطفال',  { [void](Invoke-LegacyRepairChildren) })
 )
 Add-Group 'النسخ الاحتياطي' @(
     @('نسخة احتياطية',       { [void](New-Backup 'manual') }),

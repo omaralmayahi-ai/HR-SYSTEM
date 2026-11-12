@@ -31,13 +31,14 @@ async function makeBackup(file: string, tag: string, variant = 1) {
   `);
   const n = (x: number) => Number(String(tag).slice(-4)) * 100 + x; // أرقام شركة مصطنعة فريدة لكل تشغيل
   await pg.exec(`
-    INSERT INTO employees (employee_no, full_name, gender, grade, step, basic_salary) VALUES (${n(1)}, 'أ', 'male', '7', 1, 296000), (${n(2)}, 'ب', 'female', '7', 1, 296000), (${n(3)}, 'ج', 'male', '6', 2, 400000), (${n(4)}, 'د', 'male', '7', 1, 296000);
-    INSERT INTO employee_family_status (employee_id, marital_status, entitlement, effective_from) VALUES (1, 'married', 'full', '2026-08-01'), (2, 'married', 'full', '2026-08-01'), (3, 'married', 'full', '2026-08-01'), (4, 'married', 'full', '2026-08-01');
+    INSERT INTO employees (employee_no, full_name, gender, grade, step, basic_salary) VALUES (${n(1)}, 'أ', 'male', '7', 1, 296000), (${n(2)}, 'ب', 'female', '7', 1, 296000), (${n(3)}, 'ج', 'male', '6', 2, 400000), (${n(4)}, 'د', 'male', '7', 1, 296000), (${n(5)}, 'ه', 'male', '7', 1, 296000);
+    INSERT INTO employee_family_status (employee_id, marital_status, entitlement, effective_from) VALUES (1, 'married', 'full', '2026-08-01'), (2, 'married', 'full', '2026-08-01'), (3, 'married', 'full', '2026-08-01'), (4, 'married', 'full', '2026-08-01'), (5, 'married', 'full', '2026-08-01');
     INSERT INTO family_members (employee_id, relation, seq, birth_date, is_eligible, ineligibility_reason_id, source) VALUES
       (1, 'spouse', 0, NULL, true, NULL, 'migration_2026_08'), (1, 'son', 1, '2015-03-01', true, NULL, 'migration_2026_08'), (1, 'daughter', 2, '2018-06-01', true, NULL, 'migration_2026_08'),
       (1, 'son', 3, '2000-01-01', false, 1, 'migration_2026_08'),
       (2, 'spouse', 0, NULL, true, NULL, 'migration_2026_08'), (2, 'daughter', 1, '2012-02-02', true, NULL, 'migration_2026_08'),
-      (3, 'son', 1, '2010-10-10', true, NULL, 'migration_2026_08'), (4, 'son', 1, '2011-11-11', true, NULL, 'migration_2026_08');
+      (3, 'son', 1, '2010-10-10', true, NULL, 'migration_2026_08'), (4, 'son', 1, '2011-11-11', true, NULL, 'migration_2026_08'),
+      (5, 'son', 1, '2012-01-01', true, NULL, 'migration_2026_08'), (5, 'son', 2, '2014-01-01', true, NULL, 'migration_2026_08'), (5, 'daughter', 3, '2016-01-01', true, NULL, 'migration_2026_08');
     INSERT INTO family_extensions (member_id, valid_from, duration_months, valid_to, reason_text) VALUES (4, '2018-01-01', 12, '2018-12-31', 'دراسة');
     INSERT INTO data_issues (employee_no, issue_code, details, payroll_amount, computed_amount, status, source) VALUES (${n(1)}, 'amount_mismatch', 'فرق', 90000, 80000, 'open', 'migration_2026_08'), (${n(9)}, 'not_in_payroll', null, null, null, 'resolved', 'migration_2026_08'),
       (${n(1)}, 'multiple', 'عدة', null, null, 'open', 'migration_2026_08');
@@ -48,9 +49,9 @@ async function makeBackup(file: string, tag: string, variant = 1) {
   if (variant === 2) await pg.exec(`
     UPDATE family_members SET status = 'ended' WHERE id = 3;                  -- بنت 2018 أُنهيت...
     INSERT INTO family_members (employee_id, relation, seq, birth_date, is_eligible, ineligibility_reason_id, source) VALUES
-      (1, 'daughter', 5, '2018-06-01', true, NULL, 'manual'),                  -- ...وأُعيد إدخالها بمعرّف جديد (8)
-      (1, 'daughter', 6, '2019-05-05', false, 2, 'manual'),                    -- متوفاة (9)
-      (1, 'son', 7, '2016-01-01', false, 3, 'manual');                         -- الزوجة تستلم (10)
+      (1, 'daughter', 5, '2018-06-01', true, NULL, 'manual'),                  -- ...وأُعيد إدخالها بمعرّف جديد
+      (1, 'daughter', 6, '2019-05-05', false, 2, 'manual'),                    -- متوفاة
+      (1, 'son', 7, '2016-01-01', false, 3, 'manual');                         -- الزوجة تستلم
     UPDATE family_members SET status = 'suspended' WHERE id = 5;              -- زوج ب موقوف
     UPDATE data_issues SET status = 'resolved', resolution = 'وُحدت الملاحظات', resolved_at = '2026-09-01T10:00:00Z' WHERE id = 3;
   `);
@@ -62,7 +63,7 @@ async function makeBackup(file: string, tag: string, variant = 1) {
 
 describe.skipIf(!enabled)('C ترحيل نظام المخصصات على قاعدة حقيقية', () => {
   let db: any; let schema: any; let mod: any; let file: string; let nos: any;
-  let e1: number; let e2: number; let e3: number;
+  let e1: number; let e2: number; let e3: number; let e5: number;
   const rows = (r: any) => (r.rows ?? r) as any[];
   const tag = 'C' + Date.now();
 
@@ -78,6 +79,10 @@ describe.skipIf(!enabled)('C ترحيل نظام المخصصات على قاع�
     // e3 غير موجود بـ HR؛ e1 عنده طفل مسجل بـ HR بنفس تاريخ ميلاد الابن، وطفل آخر بـ HR فقط
     await db.insert(schema.familyMembers).values([{ employeeId: e1, relation: 'طفل', birthDate: '2015-03-01', sourceRef: 'children_details#1' }, { employeeId: e1, relation: 'بنت', birthDate: '2020-01-01', sourceRef: 'children_details#2' }]);
     e3 = 0;
+    // ه: أطفاله بـ HR من JSON قديم بلا تواريخ (ابنان «طفل» وبنت) — نفس أطفال النظام القديم
+    e5 = await emp(nos.no(5), 'ذكر');
+    await db.insert(schema.familyMembers).values([{ employeeId: e5, relation: 'طفل', name: 'الأول', sourceRef: 'children_details#1' }, { employeeId: e5, relation: 'طفل', name: 'الثاني', sourceRef: 'children_details#2' },
+      { employeeId: e5, relation: 'بنت', name: 'الثالثة', sourceRef: 'children_details#3' }]);
   });
 
   it('التجربة ما تكتب شيئاً، وتطابق ما سيُكتب', async () => {
@@ -91,6 +96,7 @@ describe.skipIf(!enabled)('C ترحيل نظام المخصصات على قاع�
     expect(r.summary.members_matched).toBe(1);   // الابن 2015 مطابق للطفل المسجل
     expect(r.summary.children_hr_only).toBe(1);  // بنت 2020 بـ HR فقط
     expect(r.summary.mode_conflict).toBe(1);     // ب: محجوب بـ HR، كامل بالقديم
+    expect(r.summary.members_completed).toBe(3); // أطفال ه بلا تواريخ تُكمَّل لا تُكرر
   });
 
   it('التطبيق: نمط الاستحقاق بحركة «ترحيل قديم»، أفراد بلا تكرار، تمديد، حالات استفسار، وأرشيف؛ والتكرار ما يضيف شيئاً', async () => {
@@ -109,6 +115,8 @@ describe.skipIf(!enabled)('C ترحيل نظام المخصصات على قاع�
     expect(rows(await db.execute(sql`SELECT family_mode FROM employees WHERE id = ${e2}`))[0].family_mode).toBe('محجوب');
     const iss = rows(await db.execute(sql`SELECT issue_code, status FROM data_issues WHERE import_id = ${r.import_id} ORDER BY issue_code`)).map(x => `${x.issue_code}:${x.status}`);
     expect(iss).toEqual(['amount_mismatch:مفتوحة', 'legacy_family_mode_conflict:مفتوحة', 'legacy_hr_only_child:مفتوحة', 'legacy_not_in_hr:مفتوحة', 'legacy_not_in_hr:مفتوحة', 'multiple:مفتوحة', 'not_in_payroll:محلولة']);
+    const f5 = rows(await db.execute(sql`SELECT name, relation, birth_date::text bd FROM family_members WHERE employee_id = ${e5} ORDER BY id`));
+    expect(f5.map(f => [f.name, f.relation, f.bd])).toEqual([['الأول', 'ابن', '2012-01-01'], ['الثاني', 'ابن', '2014-01-01'], ['الثالثة', 'بنت', '2016-01-01']]);
     const pr = rows(await db.execute(sql`SELECT data FROM legacy_archive WHERE kind = 'payroll_row' AND employee_id = ${e1}`));
     expect(pr[0].data.values).toEqual({ basic: '296000.00', m802: '90000.00' });
     // التكرار: ما يضيف أفراداً ولا حالات ولا حركات
@@ -147,6 +155,31 @@ describe.skipIf(!enabled)('C ترحيل نظام المخصصات على قاع�
     // تكرار النسخة الثانية: لا جديد
     const again = await mod.migrateAllowances(db, schema, src, { apply: true, user: 'admin', fileName: 'pgdata-test2.tar.gz' });
     expect([again.summary.members_added, again.summary.issues_new, again.summary.facts_added, again.summary.issues_refreshed]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('إصلاح ترحيل قديم: نسخ الأطفال المكررة تُدمج بسجل HR بلا تاريخ، وتُغلق حالاتها (الإصدار الأول ما كان يكمّل)', async () => {
+    const [e6] = await db.insert(schema.employees).values({ fullName: 'موظف و', companyNumber: tag + 'W', grade: 7, step: 1, status: 'مستمر', serviceType: 'خدمة ' + tag, gender: 'ذكر',
+      department: 'قسم', firstAppointmentDate: '2015-01-01' }).returning();
+    const [u1] = await db.insert(schema.familyMembers).values({ employeeId: e6.id, relation: 'طفل', name: 'أ1', sourceRef: 'children_details#1' }).returning();
+    const [u2] = await db.insert(schema.familyMembers).values({ employeeId: e6.id, relation: 'طفل', name: 'أ2', sourceRef: 'children_details#2' }).returning();
+    const [a1] = await db.insert(schema.familyMembers).values({ employeeId: e6.id, relation: 'ابن', birthDate: '2013-03-03', sourceRef: 'alw:member:90001', createdBy: 'ترحيل نظام المخصصات' }).returning();
+    const [a2] = await db.insert(schema.familyMembers).values({ employeeId: e6.id, relation: 'ابن', birthDate: '2011-01-01', sourceRef: 'alw:member:90002', createdBy: 'ترحيل نظام المخصصات' }).returning();
+    const [li] = await db.insert(schema.legacyImports).values({ source: 'اختبار', fileName: 'x', fileSha256: 'x' + tag, summary: {}, appliedBy: 't' }).returning();
+    for (const [a, oid, seq] of [[a1, 90001, 2], [a2, 90002, 1]] as any) {
+      await db.insert(schema.legacyArchive).values({ importId: li.id, kind: 'member_link', sourceRef: `${oid}:${tag}W`, employeeId: e6.id, data: { hr_member_id: a.id, how: 'added' } });
+      await db.insert(schema.legacyArchive).values({ importId: li.id, kind: 'family_member', sourceRef: `${oid}:${tag}W:z`, employeeId: e6.id, data: { id: oid, seq } });
+    }
+    for (const u of [u1, u2]) await db.execute(sql`INSERT INTO data_issues (employee_id, company_number, topic, issue_code, title, source, source_ref) VALUES (${e6.id}, ${tag + 'W'}, 'العائلية', 'legacy_hr_only_child', 't', 'ترحيل C', ${'alw:hr_only:' + u.id})`);
+    const dry = await mod.repairUndatedDuplicates(db, schema, { apply: false, user: 'admin' });
+    expect(dry.applied).toBe(false);
+    expect(rows(await db.execute(sql`SELECT count(*)::int n FROM family_members WHERE employee_id = ${e6.id}`))[0].n).toBe(4);
+    const r = await mod.repairUndatedDuplicates(db, schema, { apply: true, user: 'admin' });
+    if (r.blocked) return; // قاعدة الاختبار فيها فترات معتمدة من ملفات أخرى: الحاجز يعمل
+    const f = rows(await db.execute(sql`SELECT name, relation, birth_date::text bd FROM family_members WHERE employee_id = ${e6.id} ORDER BY id`));
+    expect(f.map(x => [x.name, x.relation, x.bd])).toEqual([['أ1', 'ابن', '2011-01-01'], ['أ2', 'ابن', '2013-03-03']]); // بتسلسل النظام القديم
+    expect(rows(await db.execute(sql`SELECT count(*)::int n FROM data_issues WHERE employee_id = ${e6.id} AND status = 'محلولة'`))[0].n).toBe(2);
+    const rl = rows(await db.execute(sql`SELECT (data->>'hr_member_id')::int hr FROM legacy_archive WHERE kind = 'member_relink' AND source_ref = ${'90002:' + tag + 'W'}`));
+    expect(rl).toEqual([{ hr: u1.id }]);
   });
 
   it('فترة معتمدة لفئة الموظف (ونوع خدمته بمسافة زائدة كما يطبّعه المحرك) ⇒ التطبيق يتوقف والتجربة تشتغل (مراجعة M2)', async () => {
