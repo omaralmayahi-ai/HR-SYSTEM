@@ -8,7 +8,7 @@ import path from 'node:path';
 import * as XLSX from 'xlsx';
 import { db, schema, pool } from '../../src/db/index.ts';
 import { isDbConnectionFailure } from '../../src/lib/referentialIntegrity.ts';
-import { readAllowancesBackup, migrateAllowances } from '../../server/legacy/allowances.ts';
+import { readAllowancesBackup, migrateAllowances, repairUndatedDuplicates } from '../../server/legacy/allowances.ts';
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : undefined; };
 const APPLY = process.argv.includes('--apply');
@@ -25,7 +25,7 @@ export function pickBackup(p: string) {
 const LABELS: Record<string, string> = {
   family_employees: 'موظفون لهم بيانات عائلة بالنظام القديم', not_in_hr: 'منهم غير موجودين بـ HR-SYSTEM', mode_set: 'نمط استحقاق عائلي يُسجَّل', mode_same: 'نمط مطابق أو مُرحَّل سابقاً',
   mode_conflict: 'نمط مختلف (حالة استفسار)', marital_set: 'حالة زوجية تُسجَّل', marital_conflict: 'حالة زوجية مختلفة (حالة استفسار)',
-  members_added: 'أفراد يُضافون', spouses_added: 'منهم أزواج/زوجات', members_matched: 'أفراد مطابقون بـ HR (ما يتكررون)', members_already: 'أفراد مُرحَّلون سابقاً',
+  members_added: 'أفراد يُضافون', members_completed: 'أطفال HR بلا تاريخ يُكمَّل تاريخهم (بدل الإضافة)', spouses_added: 'منهم أزواج/زوجات', members_matched: 'أفراد مطابقون بـ HR (ما يتكررون)', members_already: 'أفراد مُرحَّلون سابقاً',
   children_hr_only: 'أطفال بـ HR فقط (حالة استفسار، ما يُحذفون)', spouse_hr_only: 'أزواج بـ HR والقديم ما يصرف زوجية', relation_conflicts: 'جنس طفل مختلف (حالة استفسار)',
   extensions_added: 'تمديدات تُضاف', extensions_skipped: 'تمديدات لأفراد غير مُرحَّلين', issues_legacy: 'حالات استفسار من النظام القديم', issues_new: 'حالات استفسار جديدة من الترحيل',
   issues_existing: 'حالات مُرحَّلة سابقاً', issues_refreshed: 'حالات أُغلقت بالنظام القديم بعد الترحيل السابق (تُحدَّث)',
@@ -50,7 +50,28 @@ function writeReport(file: string, result: any) {
 
 const LAST = path.join(process.cwd(), 'temp', 'legacy-allowances-last.json');
 
+/** --repair-undated: دمج أطفال HR بلا تاريخ ميلاد مع النسخ اللي أضافها ترحيل سابق (نفس العدد لكل جنس). */
+async function repair() {
+  console.log(APPLY ? 'إصلاح تكرار الأطفال — الوضع: تطبيق' : 'إصلاح تكرار الأطفال — الوضع: تجربة (لا يُكتب شيء)');
+  const r = await repairUndatedDuplicates(db, schema, { apply: APPLY, user: arg('--user') ?? 'control-app' });
+  const L: Record<string, string> = { employees: 'موظفون يُصلَح لهم', pairs: 'أطفال يُكمَّل تاريخ ميلادهم (وتُحذف نسختهم المكررة)', issues_closed: 'حالات «بـ HR فقط» تُغلق',
+    skipped_counts_differ: 'مجموعات عددها مختلف (تبقى للمراجعة اليدوية)', skipped_has_records: 'مجموعات عليها وقائع أو تمديدات (تبقى للمراجعة)' };
+  for (const [k, l] of Object.entries(L)) console.log(`  ${l}: ${r.summary[k] ?? 0}`);
+  console.log('  ملاحظة: التاريخ يُكمَّل بالترتيب (ترتيب إدخال HR مقابل تسلسل النظام القديم)؛ عدد المستحقين ما يتأثر بالترتيب، لكن إذا عند الأطفال أسماء بـ HR راجع عينة.');
+  const out = path.join(process.cwd(), 'temp', `legacy-repair-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}${r.applied ? '' : '-تجربة'}.xlsx`);
+  try {
+    const wb = XLSX.utils.book_new(); (wb as any).Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['رقم الشركة', 'الجنس', 'عضو HR', 'تاريخ الميلاد المكمَّل'], ...r.sample.map((x: any) => [x.company_number, x.relation, x.hr_member, x.birth_date])]), 'عينة');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['رقم الشركة', 'الجنس', 'مضافون بالترحيل', 'بلا تاريخ بـ HR'], ...r.differ.map((x: any) => [x.company_number, x.relation, x.added, x.undated])]), 'عدد مختلف');
+    fs.mkdirSync(path.dirname(out), { recursive: true }); XLSX.writeFile(wb, out); console.log(`التقرير (محلي): ${out}`);
+  } catch (e: any) { console.error(`⚠ تعذّرت كتابة التقرير (${e?.message || e})`); }
+  if (r.blocked) { console.error('✖ ' + r.blocked); return 2; }
+  console.log(r.applied ? '✔ طُبّق الإصلاح.' : 'التجربة انتهت. لم يُكتب شيء.');
+  return 0;
+}
+
 async function main() {
+  if (process.argv.includes('--repair-undated')) return repair();
   // --from-last: التطبيق على نفس الملف اللي راجعته التجربة (وبنفس بصمته)، لا على نسخة أحدث نُزلت بينهما
   let expectSha: string | null = null; let chosen: string;
   if (process.argv.includes('--from-last')) {

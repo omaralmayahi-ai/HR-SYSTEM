@@ -111,12 +111,14 @@ export async function migrateAllowances(db: any, schema: any, src: LegacyData, o
         (hrFam.get(Number(m.employee_id)) || hrFam.set(Number(m.employee_id), []).get(Number(m.employee_id))!).push(m);
       }
       const links = new Map<string, number>(rows(await tx.execute(sql`SELECT source_ref, (data->>'hr_member_id')::int hr FROM legacy_archive WHERE kind = 'member_link'`)).map(r => [r.source_ref, Number(r.hr)]));
+      // إعادة الربط بعد دمج النسخ المكررة (repairUndatedDuplicates) تتقدم على الربط الأول
+      for (const r of rows(await tx.execute(sql`SELECT source_ref, (data->>'hr_member_id')::int hr FROM legacy_archive WHERE kind = 'member_relink' ORDER BY id`))) links.set(r.source_ref, Number(r.hr));
       const oldEmp = new Map<number, any>(src.employees.map(e => [Number(e.id), e]));
       const hrOf = (oldEmployeeId: number) => { const e = oldEmp.get(oldEmployeeId); return e ? hrEmps.get(keyOf(e.employee_no)) : undefined; };
       const hrByNo = (no: any) => hrEmps.get(keyOf(no));
 
       const s = { family_employees: 0, not_in_hr: 0, mode_set: 0, mode_same: 0, mode_conflict: 0, marital_set: 0, marital_conflict: 0,
-        members_added: 0, members_matched: 0, members_already: 0, members_removed_in_hr: 0, members_ended: 0, members_not_imported: 0, facts_added: 0,
+        members_added: 0, members_completed: 0, members_matched: 0, members_already: 0, members_removed_in_hr: 0, members_ended: 0, members_not_imported: 0, facts_added: 0,
         children_hr_only: 0, relation_conflicts: 0, spouses_added: 0, spouse_hr_only: 0, extensions_added: 0, extensions_skipped: 0,
         issues_legacy: 0, issues_refreshed: 0, issues_new: 0, issues_existing: 0, archive_rows: 0, payroll_rows: 0, employees_not_in_hr: 0, grade_step_diffs: 0 };
       const report = { not_in_hr: [] as any[], conflicts: [] as any[], hr_only: [] as any[], grade_step: [] as any[], employees_not_in_hr: [] as any[], not_imported: [] as any[] };
@@ -212,6 +214,7 @@ export async function migrateAllowances(db: any, schema: any, src: LegacyData, o
           used.add(hrId); memberHrId.set(Number(m.id), hrId); s.members_already++;
           if (imp1.fact) await addFact(hrId, imp1.fact, m, emp);
         }
+        const pending: { m: any; key: string; rel: string; fact?: string }[] = [];
         // الجولة 2: غير المربوطين — مطابقة بتاريخ الميلاد ضد كل أطفال HR غير المستعملين (ومنهم المربوط بفرد قديم أُنهي ثم أُعيد إدخاله)
         for (const m of oldMembers) {
           const key = `${m.id}:${no}`;
@@ -245,13 +248,33 @@ export async function migrateAllowances(db: any, schema: any, src: LegacyData, o
               s.relation_conflicts++; report.conflicts.push({ company_number: no, field: `طفل مواليد ${m.birth_date}`, hr: exact.relation, old: rel });
               await newIssue({ emp, no, topic: 'العائلية', code: 'legacy_relation_conflict', details: `مواليد ${m.birth_date}: HR ${exact.relation} — القديم ${rel}`, source: 'ترحيل C', ref: `alw:relation:${key}` });
             }
-          } else {
-            const [r] = await tx.insert(schema.familyMembers).values({ employeeId: emp.id, relation: rel, name: null, birthDate: m.birth_date, sourceRef: `alw:member:${m.id}`, createdBy: ACTOR }).returning();
-            used.add(r.id); hrId = r.id; s.members_added++; touched.add(emp.id);
-            await link(key, r.id, 'added', emp.id);
-          }
+          } else { pending.push({ m, key, rel, fact: imp1.fact }); continue; }
           memberHrId.set(Number(m.id), hrId);
           if (imp1.fact) await addFact(hrId, imp1.fact, m, emp);
+        }
+        // الجولة 3: أطفال HR بلا تاريخ ميلاد (من بيانات JSON القديمة) هم غالباً نفس أطفال النظام القديم: إذا تساوى العدد
+        // لكل جنس نكمّل تاريخ الميلاد (والجنس لـ «طفل») بالترتيب بدل إضافة نسخة ثانية؛ وإذا اختلف العدد نضيف ونترك المقارنة للمراجعة
+        for (const cls of ['ابن', 'بنت']) {
+          const olds = pending.filter(p => p.rel === cls).sort((a, b) => Number(a.m.seq) - Number(b.m.seq) || Number(a.m.id) - Number(b.m.id));
+          const undated = hr.filter(h => !used.has(h.id) && !h.bd && (cls === 'ابن' ? ['طفل', 'ابن'].includes(h.relation) : h.relation === 'بنت')).sort((a, b) => a.id - b.id);
+          const pair = olds.length > 0 && olds.length === undated.length;
+          for (let i = 0; i < olds.length; i++) {
+            const p = olds[i]; let hrId: number;
+            if (pair) {
+              const h = undated[i];
+              await tx.execute(sql`UPDATE family_members SET birth_date = ${p.m.birth_date}, relation = ${cls} WHERE id = ${h.id}`);
+              await tx.insert(schema.payrollAudit).values({ actor: ACTOR, action: 'إكمال تاريخ ميلاد من نظام المخصصات', entity: 'family_members', entityId: String(h.id),
+                before: { relation: h.relation, birth_date: null }, after: { relation: cls, birth_date: p.m.birth_date, legacy_member: p.key } });
+              used.add(h.id); hrId = h.id; s.members_completed++; touched.add(emp.id);
+              await link(p.key, h.id, 'completed_undated', emp.id);
+            } else {
+              const [r] = await tx.insert(schema.familyMembers).values({ employeeId: emp.id, relation: cls, name: null, birthDate: p.m.birth_date, sourceRef: `alw:member:${p.m.id}`, createdBy: ACTOR }).returning();
+              used.add(r.id); hrId = r.id; s.members_added++; touched.add(emp.id);
+              await link(p.key, r.id, 'added', emp.id);
+            }
+            memberHrId.set(Number(p.m.id), hrId);
+            if (p.fact) await addFact(hrId, p.fact, p.m, emp);
+          }
         }
         // فرد مربوط أُنهي أو أُوقف بالنظام القديم وما أُعيد ربطه: يبقى بـ HR (ما نحذف)، وحالة استفسار
         for (const x of endedLinked) {
@@ -347,6 +370,64 @@ export async function migrateAllowances(db: any, schema: any, src: LegacyData, o
       if (!o.apply || blockers > 0) throw new DryRun(result);
       await tx.execute(sql`UPDATE legacy_imports SET summary = ${JSON.stringify(summary)}::jsonb WHERE id = ${imp.id}`);
       await tx.insert(schema.payrollAudit).values({ actor: o.user, action: 'ترحيل نظام المخصصات', entity: 'legacy_imports', entityId: String(imp.id), after: summary });
+      return { ...result, applied: true };
+    });
+  } catch (e: any) {
+    if (e instanceof DryRun) return { ...e.result, applied: false };
+    throw e;
+  }
+}
+
+
+/**
+ * إصلاح ترحيل سابق (قبل الجولة 3): أطفال HR بلا تاريخ ميلاد + أطفال أضافهم الترحيل بتاريخ = نفس الأشخاص مكررين.
+ * لكل موظف ولكل جنس، إذا تساوى العدد: يُكمَّل تاريخ الميلاد (والجنس) بسجل HR الأصلي بالترتيب (HR بترتيب إدخاله، والقديم بتسلسله)،
+ * وتُحذف النسخة المضافة (ما عليها وقائع ولا تمديدات)، ويُعاد الربط بالأرشيف، وتُغلق حالة «بـ HR فقط». العدد المختلف يبقى للمراجعة.
+ */
+export async function repairUndatedDuplicates(db: any, schema: any, o: { apply: boolean; user: string }) {
+  try {
+    return await db.transaction(async (tx: any) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('legacy:allowances'))`);
+      if (o.apply) await tx.execute(sql`LOCK TABLE payroll_periods IN SHARE ROW EXCLUSIVE MODE`);
+      const blockers = rows(await tx.execute(sql`SELECT count(*)::int n FROM payroll_periods WHERE status IN ('معتمدة', 'مُصدَرة')`))[0].n;
+      const seqOf = new Map<number, number>(rows(await tx.execute(sql`SELECT (data->>'id')::int id, (data->>'seq')::int seq FROM legacy_archive WHERE kind = 'family_member'`)).map(r => [Number(r.id), Number(r.seq)]));
+      const fam = rows(await tx.execute(sql`SELECT m.id, m.employee_id, m.relation, m.birth_date::text bd, m.source_ref, e.company_number,
+          (SELECT count(*) FROM family_member_facts f WHERE f.member_id = m.id)::int facts, (SELECT count(*) FROM family_extensions x WHERE x.member_id = m.id)::int exts
+        FROM family_members m JOIN employees e ON e.id = m.employee_id WHERE m.relation IN ('طفل', 'ابن', 'بنت') ORDER BY m.employee_id, m.id`));
+      const byEmp = new Map<number, any[]>();
+      for (const m of fam) (byEmp.get(Number(m.employee_id)) || byEmp.set(Number(m.employee_id), []).get(Number(m.employee_id))!).push(m);
+      const s = { employees: 0, pairs: 0, skipped_counts_differ: 0, skipped_has_records: 0, issues_closed: 0 };
+      const sample: any[] = []; const differ: any[] = [];
+      for (const [eid, list] of byEmp) {
+        let touchedEmp = false;
+        for (const cls of ['ابن', 'بنت']) {
+          const added = list.filter(m => String(m.source_ref || '').startsWith('alw:member:') && m.bd && m.relation === cls)
+            .sort((a, b) => (seqOf.get(Number(a.source_ref.slice(11))) ?? 0) - (seqOf.get(Number(b.source_ref.slice(11))) ?? 0) || a.id - b.id);
+          const undated = list.filter(m => !m.bd && !String(m.source_ref || '').startsWith('alw:') && (cls === 'ابن' ? ['طفل', 'ابن'].includes(m.relation) : m.relation === 'بنت'));
+          if (!added.length || !undated.length) continue;
+          if (added.length !== undated.length) { s.skipped_counts_differ++; differ.push({ company_number: list[0].company_number, relation: cls, added: added.length, undated: undated.length }); continue; }
+          if (added.some(m => m.facts || m.exts)) { s.skipped_has_records++; continue; }
+          for (let i = 0; i < added.length; i++) {
+            const a = added[i], u = undated[i];
+            await tx.execute(sql`UPDATE family_members SET birth_date = ${a.bd}, relation = ${cls} WHERE id = ${u.id}`);
+            const oldKey = rows(await tx.execute(sql`SELECT source_ref FROM legacy_archive WHERE kind = 'member_link' AND (data->>'hr_member_id')::int = ${a.id} LIMIT 1`))[0]?.source_ref;
+            if (oldKey) await tx.execute(sql`INSERT INTO legacy_archive (import_id, kind, source_ref, employee_id, data)
+              SELECT import_id, 'member_relink', ${oldKey}, ${eid}, ${JSON.stringify({ hr_member_id: u.id, from_member_id: a.id, how: 'completed_undated' })}::jsonb
+              FROM legacy_archive WHERE kind = 'member_link' AND source_ref = ${oldKey} ON CONFLICT (kind, source_ref) DO NOTHING`);
+            await tx.execute(sql`DELETE FROM family_members WHERE id = ${a.id}`);
+            await tx.insert(schema.payrollAudit).values({ actor: o.user, action: 'دمج طفل مكرر من ترحيل نظام المخصصات', entity: 'family_members', entityId: String(u.id),
+              before: { relation: u.relation, birth_date: null, duplicate_member_id: a.id }, after: { relation: cls, birth_date: a.bd, legacy_member: oldKey ?? null } });
+            const closed = rows(await tx.execute(sql`UPDATE data_issues SET status = 'محلولة', resolution = ${'أُكمل تاريخ الميلاد من نظام المخصصات (' + a.bd + ') وحُذفت النسخة المكررة'},
+                resolved_by = ${o.user}, resolved_at = now() WHERE source_ref = ${'alw:hr_only:' + u.id} AND status IN ('مفتوحة', 'قيد المراجعة') RETURNING id`));
+            s.issues_closed += closed.length; s.pairs++; touchedEmp = true;
+            if (sample.length < 30) sample.push({ company_number: list[0].company_number, relation: cls, hr_member: u.id, birth_date: a.bd });
+          }
+        }
+        if (touchedEmp) s.employees++;
+      }
+      const result = { summary: { ...s, approved_periods: blockers }, sample, differ, blocked: blockers > 0 ? `أكو ${blockers} فترة رواتب معتمدة أو مُصدَرة؛ تغيير الأفراد الآن يولّد فروقاً رجعية` : null };
+      if (!o.apply || blockers > 0) throw new DryRun(result);
+      await tx.insert(schema.payrollAudit).values({ actor: o.user, action: 'إصلاح تكرار أطفال ترحيل نظام المخصصات', entity: 'legacy_imports', entityId: null, after: result.summary });
       return { ...result, applied: true };
     });
   } catch (e: any) {
