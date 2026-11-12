@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { PayrollError } from './catalog.ts';
 import { loadPeriodInputs } from './loader.ts';
-import { computeEmployee } from './engine.ts';
+import { computeEmployee, touchesCategory } from './engine.ts';
 import { toDecimal, money, roundDinar } from './money.ts';
 import { retroForPeriod, exceptionalDiffs } from './retro.ts';
 
@@ -26,13 +26,17 @@ export function canon(v: any): any {
   return v;
 }
 /** يتغير مع أي تعديل على منطق المحرك أو المحمّل يغيّر النتائج: اعتماد بعد نشر نسخة أخرى يُرفض. */
-export const ENGINE_VERSION = 'b8c.1';
+export const ENGINE_VERSION = 'b8a4.1';
 /** بصمة المدخلات = SHA-256 لمدخلات المحرك نفسها + نسخة المحرك (س11.1، 3.8). */
 export function fingerprintOf(ctx: any, employees: any[]): string {
   const h = createHash('sha256');
   h.update(ENGINE_VERSION + '\n');
   h.update(JSON.stringify(canon({ ...ctx, items: ctx.items })));
-  for (const e of [...employees].sort((a, b) => a.id - b.id)) h.update('\n' + JSON.stringify(canon(e)));
+  // موظفو الفئات الأخرى ما يدخلون البصمة: تعديلهم ما يرفض اعتماد هذه الفئة (والموظف اللي له فرق رجعي يدخل دائماً)
+  for (const e of [...employees].sort((a, b) => a.id - b.id)) {
+    if (!touchesCategory(e, ctx) && !(e.retro || []).length) continue;
+    h.update('\n' + JSON.stringify(canon(e)));
+  }
   return h.digest('hex');
 }
 
@@ -113,7 +117,9 @@ export async function openPeriod(db: any, schema: any, o: { categoryId: number; 
 /** يحمّل المدخلات ويحسب البصمة داخل معاملة القراءة نفسها. */
 async function loadForPeriod(tx: any, period: any, eligibleStatuses: string[]) {
   // لحظة المعرفة = بداية المعاملة بساعة القاعدة (نفس ساعة recorded_at)
-  const knownAt = new Date(rows(await tx.execute(sql`SELECT now() AS now`))[0].now);
+  // now() بالميكروثانية و Date بالميلي: نقرّب للأعلى حتى سجل سُجّل بنفس الميلي ثانية قبل الاحتساب ما ينحذف منه
+  // ثم يظهر عند الاعتماد فتختلف البصمة (فشل CI المتقطع بالحالة 19)
+  const knownAt = new Date(rows(await tx.execute(sql`SELECT to_char((date_trunc('milliseconds', now()) + CASE WHEN now() = date_trunc('milliseconds', now()) THEN interval '0' ELSE interval '1 millisecond' END) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS now`))[0].now);
   const exceptional = period.kind === 'استثنائية';
   const input = await loadPeriodInputs(tx, { year: period.year, month: period.month, categoryId: period.categoryId, eligibleStatuses, knownAt, sequential: true, periodId: period.id,
     ...(exceptional ? { employeeIds: (period.employeeIds || []).map(Number) } : {}) });

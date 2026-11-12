@@ -15,7 +15,7 @@ describe.skipIf(!enabled)('B8c الفروق والمصرف على قاعدة ح�
 
   const run = async (ym: string, approve = true) => {
     const [y, m] = ym.split('-').map(Number);
-    const p = await per.openPeriod(db, schema, { categoryId: catId, year: y, month: m, user: 'writer1' });
+    const p = await per.openPeriod(db, schema, { categoryId: catId, year: y, month: m, user: 'writer1', paySource: 'فعلي' }); // الفروق عن الظلّية أساسها الكشف المؤكد (B8a4)؛ هنا فعلية
     pids[ym] = p.id;
     const r = await per.computeRun(db, schema, p.id, 'writer1', ELIG);
     if (approve) { await per.approvePeriod(db, schema, p.id, 'admin', ELIG); await per.issuePeriod(db, schema, p.id, 'admin', 'كتاب ' + ym); }

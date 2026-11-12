@@ -4,6 +4,7 @@
 import { sql } from 'drizzle-orm';
 import * as XLSX from 'xlsx';
 import { PayrollError } from './catalog.ts';
+import { reconciliation } from './reconcile.ts';
 import { money, toDecimal, sum, roundDinar, applyRate, rate } from './money.ts';
 
 const rows = (r: any) => ((r as any).rows ?? r) as any[];
@@ -89,6 +90,14 @@ export async function reviewReport(db: any, periodId: number, threshold = 10) {
     FROM payroll_lines l JOIN payroll_results r ON r.run_id = l.run_id AND r.employee_id = l.employee_id
     WHERE l.run_id = ${run.id} AND l.kind = 'retro' GROUP BY l.employee_id, r.snapshot ORDER BY sum(CASE WHEN l.direction = '-' THEN -l.amount ELSE l.amount END)`)).map(x => ({ ...who(x), total: x.total, months: x.months, shadow: !!x.shadow }));
   const retroIssues = results.flatMap(r => (r.issues || []).filter((i: any) => ['RETRO_SKIPPED', 'RETRO_UNPAID'].includes(i.code)).map((i: any) => ({ ...who(r), message: i.message })));
+  // فروق المطابقة مع الكشف الخارجي (س11.3، فترة الانتقال)
+  const rec: any = await reconciliation(db, periodId);
+  const reconcile = rec.has_import && rec.has_run ? { summary: rec.summary, totals: rec.totals, top: rec.diffs.slice(0, 50), targets: rec.targets,
+    import: { id: rec.import.id, file_name: rec.import.file_name, file_sha256: rec.import.file_sha256, imported_by: rec.import.imported_by, confirmed_by: rec.import.confirmed_by ?? null } } : null;
+  // أساس الفروق الظلّية: أي استيراد (ومن أكّده) بُنيت عليه الفروق — حتى المراجع يرى الأساس لا الفرق فقط (مراجعة B8a4 H2)
+  const retroBasis = rows(await db.execute(sql`SELECT i.id, p.year, p.month, i.file_name, i.file_sha256, i.imported_by, i.confirmed_by, i.superseded_at
+    FROM payroll_external_imports i JOIN payroll_periods p ON p.id = i.period_id
+    WHERE i.id IN (SELECT DISTINCT (explain->>'basis_import_id')::int FROM payroll_lines WHERE run_id = ${run.id} AND kind = 'retro' AND explain ? 'basis_import_id') ORDER BY i.id`));
   return {
     period: { id: period.id, year: period.year, month: period.month, status: period.status, category: period.category_name, kind: period.kind },
     run: { id: run.id, state: run.state, computed_by: run.computed_by, finished_at: run.finished_at, totals: run.totals },
@@ -97,6 +106,7 @@ export async function reviewReport(db: any, periodId: number, threshold = 10) {
       net_changes: netChanges.sort((a, b) => b.change_pct - a.change_pct),
       negative_net: negatives, cap_reached: capped, item_beneficiary_changes: itemChanges,
       issues: issuesByCode, unverified_grades: unverifiedGrade, general_withheld: withheldGeneral,
+      reconcile, retro_basis_imports: retroBasis,
       retro_diffs: retro, retro_negative: retro.filter(x => Number(x.total) < 0), retro_issues: retroIssues, retro_strays: run.totals?.retro_strays ?? [],
       entitlement_states: statesUsed, unverified_states: statesUsed.filter(x => x.unverified), deferred_deductions: deferred,
       new_employees: newEmployees, leavers, user_role_changes: userChanges, unverified_items: unverifiedItems,
